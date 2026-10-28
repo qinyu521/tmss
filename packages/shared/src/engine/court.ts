@@ -15,6 +15,17 @@ export interface CourtAdvisorProfile {
   courtStanding?: number;
 }
 
+/** Shared policy costs; NPC and player councils must pay the same costs. */
+export function courtCost(agenda: CourtAgenda, decision: CourtDecision): number {
+  const costs: Record<CourtAgenda, Record<CourtDecision, number>> = {
+    war_council: { assertive: 12_000, balanced: 6_000, conciliatory: 0 },
+    succession: { assertive: 8_000, balanced: 12_000, conciliatory: 10_000 },
+    tribal_alliance: { assertive: 0, balanced: 6_000, conciliatory: 12_000 },
+    clan_relations: { assertive: 0, balanced: 6_000, conciliatory: 12_000 },
+  };
+  return costs[agenda][decision];
+}
+
 export function courtSkill(person: CourtAdvisorProfile | undefined, agenda: CourtAgenda): number {
   if (!person) return 50;
   const standingModifier = ((person.courtStanding ?? 50) - 50) * 0.12;
