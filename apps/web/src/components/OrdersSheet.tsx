@@ -80,6 +80,8 @@ export default function OrdersSheet() {
   const [searching, setSearching] = useState(false);
   const [courtAgenda, setCourtAgenda] = useState<CourtAgenda>('war_council');
   const [courtDecision, setCourtDecision] = useState<CourtDecision>('balanced');
+  const [courtSpeakerId, setCourtSpeakerId] = useState('');
+  const [courtOppositionId, setCourtOppositionId] = useState('');
   const [scheme, setScheme] = useState<SchemeKind>('fire');
   const [schemeTarget, setSchemeTarget] = useState('');
   const [strategistId, setStrategistId] = useState('');
@@ -124,9 +126,19 @@ export default function OrdersSheet() {
   useEffect(() => {
     if (!view) return;
     api
-      .characters({ faction: view.factionKey, pageSize: '80' })
-      .then((res) => setCommanders(res.items))
-      .catch(() => setCommanders([]));
+      .characters({ faction: view.factionKey, pageSize: '80', ...(view.gameId ? { gameId: view.gameId } : {}) })
+      .then((res) => {
+        const available = res.items.filter((person) => person.alive !== false);
+        setCommanders(res.items);
+        // 切换新局/势力时重新选择本局仍在世的主议臣与反对臣，避免旧局人物残留。
+        setCourtSpeakerId(available[0]?.person_id ?? '');
+        setCourtOppositionId(available.find((person) => person.person_id !== available[0]?.person_id)?.person_id ?? '');
+      })
+      .catch(() => {
+        setCommanders([]);
+        setCourtSpeakerId('');
+        setCourtOppositionId('');
+      });
   }, [view?.factionKey, view?.gameId]);
 
   useEffect(() => {
@@ -170,16 +182,22 @@ export default function OrdersSheet() {
     ...(view.factionKey === 'HUN' ? [{ key: 'tribal_alliance' as const, label: '部落盟约', desc: '统一号令能提升联盟协调，但强压会损伤各部忠诚；兑现盟约能安抚部落。' }] : []),
     ...(view.factionKey === 'CHU' ? [{ key: 'clan_relations' as const, label: '世家与中枢', desc: '收权可增强中央权威但会激怒世家；让利则反之。' }] : []),
   ];
-  useEffect(() => {
-    const allowedAgendas = courtAgendas.map((item) => item.key);
-    if (!allowedAgendas.includes(courtAgenda)) setCourtAgenda(allowedAgendas[0] ?? 'war_council');
-  }, [view.factionKey, courtAgenda]);
-
   const courtDecisionCopy: Record<CourtDecision, { label: string; desc: string }> = {
     assertive: { label: '强硬推进', desc: '更快强化军事或中央权威，但会积累疲劳、派系反弹或忠诚损失。' },
     balanced: { label: '折中调和', desc: '以适度成本改善战备或稳定政治关系，避免单方面倾斜。' },
     conciliatory: { label: '怀柔让步', desc: '优先恢复疲劳、信任或支持度；通常牺牲部分短期控制力。' },
   };
+  const activeCourtAgenda = courtAgendas.some((item) => item.key === courtAgenda)
+    ? courtAgenda
+    : courtAgendas[0].key;
+  const courtOfficials = commanders.filter((person) => person.alive !== false);
+  const courtSpeaker = courtOfficials.find((person) => person.person_id === courtSpeakerId);
+  const courtOpponent = courtOfficials.find((person) => person.person_id === courtOppositionId);
+  const speakerCourtScore = courtSpeaker ? courtSkillForDisplay(courtSpeaker, activeCourtAgenda) : 50;
+  const oppositionCourtScore = courtOpponent ? courtSkillForDisplay(courtOpponent, activeCourtAgenda) : 50;
+  const courtDebateEdge = courtSpeaker && courtOpponent && courtSpeaker.person_id !== courtOpponent.person_id
+    ? Math.max(-3, Math.min(3, Math.round((speakerCourtScore - oppositionCourtScore) / 15)))
+    : 0;
 
   const tradeCost = Math.round((BALANCE.prices[resource] ?? 0) * tradeAmount * BALANCE.tradePremium);
   const recruitCost = Math.round(recruitAmount * BALANCE.recruit.cashPerMan);
@@ -236,7 +254,15 @@ export default function OrdersSheet() {
       case 'balance_princes':
         return { orderId, kind: 'balance_princes', amount: 1 };
       case 'hold_court':
-        return { orderId, kind: 'hold_court', agenda: courtAgenda, decision: courtDecision };
+        return {
+          orderId,
+          kind: 'hold_court',
+          agenda: activeCourtAgenda,
+          decision: courtDecision,
+          ...(courtSpeaker && courtOpponent && courtSpeaker.person_id !== courtOpponent.person_id
+            ? { speakerPersonId: courtSpeaker.person_id, oppositionPersonId: courtOpponent.person_id }
+            : {}),
+        };
       case 'negotiate_house':
         return houseId ? { orderId, kind: 'negotiate_house', houseId, amount: 1 } : null;
       case 'appoint':
@@ -542,12 +568,39 @@ export default function OrdersSheet() {
               <>
                 <div className="form-row">
                   <label>廷议议题</label>
-                  <select value={courtAgenda} onChange={(e) => setCourtAgenda(e.target.value as CourtAgenda)}>
+                  <select value={activeCourtAgenda} onChange={(e) => setCourtAgenda(e.target.value as CourtAgenda)}>
                     {courtAgendas.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
                   </select>
                 </div>
                 <div className="form-note">
-                  {courtAgendas.find((item) => item.key === courtAgenda)?.desc}
+                  {courtAgendas.find((item) => item.key === activeCourtAgenda)?.desc}
+                </div>
+                <div className="form-row">
+                  <label>主议臣</label>
+                  <select value={courtSpeakerId} onChange={(e) => setCourtSpeakerId(e.target.value)}>
+                    <option value="">采用廷臣集议</option>
+                    {courtOfficials.map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkillForDisplay(person, activeCourtAgenda))}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>反对臣</label>
+                  <select value={courtOppositionId} onChange={(e) => setCourtOppositionId(e.target.value)}>
+                    <option value="">不指定反对臣</option>
+                    {courtOfficials.filter((person) => person.person_id !== courtSpeakerId).map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkillForDisplay(person, activeCourtAgenda))}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-note">
+                  {courtSpeaker && courtOpponent
+                    ? `争辩比较：${courtSpeaker.name}（能力 ${Math.round(speakerCourtScore)}）对阵${courtOpponent.name}（能力 ${Math.round(oppositionCourtScore)}），本次议案效果 ${courtDebateEdge > 0 ? '+' : ''}${courtDebateEdge}。`
+                    : '同时指定主议臣与反对臣后，双方与议题相关的能力差会影响裁决效果；不指定则采用集议默认效果。'}
                 </div>
                 <div className="subhead" style={{ marginTop: 10 }}>拟定裁决</div>
                 <div className="action-grid">
@@ -561,17 +614,17 @@ export default function OrdersSheet() {
                 <div className="card" style={{ marginTop: 10, background: 'rgba(0,0,0,0.16)' }}>
                   <div className="subhead">廷臣意见</div>
                   <div className="small" style={{ lineHeight: 1.8 }}>
-                    {courtAgenda === 'war_council' && '兵部：应整军备边，避免战机稍纵即逝。仓曹：军饷、粮秣与马匹储备必须支撑长期作战。'}
-                    {courtAgenda === 'succession' && '中书：储位必须有明确名分。诸王宾客：过度偏向一方会使朝局失衡。御史：应将朝廷稳定置于私党之上。'}
-                    {courtAgenda === 'tribal_alliance' && '主战诸将：联盟需要统一号令。部落首领：盟约与赏赐若长期落空，各部将各行其是。'}
-                    {courtAgenda === 'clan_relations' && '台谏：财赋与任官不可尽受世家把持。世家代表：若中央一味收权，地方税赋与征兵都可能受阻。'}
+                    {activeCourtAgenda === 'war_council' && '兵部：应整军备边，避免战机稍纵即逝。仓曹：军饷、粮秣与马匹储备必须支撑长期作战。'}
+                    {activeCourtAgenda === 'succession' && '中书：储位必须有明确名分。诸王宾客：过度偏向一方会使朝局失衡。御史：应将朝廷稳定置于私党之上。'}
+                    {activeCourtAgenda === 'tribal_alliance' && '主战诸将：联盟需要统一号令。部落首领：盟约与赏赐若长期落空，各部将各行其是。'}
+                    {activeCourtAgenda === 'clan_relations' && '台谏：财赋与任官不可尽受世家把持。世家代表：若中央一味收权，地方税赋与征兵都可能受阻。'}
                   </div>
                   <div className="divider" />
                   <div className="small muted" style={{ lineHeight: 1.7 }}>
                     {view.factionKey === 'YONG' && `当前朝局稳定 ${Math.round(view.special.courtStability ?? 60)}；皇子：${(view.special.princes ?? []).map((p) => `${p.name}（影响 ${Math.round(p.influence)}）`).join('、') || '无可用派系记录'}。`}
                     {view.factionKey === 'HUN' && `当前联盟协调度 ${Math.round(view.special.cohesion ?? 58)}；部落：${(view.special.tribes ?? []).map((t) => `${t.name}（忠诚 ${Math.round(t.loyalty)}）`).join('、') || '无可用部落记录'}。`}
                     {view.factionKey === 'CHU' && `当前中枢权威 ${Math.round(view.special.centralAuthority ?? 55)}；世家支持均值 ${Math.round((view.special.houses ?? []).reduce((sum, h) => sum + h.support, 0) / Math.max(1, view.special.houses?.length ?? 0))}。`}
-                    {view.factionKey === 'HUN' && courtAgenda === 'war_council' && ` 目前军团 ${view.armies.filter((a) => a.own).length} 支。`}
+                    {view.factionKey === 'HUN' && activeCourtAgenda === 'war_council' && ` 目前军团 ${view.armies.filter((a) => a.own).length} 支。`}
                   </div>
                 </div>
                 <div className="form-note">廷议每旬限一次。命令提交后会在回合结算时形成政治事件，裁决将直接影响运行时状态；并非只记录一段对话。</div>
@@ -730,6 +783,13 @@ export default function OrdersSheet() {
       </div>
     </Modal>
   );
+}
+
+function courtSkillForDisplay(person: CharacterSummary, agenda: CourtAgenda): number {
+  if (agenda === 'war_council') return person.strategy * 0.6 + person.command * 0.4;
+  if (agenda === 'succession') return person.intrigue * 0.45 + person.loyalty * 0.3 + person.governance * 0.25;
+  if (agenda === 'tribal_alliance') return person.loyalty * 0.5 + person.command * 0.2 + person.intrigue * 0.3;
+  return person.governance * 0.45 + person.commerce * 0.35 + person.intrigue * 0.2;
 }
 
 function describeOrder(o: Order): string {
