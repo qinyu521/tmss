@@ -197,10 +197,15 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
     while (remainingDays > 0 && army.path.length > 0) {
       const hop = Math.max(1, army.hopCosts[0] ?? 1);
       if (remainingDays < hop) {
-        // 记录本旬已经走过的天数，不能在下一旬把同一段路的完整成本重新计算。
-        // 否则部队会反复“走满一段路”，行军进度与地图标记都会失真。
-        army.hopCosts[0] = hop - remainingDays;
+        // 本旬只走完当前路段的一部分：保存剩余天数，并立即结算已行军天数的补给与疲劳。
+        // 若等抵达州府才结算，长途行军途中将不会消耗补给，也不会累积疲劳。
+        const traveledDays = remainingDays;
+        army.hopCosts[0] = hop - traveledDays;
         army.marchDaysLeft = army.hopCosts.reduce((sum, days) => sum + days, 0);
+        army.supply = clamp(army.supply - traveledDays * BALANCE.army.marchSupplyDrainPerDay);
+        army.fatigue = clamp(
+          army.fatigue + traveledDays * BALANCE.army.fatigueMarchPerDay * marchFatigueSeasonFactor(season, army.faction),
+        );
         remainingDays = 0;
         break;
       }
