@@ -530,7 +530,6 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         if (commandsArmy || commandsGarrison) {
           return issues('COMMANDER_BUSY', '接任人选已统领其他军团或州兵，不能重复任命；请先选择未掌兵的将领。');
         }
-        const current = runtime.militaryLoyalty ?? person.loyalty;
         return {
           ok: true,
           issues: [],
