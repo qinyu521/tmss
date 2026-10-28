@@ -1024,6 +1024,7 @@ export class MapScene {
           );
           routeLine.computeLineDistances();
           this.scene.add(routeLine);
+          // progress 是当前路段进度；path 每次抵达州府都会缩短，不能套用全程进度。
           const routePoint = pointAlong(routePoints, army.progress);
           position.set(routePoint.x, routePoint.y + 4, routePoint.z);
         }
