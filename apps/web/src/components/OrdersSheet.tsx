@@ -9,6 +9,8 @@ import {
   fmt,
   type Order,
   type SchemeKind,
+  type CourtAgenda,
+  type CourtDecision,
 } from '@tianming/shared';
 import { api, type CharacterSummary } from '../api/client';
 import { useApp } from '../state/store';
@@ -17,7 +19,7 @@ import { Modal, Portrait, UnitIcon } from './ui';
 const GROUPS = {
   military: ['move_army', 'dispatch_garrison', 'rest_army', 'scout'],
   civil: ['recruit', 'levy_grain', 'levy_tax', 'trade'],
-  politics: ['appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
+  politics: ['hold_court', 'appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
   scheme: ['scheme'],
 } as const;
 
@@ -76,6 +78,8 @@ export default function OrdersSheet() {
   const [characters, setCharacters] = useState<CharacterSummary[]>([]);
   const [commanders, setCommanders] = useState<CharacterSummary[]>([]);
   const [searching, setSearching] = useState(false);
+  const [courtAgenda, setCourtAgenda] = useState<CourtAgenda>('war_council');
+  const [courtDecision, setCourtDecision] = useState<CourtDecision>('balanced');
   const [scheme, setScheme] = useState<SchemeKind>('fire');
   const [schemeTarget, setSchemeTarget] = useState('');
   const [strategistId, setStrategistId] = useState('');
@@ -160,6 +164,17 @@ export default function OrdersSheet() {
     (c) => !view.armies.some((a) => a.commanderId === c.person_id) && c.person_id !== selectedArmy?.commanderId,
   );
   const strategists = [...commanders].sort((a, b) => b.strategy - a.strategy);
+  const courtAgendas: { key: CourtAgenda; label: string; desc: string }[] = [
+    { key: 'war_council', label: '军务与边防', desc: '军令、训练、士气与军需之间的权衡。' },
+    ...(view.factionKey === 'YONG' ? [{ key: 'succession' as const, label: '皇嗣与储位', desc: '明确储位可强化名分，但可能激化其他皇子；折中可稳定朝局。' }] : []),
+    ...(view.factionKey === 'HUN' ? [{ key: 'tribal_alliance' as const, label: '部落盟约', desc: '统一号令能提升联盟协调，但强压会损伤各部忠诚；兑现盟约能安抚部落。' }] : []),
+    ...(view.factionKey === 'CHU' ? [{ key: 'clan_relations' as const, label: '世家与中枢', desc: '收权可增强中央权威但会激怒世家；让利则反之。' }] : []),
+  ];
+  const courtDecisionCopy: Record<CourtDecision, { label: string; desc: string }> = {
+    assertive: { label: '强硬推进', desc: '更快强化军事或中央权威，但会积累疲劳、派系反弹或忠诚损失。' },
+    balanced: { label: '折中调和', desc: '以适度成本改善战备或稳定政治关系，避免单方面倾斜。' },
+    conciliatory: { label: '怀柔让步', desc: '优先恢复疲劳、信任或支持度；通常牺牲部分短期控制力。' },
+  };
 
   const tradeCost = Math.round((BALANCE.prices[resource] ?? 0) * tradeAmount * BALANCE.tradePremium);
   const recruitCost = Math.round(recruitAmount * BALANCE.recruit.cashPerMan);
@@ -215,6 +230,8 @@ export default function OrdersSheet() {
         return tribeId ? { orderId, kind: 'appease_tribe', tribeId, amount } : null;
       case 'balance_princes':
         return { orderId, kind: 'balance_princes', amount: 1 };
+      case 'hold_court':
+        return { orderId, kind: 'hold_court', agenda: courtAgenda, decision: courtDecision };
       case 'negotiate_house':
         return houseId ? { orderId, kind: 'negotiate_house', houseId, amount: 1 } : null;
       case 'appoint':
@@ -516,6 +533,46 @@ export default function OrdersSheet() {
               </>
             )}
 
+            {action === 'hold_court' && (
+              <>
+                <div className="form-row">
+                  <label>廷议议题</label>
+                  <select value={courtAgenda} onChange={(e) => setCourtAgenda(e.target.value as CourtAgenda)}>
+                    {courtAgendas.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                  </select>
+                </div>
+                <div className="form-note">
+                  {courtAgendas.find((item) => item.key === courtAgenda)?.desc}
+                </div>
+                <div className="subhead" style={{ marginTop: 10 }}>拟定裁决</div>
+                <div className="action-grid">
+                  {(Object.keys(courtDecisionCopy) as CourtDecision[]).map((key) => (
+                    <button key={key} className={`action-chip ${courtDecision === key ? 'active' : ''}`} onClick={() => setCourtDecision(key)}>
+                      {courtDecisionCopy[key].label}
+                    </button>
+                  ))}
+                </div>
+                <div className="form-note">{courtDecisionCopy[courtDecision].desc}</div>
+                <div className="card" style={{ marginTop: 10, background: 'rgba(0,0,0,0.16)' }}>
+                  <div className="subhead">廷臣意见</div>
+                  <div className="small" style={{ lineHeight: 1.8 }}>
+                    {courtAgenda === 'war_council' && '兵部：应整军备边，避免战机稍纵即逝。仓曹：军饷、粮秣与马匹储备必须支撑长期作战。'}
+                    {courtAgenda === 'succession' && '中书：储位必须有明确名分。诸王宾客：过度偏向一方会使朝局失衡。御史：应将朝廷稳定置于私党之上。'}
+                    {courtAgenda === 'tribal_alliance' && '主战诸将：联盟需要统一号令。部落首领：盟约与赏赐若长期落空，各部将各行其是。'}
+                    {courtAgenda === 'clan_relations' && '台谏：财赋与任官不可尽受世家把持。世家代表：若中央一味收权，地方税赋与征兵都可能受阻。'}
+                  </div>
+                  <div className="divider" />
+                  <div className="small muted" style={{ lineHeight: 1.7 }}>
+                    {view.factionKey === 'YONG' && `当前朝局稳定 ${Math.round(view.special.courtStability ?? 60)}；皇子：${(view.special.princes ?? []).map((p) => `${p.name}（影响 ${Math.round(p.influence)}）`).join('、') || '无可用派系记录'}。`}
+                    {view.factionKey === 'HUN' && `当前联盟协调度 ${Math.round(view.special.cohesion ?? 58)}；部落：${(view.special.tribes ?? []).map((t) => `${t.name}（忠诚 ${Math.round(t.loyalty)}）`).join('、') || '无可用部落记录'}。`}
+                    {view.factionKey === 'CHU' && `当前中枢权威 ${Math.round(view.special.centralAuthority ?? 55)}；世家支持均值 ${Math.round((view.special.houses ?? []).reduce((sum, h) => sum + h.support, 0) / Math.max(1, view.special.houses?.length ?? 0))}。`}
+                    {view.factionKey === 'HUN' && courtAgenda === 'war_council' && ` 目前军团 ${view.armies.filter((a) => a.own).length} 支。`}
+                  </div>
+                </div>
+                <div className="form-note">廷议每旬限一次。命令提交后会在回合结算时形成政治事件，裁决将直接影响运行时状态；并非只记录一段对话。</div>
+              </>
+            )}
+
             {action === 'balance_princes' && (
               <div className="form-note">
                 耗银 {fmt(BALANCE.balancePrinces.cashCost)}，朝局稳定 +{BALANCE.balancePrinces.stabilityGain}，最高影响力皇子 -{BALANCE.balancePrinces.topInfluenceDrop}。
@@ -679,6 +736,7 @@ function describeOrder(o: Order): string {
   if (o.kind === 'trade') return `${o.resource} × ${o.amount}`;
   if (o.kind === 'appease_tribe') return `${o.tribeId} · ${o.amount} 两`;
   if (o.kind === 'balance_princes') return '平衡皇子派系';
+  if (o.kind === 'hold_court') return `廷议：${o.agenda} · ${o.decision}`;
   if (o.kind === 'negotiate_house') return o.houseId;
   if (o.kind === 'appoint') return `${o.personId} → ${o.regionId}`;
   if (o.kind === 'rest_army') return o.armyId;
