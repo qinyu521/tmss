@@ -57,13 +57,32 @@ describe('初始世界', () => {
     }
   });
 
-  it('24 个州府与 72 个地图节点均分配完成，地图连通', () => {
+  it('24 个州府与 72 个地图节点均分配完成，且州府道路图真正连通', () => {
     expect(Object.keys(seed.map_nodes)).toHaveLength(72);
     const names = new Set(seed.territories.map((t) => t.region));
+    const adjacency = new Map<string, Set<string>>();
+    for (const name of names) adjacency.set(name, new Set());
     for (const edge of seed.map_edges) {
       expect(names.has(edge.from_region)).toBe(true);
       expect(names.has(edge.to_region)).toBe(true);
+      adjacency.get(edge.from_region)?.add(edge.to_region);
+      adjacency.get(edge.to_region)?.add(edge.from_region);
     }
+
+    // 仅验证边的端点存在不等于地图连通；从任意州府出发必须能沿道路抵达全部州府。
+    const start = names.values().next().value as string | undefined;
+    expect(start).toBeTruthy();
+    const visited = new Set<string>(start ? [start] : []);
+    const queue = start ? [start] : [];
+    while (queue.length > 0) {
+      const current = queue.shift() as string;
+      for (const next of adjacency.get(current) ?? []) {
+        if (visited.has(next)) continue;
+        visited.add(next);
+        queue.push(next);
+      }
+    }
+    expect([...names].filter((name) => !visited.has(name))).toEqual([]);
   });
 
   it('初始短缺符合国情：匈奴缺粮盐、大雍缺盐马、大楚缺马铁', () => {
