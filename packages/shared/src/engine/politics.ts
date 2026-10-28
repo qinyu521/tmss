@@ -254,30 +254,43 @@ function resolvePoliticalGrudgeResponses(
     const target = ctx.charactersById[targetId];
     if (!target) continue;
     const before: Record<string, unknown> = { grudge: scoreBefore };
+    const after: Record<string, unknown> = {};
     let effect = '';
     if (actor.faction_key === 'YONG') {
       const prince = (state.special.YONG.princes ?? []).find((item) => item.personId === targetId);
       if (prince) {
         before.influence = Math.round(prince.influence * 100) / 100;
         prince.influence = clamp(prince.influence - 2);
-        state.special.YONG.courtStability = clamp((state.special.YONG.courtStability ?? 50) - 1);
-        effect = `其影响力下降 2，朝局稳定下降 1。`;
+        after.influence = Math.round(prince.influence * 100) / 100;
+        const stabilityBefore = state.special.YONG.courtStability ?? 50;
+        before.courtStability = Math.round(stabilityBefore * 100) / 100;
+        state.special.YONG.courtStability = clamp(stabilityBefore - 1);
+        after.courtStability = Math.round((state.special.YONG.courtStability ?? 50) * 100) / 100;
+        effect = '其影响力下降 2，朝局稳定下降 1。';
       }
     } else if (actor.faction_key === 'HUN') {
       const tribe = (state.special.HUN.tribes ?? []).find((item) => item.chiefId === targetId);
       if (tribe) {
         before.loyalty = Math.round(tribe.loyalty * 100) / 100;
         tribe.loyalty = clamp(tribe.loyalty - 2);
-        state.special.HUN.cohesion = clamp((state.special.HUN.cohesion ?? 50) - 1);
-        effect = `其部落忠诚下降 2，联盟协调度下降 1。`;
+        after.loyalty = Math.round(tribe.loyalty * 100) / 100;
+        const cohesionBefore = state.special.HUN.cohesion ?? 50;
+        before.cohesion = Math.round(cohesionBefore * 100) / 100;
+        state.special.HUN.cohesion = clamp(cohesionBefore - 1);
+        after.cohesion = Math.round((state.special.HUN.cohesion ?? 50) * 100) / 100;
+        effect = '其部落忠诚下降 2，联盟协调度下降 1。';
       }
     } else if (actor.faction_key === 'CHU') {
       const house = (state.special.CHU.houses ?? []).find((item) => item.patriarchId === targetId);
       if (house) {
         before.support = Math.round(house.support * 100) / 100;
         house.support = clamp(house.support - 2);
-        state.special.CHU.centralAuthority = clamp((state.special.CHU.centralAuthority ?? 50) + 1);
-        effect = `该世家支持下降 2，中枢权威上升 1。`;
+        after.support = Math.round(house.support * 100) / 100;
+        const authorityBefore = state.special.CHU.centralAuthority ?? 50;
+        before.centralAuthority = Math.round(authorityBefore * 100) / 100;
+        state.special.CHU.centralAuthority = clamp(authorityBefore + 1);
+        after.centralAuthority = Math.round((state.special.CHU.centralAuthority ?? 50) * 100) / 100;
+        effect = '该世家支持下降 2，中枢权威上升 1。';
       }
     }
     if (!effect) {
@@ -286,10 +299,12 @@ function resolvePoliticalGrudgeResponses(
         alive: true,
         ageBand: target.age_band,
       };
-      before.courtStanding = targetRuntime.courtStanding ?? 50;
-      targetRuntime.courtStanding = clamp((targetRuntime.courtStanding ?? 50) - 2);
+      const standingBefore = targetRuntime.courtStanding ?? 50;
+      before.courtStanding = standingBefore;
+      targetRuntime.courtStanding = clamp(standingBefore - 2);
+      after.courtStanding = targetRuntime.courtStanding;
       state.characters[targetId] = targetRuntime;
-      effect = `其在朝声望下降 2。`;
+      effect = '其在朝声望下降 2。';
     }
 
     // 反击会消耗一部分积怨；仍然强烈的仇怨最早四旬后再升级一次。
@@ -314,14 +329,13 @@ function resolvePoliticalGrudgeResponses(
       targetId,
       targetLabel: target.name,
       before,
-      after: { ...before, grudge: scoreAfter, nextResponseTurn: turn + 4 },
+      after: { ...after, grudge: scoreAfter, nextResponseTurn: turn + 4 },
       evidence: '战后裁决留下的显式人物仇怨达到 10；每名人物每旬最多反击一次，反击后设四旬冷却并消耗 3 点仇怨',
       source: 'npc_ai',
       visibleToPlayer: state.factionKey === actor.faction_key,
     }));
   }
 }
-
 function mulberryFrom(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
