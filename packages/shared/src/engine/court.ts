@@ -1,4 +1,4 @@
-import type { CourtAgenda, CourtDecision, CourtResolution } from '../types.js';
+import type { CourtAgenda, CourtDecision, CourtResolution, RelationshipSeed } from '../types.js';
 
 /** Only the character attributes needed to reason about an agenda; shared by engine and UI. */
 export interface CourtAdvisorProfile {
@@ -33,6 +33,39 @@ export function courtSkill(person: CourtAdvisorProfile | undefined, agenda: Cour
   if (agenda === 'succession') return person.intrigue * 0.45 + person.loyalty * 0.3 + person.governance * 0.25 + standingModifier;
   if (agenda === 'tribal_alliance') return person.loyalty * 0.5 + person.command * 0.2 + person.intrigue * 0.3 + standingModifier;
   return person.governance * 0.45 + person.commerce * 0.35 + person.intrigue * 0.2 + standingModifier;
+}
+
+/**
+ * A character's established ties to the people directly involved in an agenda
+ * add political weight to their arguments. Only explicit seed relationship
+ * edges count; family/clan labels are never inferred from names.
+ */
+export function courtRelationshipAffinity(
+  relationships: readonly RelationshipSeed[],
+  personId: string,
+  agenda: CourtAgenda,
+  politicalTargetIds: readonly string[],
+): number {
+  if (!personId || politicalTargetIds.length === 0) return 0;
+  const targets = new Set(politicalTargetIds.filter((id) => id && id !== personId));
+  let best = 0;
+  for (const relationship of relationships) {
+    const connected = relationship.source_person_id === personId
+      ? targets.has(relationship.target_person_id)
+      : relationship.target_person_id === personId && targets.has(relationship.source_person_id);
+    if (!connected) continue;
+    let score = relationship.strength === '强' ? 8 : relationship.strength === '中' ? 4 : 2;
+    if (/竞争|制衡/.test(relationship.relation)) score += 4;
+    const contextPattern: Record<CourtAgenda, RegExp> = {
+      war_council: /主君|副将|军师|统帅|副帅|部堂|州府|协同|制衡/,
+      succession: /配偶|父|母族|兄妹|宗|继承|皇|制衡|竞争/,
+      tribal_alliance: /主君|副将|军师|统帅|首领|部落|继承|制衡|竞争/,
+      clan_relations: /家主|谋士|管家|世家|竞争|制衡|主君|副手|州府/,
+    };
+    if (contextPattern[agenda].test(relationship.relation)) score += 2;
+    best = Math.max(best, score);
+  }
+  return Math.min(14, best);
 }
 
 /** The policy each adviser prefers; the ruler may adopt either side or choose a compromise. */
