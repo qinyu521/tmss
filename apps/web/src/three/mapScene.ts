@@ -180,6 +180,7 @@ export class MapScene {
   private heightAt: (x: number, z: number) => number = () => 0;
   private animations: { ring: number; time: number } = { ring: 0, time: 0 };
   private frame = 0;
+  private lastFrameTime = 0;
   private disposed = false;
   private dragging = false;
   private dragMode: 'pan' | 'rotate' = 'pan';
@@ -1223,10 +1224,16 @@ export class MapScene {
     });
   }
 
-  private animate = (): void => {
+  private animate = (timestamp: number): void => {
     if (this.disposed) return;
     this.frame = requestAnimationFrame(this.animate);
-    this.animations.time += 0.016;
+    // 用真实帧间隔计算插值，避免 30fps 与 144fps 机器上的军队移动速度不同。
+    const deltaSeconds = this.lastFrameTime > 0
+      ? Math.min(0.05, Math.max(0, (timestamp - this.lastFrameTime) / 1000))
+      : 1 / 60;
+    this.lastFrameTime = timestamp;
+    const movementAlpha = 1 - Math.exp(-3.4 * deltaSeconds);
+    this.animations.time += deltaSeconds;
     this.target.lerp(this.desiredTarget, 0.075);
     this.distance += (this.desiredDistance - this.distance) * 0.08;
     const cosPitch = Math.cos(this.pitch);
@@ -1245,7 +1252,7 @@ export class MapScene {
 
     for (const marker of this.armyMarkers) {
       // 每帧插值只负责表现层；权威位置、路线与耗时仍由规则引擎决定。
-      marker.group.position.lerp(marker.targetPosition, 0.055);
+      marker.group.position.lerp(marker.targetPosition, movementAlpha);
       if (marker.group.position.distanceToSquared(marker.targetPosition) < 0.16) {
         marker.group.position.copy(marker.targetPosition);
       }
