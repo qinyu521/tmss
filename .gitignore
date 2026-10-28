@@ -9,3 +9,8 @@ data/runtime/*.db-*
 playwright-report/
 test-results/
 browser-shots/
+.screenshots/
+__preview-*.png
+__preview-*.mjs
+__svg-check.mjs
+apps/web/public/assets/__preview.html
