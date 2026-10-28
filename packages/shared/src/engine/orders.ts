@@ -25,7 +25,7 @@ import { assignMarch, dayCostsFor, findPath, regionNameById } from './movement.j
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
-import { courtDecisionForResolution, courtOpinion, courtSkill } from './court.js';
+import { courtCost, courtDecisionForResolution, courtOpinion, courtSkill } from './court.js';
 
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
 
@@ -42,16 +42,6 @@ const COURT_DECISION_LABEL: Record<CourtDecision, string> = {
   balanced: '折中调和',
   conciliatory: '怀柔让步',
 };
-
-function courtCost(agenda: CourtAgenda, decision: CourtDecision): number {
-  const costs: Record<CourtAgenda, Record<CourtDecision, number>> = {
-    war_council: { assertive: 12_000, balanced: 6_000, conciliatory: 0 },
-    succession: { assertive: 8_000, balanced: 12_000, conciliatory: 10_000 },
-    tribal_alliance: { assertive: 0, balanced: 6_000, conciliatory: 12_000 },
-    clan_relations: { assertive: 0, balanced: 6_000, conciliatory: 12_000 },
-  };
-  return costs[agenda][decision];
-}
 
 function courtDebateEdge(
   state: GameState,
