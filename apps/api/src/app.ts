@@ -308,7 +308,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       items: rows.map((r) => {
         const item = summariseCharacter(JSON.parse(r.payload));
         const rt = runtimeMap?.[item.person_id];
-        return rt ? { ...item, alive: rt.alive, deathCause: rt.deathCause } : item;
+        return rt ? { ...item, alive: rt.alive, deathCause: rt.deathCause, courtStanding: rt.courtStanding ?? 50 } : item;
       }),
     };
   });
