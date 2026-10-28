@@ -785,6 +785,84 @@ describe('回合结算', () => {
     expect(validateOrder(state, ctx, order).issues[0].code).toBe('NO_RECENT_DEFEAT');
   });
 
+  it('战后弹劾裁决会改变声望，并牵动皇子、部落或世家政治指标', () => {
+    const yong = newGame('YONG');
+    const yongArmy = yong.armies.find((army) => army.faction === 'YONG')!;
+    const yongCommander = yongArmy.commanderId;
+    const prince = yong.special.YONG.princes!.find((item) => item.personId !== yongCommander)!;
+    const princeInfluenceBefore = prince.influence;
+    const stabilityBefore = yong.special.YONG.courtStability ?? 50;
+    Object.assign(yong.characters[yongCommander], {
+      lastBattleOutcome: 'defeat', lastBattleLossRate: 0.38, pendingBattleSettlement: true,
+      pendingBattleCase: 'impeachment', battlePoliticalOpponentId: prince.personId, militaryLoyalty: 50,
+    });
+    const yongEvents: GameEvent[] = [];
+    applyOrder(yong, ctx, { orderId: 'political-relief-yong', kind: 'settle_defeated_commander', personId: yongCommander, action: 'relieve' }, yongEvents);
+    expect(yong.characters[yongCommander].courtStanding).toBe(53);
+    expect(yong.characters[prince.personId].courtStanding).toBe(46);
+    expect(prince.influence).toBe(Math.max(0, princeInfluenceBefore - 2));
+    expect(yong.special.YONG.courtStability).toBe(Math.max(0, stabilityBefore - 2));
+    expect(yong.characters[yongCommander].pendingBattleCase).toBeUndefined();
+    expect(yongEvents[0].summary).toContain('驳回');
+
+    const hun = newGame('HUN');
+    const hunArmy = hun.armies.find((army) => army.faction === 'HUN')!;
+    const hunCommander = hunArmy.commanderId;
+    const tribe = hun.special.HUN.tribes!.find((item) => item.chiefId !== hunCommander)!;
+    const tribeLoyaltyBefore = tribe.loyalty;
+    const cohesionBefore = hun.special.HUN.cohesion ?? 50;
+    Object.assign(hun.characters[hunCommander], {
+      lastBattleOutcome: 'defeat', lastBattleLossRate: 0.38, pendingBattleSettlement: true,
+      pendingBattleCase: 'impeachment', battlePoliticalOpponentId: tribe.chiefId, militaryLoyalty: 50,
+    });
+    const hunEvents: GameEvent[] = [];
+    applyOrder(hun, ctx, { orderId: 'political-discipline-hun', kind: 'settle_defeated_commander', personId: hunCommander, action: 'discipline' }, hunEvents);
+    expect(tribe.loyalty).toBe(Math.min(100, tribeLoyaltyBefore + 3));
+    expect(hun.special.HUN.cohesion).toBe(Math.min(100, cohesionBefore + 1));
+    expect(hun.characters[hunCommander].courtStanding).toBe(45);
+
+    const chu = newGame('CHU');
+    const chuArmy = chu.armies.find((army) => army.faction === 'CHU')!;
+    const chuCommander = chuArmy.commanderId;
+    const house = chu.special.CHU.houses!.find((item) => item.patriarchId !== chuCommander)!;
+    const supportBefore = house.support;
+    const authorityBefore = chu.special.CHU.centralAuthority ?? 50;
+    Object.assign(chu.characters[chuCommander], {
+      lastBattleOutcome: 'defeat', lastBattleLossRate: 0.38, pendingBattleSettlement: true,
+      pendingBattleCase: 'impeachment', battlePoliticalOpponentId: house.patriarchId, militaryLoyalty: 50,
+    });
+    const chuEvents: GameEvent[] = [];
+    applyOrder(chu, ctx, { orderId: 'political-discipline-chu', kind: 'settle_defeated_commander', personId: chuCommander, action: 'discipline' }, chuEvents);
+    expect(house.support).toBe(Math.min(100, supportBefore + 3));
+    expect(chu.special.CHU.centralAuthority).toBe(Math.max(0, authorityBefore - 2));
+    expect(chu.characters[chuCommander].courtStanding).toBe(45);
+  });
+
+  it('惨重战败会生成请调或弹劾事件，且案件只对败军所属势力可见', () => {
+    const state = newGame('HUN', 'ruler', 'aftermath-politics-case');
+    const attacker = state.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
+    attacker.morale = 0;
+    attacker.training = 0;
+    attacker.supply = 0;
+    attacker.fatigue = 100;
+    state.factions.HUN.resources.salt = 0;
+    state.factions.HUN.resources.iron = 0;
+    state.regions['YONG-REG03'].garrison = 220_000;
+    state.pendingOrders = [{ orderId: 'aftermath-case-move', kind: 'move_army', armyId: attacker.armyId, targetRegionId: 'YONG-REG03' }];
+    const result = runTurn(state, ctx);
+    const battle = result.report.events.find((event) => event.type === 'battle');
+    expect(battle).toBeTruthy();
+    expect((battle!.after as any).attackerWon).toBe(false);
+    const commanderId = attacker.commanderId;
+    const runtime = result.state.characters[commanderId];
+    expect(runtime.lastBattleLossRate).toBeGreaterThanOrEqual(0.25);
+    expect(runtime.pendingBattleCase).toBeDefined();
+    expect(['transfer_request', 'impeachment']).toContain(runtime.pendingBattleCase);
+    const caseEvent = result.report.events.find((event) => event.targetId === commanderId && (event.title.includes('战败后遭弹劾') || event.title.includes('战败将领请调')));
+    expect(caseEvent).toBeTruthy();
+    expect(caseEvent!.visibleToPlayer).toBe(true);
+  });
+
   it('战斗使用固定随机种子，并按战果改变军令忠诚且不泄露敌将忠诚', () => {
     const base = newGame('HUN', 'ruler', 'battle-seed');
     const attackerBefore = base.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
