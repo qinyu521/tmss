@@ -1,4 +1,4 @@
-import type { CourtAgenda } from '../types.js';
+import type { CourtAgenda, CourtDecision, CourtResolution } from '../types.js';
 
 /** Only the character attributes needed to reason about an agenda; shared by engine and UI. */
 export interface CourtAdvisorProfile {
@@ -20,6 +20,47 @@ export function courtSkill(person: CourtAdvisorProfile | undefined, agenda: Cour
   if (agenda === 'succession') return person.intrigue * 0.45 + person.loyalty * 0.3 + person.governance * 0.25;
   if (agenda === 'tribal_alliance') return person.loyalty * 0.5 + person.command * 0.2 + person.intrigue * 0.3;
   return person.governance * 0.45 + person.commerce * 0.35 + person.intrigue * 0.2;
+}
+
+/** The policy each adviser prefers; the ruler may adopt either side or choose a compromise. */
+export function courtRecommendedDecision(person: CourtAdvisorProfile, agenda: CourtAgenda): CourtDecision {
+  const position = `${person.identity_type} ${person.current_position_standard}`;
+  if (agenda === 'war_council') {
+    if (person.command >= 75 && person.command >= person.strategy + 6) return 'assertive';
+    if (person.strategy >= 75) return 'balanced';
+    if (person.loyalty < 45) return 'conciliatory';
+    return 'balanced';
+  }
+  if (agenda === 'succession') {
+    if (/储君|太子/.test(position)) return person.loyalty >= 60 ? 'assertive' : 'balanced';
+    if (/皇子|宗王|藩王/.test(position) || person.intrigue >= 78) {
+      return person.intrigue >= 72 && person.loyalty < 62 ? 'assertive' : 'balanced';
+    }
+    if (person.governance >= 72 && person.loyalty >= 65) return 'balanced';
+    return 'conciliatory';
+  }
+  if (agenda === 'tribal_alliance') {
+    if (/首领|部落|盟主|酋长/.test(position) || person.loyalty >= 76) return 'conciliatory';
+    if (person.command >= 74) return 'assertive';
+    return 'balanced';
+  }
+  if (person.house_or_clan.trim() || /世家|家主|宗族|地方豪强/.test(position)) return 'conciliatory';
+  if (person.governance >= 75 && person.commerce >= 65) return 'balanced';
+  if (person.intrigue >= 75) return 'assertive';
+  return 'balanced';
+}
+
+export function courtDecisionForResolution(
+  agenda: CourtAgenda,
+  resolution: CourtResolution | undefined,
+  speaker: CourtAdvisorProfile | undefined,
+  opposition: CourtAdvisorProfile | undefined,
+  fallback: CourtDecision = 'balanced',
+): CourtDecision {
+  if (resolution === 'compromise') return 'balanced';
+  if (resolution === 'adopt_speaker' && speaker) return courtRecommendedDecision(speaker, agenda);
+  if (resolution === 'adopt_opposition' && opposition) return courtRecommendedDecision(opposition, agenda);
+  return fallback;
 }
 
 /** Attribute- and position-driven arguments. They are deterministic, so the same character speaks consistently. */
