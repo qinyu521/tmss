@@ -372,7 +372,7 @@ export function resolveCommanderDefectionThreats(
     events.push(emitEvent(state, {
       type: 'politics',
       title: `将领倒戈·${region.name}归附${state.factions[targetFaction].name}`,
-      summary: `${commanderNameFromArmy(army, commander.name)}在忠诚长期跌至 ${Math.round(loyalty)}、且与${state.factions[targetFaction].name}的${targetPersonName}有强关系后，越过朝廷预警期限，率 ${Math.round(army.troops).toLocaleString()} 人倒戈。军团与${region.name}州府一并归附；地方秩序 ${Math.round(before.regionOrder)}→${Math.round(region.order)}、民心 ${Math.round(before.regionLoyalty)}→${Math.round(region.loyalty)}，旧势力稳定 -5，新势力稳定 -2。`,
+      summary: `${army.commanderName}在忠诚长期跌至 ${Math.round(loyalty)}、且与${state.factions[targetFaction].name}的${targetPersonName}有强关系后，越过朝廷预警期限，率 ${Math.round(army.troops).toLocaleString()} 人倒戈。军团与${region.name}州府一并归附；地方秩序 ${Math.round(before.regionOrder)}→${Math.round(region.order)}、民心 ${Math.round(before.regionLoyalty)}→${Math.round(region.loyalty)}，旧势力稳定 -5，新势力稳定 -2。`,
       actorId: army.commanderId,
       actorName: army.commanderName,
       factionKey: oldFaction,
@@ -395,10 +395,6 @@ export function resolveCommanderDefectionThreats(
       visibleToPlayer: state.factionKey === oldFaction || state.factionKey === targetFaction,
     }));
   }
-}
-
-function commanderNameFromArmy(army: Army, fallback: string): string {
-  return army.commanderName || fallback;
 }
 
 function processMovement(state: GameState, ctx: DerivedContext, events: GameEvent[]): void {
