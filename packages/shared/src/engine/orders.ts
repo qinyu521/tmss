@@ -96,6 +96,37 @@ function courtDebateEdge(
   };
 }
 
+function commanderPoliticalExecutionDrag(
+  state: GameState,
+  ctx: DerivedContext,
+  commanderId: string,
+  factionKey: FactionKey,
+): { targetId: string; targetName: string; grudge: number; loyalty: number } | null {
+  const commander = ctx.charactersById[commanderId];
+  const runtime = state.characters[commanderId];
+  if (!commander || commander.faction_key !== factionKey || !runtime) return null;
+  const loyalty = runtime.militaryLoyalty ?? commander.loyalty ?? 50;
+  if (loyalty > 35) return null;
+
+  const strongestGrudge = Object.entries(runtime.politicalGrudges ?? {})
+    .filter(([targetId, grudge]) => {
+      const target = ctx.charactersById[targetId];
+      return grudge >= 10 &&
+        targetId !== commanderId &&
+        target?.faction_key === factionKey &&
+        isCharacterAlive(state, targetId);
+    })
+    .sort(([idA, scoreA], [idB, scoreB]) => scoreB - scoreA || idA.localeCompare(idB))[0];
+  if (!strongestGrudge) return null;
+  const [targetId, grudge] = strongestGrudge;
+  return {
+    targetId,
+    targetName: ctx.charactersById[targetId]?.name ?? targetId,
+    grudge,
+    loyalty,
+  };
+}
+
 function adjustCourtStanding(state: GameState, ctx: DerivedContext, personId: string | undefined, delta: number): number | undefined {
   if (!personId || !ctx.charactersById[personId]) return undefined;
   const person = ctx.charactersById[personId];
@@ -525,10 +556,15 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
         commanderNote = `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）`;
       }
+      const executionCommanderId = isSplit ? (order.commanderId ?? army.commanderId) : army.commanderId;
+      const executionDrag = commanderPoliticalExecutionDrag(state, ctx, executionCommanderId, army.faction);
+      const executionNote = executionDrag
+        ? `；注意：${ctx.charactersById[executionCommanderId]?.name ?? army.commanderName}因与${executionDrag.targetName}积怨（${executionDrag.grudge}），且军令忠诚仅${Math.round(executionDrag.loyalty)}，将消极执行（行军至少延误 1 天，士气 -3、疲劳 +5）`
+        : '';
       return {
         ok: true,
         issues: [],
-        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
+        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}${executionNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
       };
     }
     case 'recruit': {
@@ -982,7 +1018,33 @@ export function applyOrder(
           }),
         );
       }
-      const days = dayCostsFor(mover, path.costs, { routeTypes: path.routeTypes, season: seasonOf(state.date.month) });
+      const baseDays = dayCostsFor(mover, path.costs, { routeTypes: path.routeTypes, season: seasonOf(state.date.month) });
+      const executionDrag = commanderPoliticalExecutionDrag(state, ctx, mover.commanderId, mover.faction);
+      const days = [...baseDays];
+      if (executionDrag && days.length > 0) {
+        const baseMarchDays = baseDays.reduce((sum, daysForHop) => sum + daysForHop, 0);
+        const delayDays = Math.max(1, Math.ceil(baseMarchDays * 1.25) - baseMarchDays);
+        days[days.length - 1] += delayDays;
+        const moraleBefore = mover.morale;
+        const fatigueBefore = mover.fatigue;
+        mover.morale = clamp(mover.morale - 3);
+        mover.fatigue = clamp(mover.fatigue + 5);
+        events.push(emitEvent(state, {
+          type: 'politics',
+          title: `军令消极执行·${mover.commanderName}`,
+          summary: `${mover.commanderName}因与同势力人物${executionDrag.targetName}积怨未消（仇怨 ${executionDrag.grudge}、军令忠诚 ${Math.round(executionDrag.loyalty)}），虽已奉命开拔，却消极拖延行程；本次行军由 ${baseMarchDays} 日延至 ${baseMarchDays + delayDays} 日，所部士气 ${moraleBefore}→${mover.morale}、疲劳 ${fatigueBefore}→${mover.fatigue}。`,
+          actorId: mover.commanderId,
+          actorName: mover.commanderName,
+          factionKey: mover.faction,
+          targetId: mover.armyId,
+          targetLabel: mover.name,
+          before: { militaryLoyalty: executionDrag.loyalty, politicalGrudge: executionDrag.grudge, marchDays: baseMarchDays, morale: moraleBefore, fatigue: fatigueBefore },
+          after: { delayedDays: delayDays, marchDays: baseMarchDays + delayDays, morale: mover.morale, fatigue: mover.fatigue, grudgeTargetId: executionDrag.targetId },
+          evidence: '确定性军令执行规则：统将军令忠诚 ≤35 且对同势力在世人物积怨 ≥10；全程按 1.25 倍行军时间计算，整数天至少延误 1 天，士气 -3、疲劳 +5',
+          source,
+          visibleToPlayer: mover.faction === state.factionKey,
+        }));
+      }
       assignMarch(mover, path.path, days, order.targetRegionId);
       events.push(
         emitEvent(state, {
