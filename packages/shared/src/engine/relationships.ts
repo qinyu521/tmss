@@ -83,3 +83,58 @@ export function successionNetworkInfluence(
   }
   return Math.min(1.5, Math.round(influence * 100) / 100);
 }
+
+export interface SuccessionCommandRisk {
+  rivalPrinceId: string;
+  rivalPrinceName: string;
+  rivalAffinity: number;
+  crownPrinceAffinity: number;
+}
+
+/**
+ * During an active succession crisis, a low-loyalty commander may refuse a
+ * movement order when explicit ties strongly favor a rival prince whose
+ * influence is close to or above the crown prince's. Rivalry edges are not
+ * treated as allegiance, and the ruler's side's ties offset the risk.
+ */
+export function successionCommandRisk(
+  relationships: readonly RelationshipSeed[],
+  princes: readonly { personId: string; name: string; influence: number; isCrownPrince: boolean }[],
+  commanderId: string,
+  commanderLoyalty: number,
+  crisis: boolean,
+): SuccessionCommandRisk | null {
+  if (!crisis || commanderLoyalty >= 42 || !commanderId) return null;
+  const crown = princes.find((prince) => prince.isCrownPrince);
+  if (!crown) return null;
+
+  const affinity = (princeId: string): number => {
+    let total = 0;
+    for (const edge of relationships) {
+      const directlyConnected =
+        (edge.source_person_id === commanderId && edge.target_person_id === princeId) ||
+        (edge.target_person_id === commanderId && edge.source_person_id === princeId);
+      if (!directlyConnected) continue;
+      const relationText = `${edge.relation} ${edge.notes}`;
+      if (/竞争|制衡|敌对|不和/.test(relationText)) continue;
+      const weight = edge.strength === '强' ? 1 : edge.strength === '中' ? 0.6 : 0.3;
+      total += weight;
+    }
+    return Math.min(2, Math.round(total * 100) / 100);
+  };
+
+  const crownAffinity = affinity(crown.personId);
+  const candidates = princes
+    .filter((prince) => !prince.isCrownPrince && prince.influence >= crown.influence - 5)
+    .map((prince) => ({ prince, affinity: affinity(prince.personId) }))
+    .filter((candidate) => candidate.affinity >= 0.6 && candidate.affinity > crownAffinity + 0.25)
+    .sort((a, b) => b.affinity - a.affinity || b.prince.influence - a.prince.influence);
+  const strongest = candidates[0];
+  if (!strongest) return null;
+  return {
+    rivalPrinceId: strongest.prince.personId,
+    rivalPrinceName: strongest.prince.name,
+    rivalAffinity: strongest.affinity,
+    crownPrinceAffinity: crownAffinity,
+  };
+}
