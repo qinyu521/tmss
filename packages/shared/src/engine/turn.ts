@@ -21,6 +21,7 @@ import { marchFatigueSeasonFactor, SEASON_LABELS, seasonOf } from './season.js';
 import { retreatRegion as retreatGuard, resolveBattle } from './battle.js';
 import { runEconomy, politicalTags, shortageTags } from './economy.js';
 import { runPolitics } from './politics.js';
+import { courtCost } from './court.js';
 import { runLifecycle } from './lifecycle.js';
 import { buildChronicle } from './chronicle.js';
 import { clamp, factionNameOf } from './state.js';
@@ -178,6 +179,8 @@ function npcAffordable(state: GameState, order: Order): boolean {
       return res.cash >= BALANCE.balancePrinces.cashCost;
     case 'negotiate_house':
       return res.cash >= BALANCE.negotiateHouse.cashCost;
+    case 'hold_court':
+      return res.cash >= courtCost(order.agenda, order.decision);
     case 'levy_grain':
       return Object.values(state.regions)
         .filter((r) => r.faction === factionKey)
