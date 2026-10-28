@@ -690,6 +690,8 @@ export interface CharacterRuntime {
   battlePoliticalOpponentId?: string;
   /** 战后裁决积累的人物仇怨；键为被记恨者 ID、值为 0-20；未记录时按无仇怨处理 */
   politicalGrudges?: Record<string, number>;
+  /** 针对每名仇家的下次政治反应回合；用于延后首轮反应并控制重复频率 */
+  politicalGrudgeNextResponseTurn?: Record<string, number>;
   deathTurn?: number;
   deathCause?: string;
   /** 成长提示（仅人物视图展示，不发事件刷屏） */
