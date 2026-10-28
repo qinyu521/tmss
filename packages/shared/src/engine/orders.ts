@@ -16,7 +16,7 @@ import type {
   SchemeKind,
 } from '../types.js';
 import type { DerivedContext } from '../dataset.js';
-import { hashString } from '../dataset.js';
+import { hashString, isAtWar } from '../dataset.js';
 import { BALANCE } from '../balance.js';
 import { FACTION_SHORT, ROLE_ALLOWED_ORDERS, ROLE_LABEL, SCHEME_LABELS } from '../constants.js';
 import { emitEvent } from './events.js';
