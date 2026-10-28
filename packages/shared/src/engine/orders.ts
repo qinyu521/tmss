@@ -729,6 +729,37 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         preview: `廷议「${COURT_AGENDA_LABEL[order.agenda]}」：${argument}；${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」；双方议题能力 ${debate.speakerScore}/${debate.oppositionScore}，争辩修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。` : '未指定辩论人选时采用廷臣集议默认效果。'} 君主选择「${resolutionLabel}」，最终政策为「${COURT_DECISION_LABEL[decision]}」，执行成本 ${cost.toLocaleString()} 两。`,
       };
     }
+    case 'replace_warned_commander': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '撤换倒戈风险将领需君主权限。');
+      const army = state.armies.find((item) => item.armyId === order.armyId && item.faction === state.factionKey);
+      if (!army) return issues('ARMY_NOT_FOUND', '该军团不属于你的势力。');
+      const oldRuntime = state.characters[army.commanderId];
+      if (oldRuntime?.defectionWarningTurn === undefined || !oldRuntime.defectionTargetFaction) {
+        return issues('NO_DEFLECTION_WARNING', '该军团当前没有有效的倒戈预警，无需执行预防性撤换。');
+      }
+      if (oldRuntime.allegianceFaction) return issues('ALREADY_DEFECTED', '将领已经倒戈，不能再由原势力撤换。');
+      const region = state.regions[army.nodeId];
+      if (!region || region.faction !== state.factionKey ||
+        state.armies.some((item) => item.armyId !== army.armyId && item.faction === state.factionKey && item.nodeId === army.nodeId)) {
+        return issues('DEFECTED_POSITION_LOST', '军团已不再独占本方驻地，倒戈预警条件已变化；请先重新评估局势。');
+      }
+      const replacement = ctx.charactersById[order.replacementPersonId];
+      if (!replacement || replacement.person_id === army.commanderId ||
+        currentFactionOfCharacter(state, ctx, order.replacementPersonId) !== state.factionKey) {
+        return issues('INVALID_REPLACEMENT', '接任人选必须是另一名本方人物。');
+      }
+      if (!isCharacterAlive(state, replacement.person_id)) return issues('PERSON_DEAD', '接任人选已故，不能统兵。');
+      const commandsArmy = state.armies.some((item) => item.faction === state.factionKey && item.commanderId === replacement.person_id);
+      const commandsGarrison = Object.values(state.regions).some((item) => item.faction === state.factionKey && item.garrisonCommanderId === replacement.person_id);
+      if (commandsArmy || commandsGarrison) {
+        return issues('COMMANDER_BUSY', '接任人选已统领其他军团或州兵，不能重复任命。');
+      }
+      return {
+        ok: true,
+        issues: [],
+        preview: `撤换${army.commanderName}，由${replacement.name}接掌${army.name}；不耗银，所部士气 -5，原统将军令忠诚 -5、在朝声望 -3，并清除本次倒戈预警。`,
+      };
+    }
     case 'reward_commander': {
       if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '赏赐将领需君主权限。');
       const person = ctx.charactersById[order.personId];
@@ -1513,6 +1544,67 @@ export function applyOrder(
           visibleToPlayer: fk === state.factionKey || source === 'player_order',
         }),
       );
+      return;
+    }
+    case 'replace_warned_commander': {
+      const army = state.armies.find((item) => item.armyId === order.armyId && item.faction === fk);
+      if (!army) return;
+      const oldCommander = ctx.charactersById[army.commanderId];
+      const replacement = ctx.charactersById[order.replacementPersonId];
+      const oldRuntime = state.characters[army.commanderId];
+      if (!oldCommander || !replacement || !oldRuntime || oldRuntime.defectionWarningTurn === undefined) return;
+      if (currentFactionOfCharacter(state, ctx, replacement.person_id) !== fk || !isCharacterAlive(state, replacement.person_id)) return;
+      if (state.armies.some((item) => item.armyId !== army.armyId && item.faction === fk && item.commanderId === replacement.person_id) ||
+        Object.values(state.regions).some((item) => item.faction === fk && item.garrisonCommanderId === replacement.person_id)) return;
+
+      const before = {
+        commanderId: army.commanderId,
+        commanderName: army.commanderName,
+        morale: army.morale,
+        oldCommanderLoyalty: oldRuntime.militaryLoyalty ?? oldCommander.loyalty,
+        oldCommanderStanding: oldRuntime.courtStanding ?? 50,
+        warningTurn: oldRuntime.defectionWarningTurn,
+        targetFaction: oldRuntime.defectionTargetFaction,
+      };
+      oldRuntime.militaryLoyalty = clamp(before.oldCommanderLoyalty - 5);
+      oldRuntime.courtStanding = clamp(before.oldCommanderStanding - 3);
+      oldRuntime.defectionWarningTurn = undefined;
+      oldRuntime.defectionTargetFaction = undefined;
+      state.characters[oldCommander.person_id] = oldRuntime;
+      const replacementRuntime = state.characters[replacement.person_id] ?? {
+        personId: replacement.person_id,
+        alive: true,
+        ageBand: replacement.age_band,
+        courtStanding: 50,
+        militaryLoyalty: replacement.loyalty,
+      };
+      const moraleAfter = clamp(army.morale - 5);
+      army.commanderId = replacement.person_id;
+      army.commanderName = replacement.name;
+      army.morale = moraleAfter;
+      state.characters[replacement.person_id] = replacementRuntime;
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: `预防倒戈·撤换统将·${oldCommander.name} → ${replacement.name}`,
+        summary: `君主在倒戈期限届满前撤换${oldCommander.name}，改由${replacement.name}接掌${army.name}。此举未耗银，但交接使部队士气 ${Math.round(before.morale)}→${Math.round(moraleAfter)}；旧将忠诚 ${Math.round(before.oldCommanderLoyalty)}→${Math.round(oldRuntime.militaryLoyalty ?? 0)}、在朝声望 ${Math.round(before.oldCommanderStanding)}→${Math.round(oldRuntime.courtStanding ?? 0)}。倒戈预警已解除。`,
+        actorId,
+        actorName,
+        factionKey: fk,
+        targetId: army.armyId,
+        targetLabel: army.name,
+        before,
+        after: {
+          commanderId: replacement.person_id,
+          commanderName: replacement.name,
+          morale: moraleAfter,
+          oldCommanderLoyalty: oldRuntime.militaryLoyalty,
+          oldCommanderStanding: oldRuntime.courtStanding,
+          warningCleared: oldRuntime.defectionWarningTurn === undefined,
+        },
+        evidence: '君主在警告期限内撤换统将；接任者必须在世、同属本方且未统领其他军团或州兵；撤换会付出忠诚、声望与士气代价',
+        source,
+        visibleToPlayer: fk === state.factionKey,
+      }));
       return;
     }
     case 'reward_commander': {
