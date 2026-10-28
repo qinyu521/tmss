@@ -581,12 +581,18 @@ export type OrderKind =
   | 'appease_tribe'
   | 'balance_princes'
   | 'negotiate_house'
+  | 'hold_court'
   | 'appoint'
   | 'rest_army'
   | 'scout'
   | 'scheme';
 
 export type SchemeKind = 'fire' | 'cut_supply' | 'sow_discord' | 'ambush' | 'feint';
+
+/** 廷议议题：军事议事通用；其余对应三国的结构性政治矛盾。 */
+export type CourtAgenda = 'war_council' | 'succession' | 'tribal_alliance' | 'clan_relations';
+/** 决策倾向：强硬、折中、怀柔；议题不同，实际政治代价不同。 */
+export type CourtDecision = 'assertive' | 'balanced' | 'conciliatory';
 
 export type Order =
   | {
@@ -623,6 +629,7 @@ export type Order =
   | { orderId: string; kind: 'appease_tribe'; tribeId: string; amount: number }
   | { orderId: string; kind: 'balance_princes'; amount: number }
   | { orderId: string; kind: 'negotiate_house'; houseId: string; amount: number }
+  | { orderId: string; kind: 'hold_court'; agenda: CourtAgenda; decision: CourtDecision }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }
