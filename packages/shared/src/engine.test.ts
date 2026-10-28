@@ -187,6 +187,57 @@ describe('朝廷廷议', () => {
     expect(wrongAgenda.issues[0].code).toBe('WRONG_FACTION');
   });
 
+  it('主议臣与反对臣的议题能力差会改变廷议效果并记录辩论双方', () => {
+    const score = (person: SeedRoster['characters'][number]) =>
+      person.intrigue * 0.45 + person.loyalty * 0.3 + person.governance * 0.25;
+    const officials = ctx.seed.characters
+      .filter((person) => person.faction_key === 'YONG')
+      .sort((a, b) => score(b) - score(a));
+    const speaker = officials[0]!;
+    const opposition = officials[officials.length - 1]!;
+    expect(score(speaker)).toBeGreaterThan(score(opposition));
+
+    const plain = newGame('YONG');
+    const debated = newGame('YONG');
+    const plainEvents: GameEvent[] = [];
+    const debatedEvents: GameEvent[] = [];
+    const baseOrder = {
+      orderId: 'court-plain',
+      kind: 'hold_court' as const,
+      agenda: 'succession' as const,
+      decision: 'balanced' as const,
+    };
+    const debatedOrder = {
+      ...baseOrder,
+      orderId: 'court-debated',
+      speakerPersonId: speaker.person_id,
+      oppositionPersonId: opposition.person_id,
+    };
+    expect(validateOrder(debated, ctx, debatedOrder).ok).toBe(true);
+    applyOrder(plain, ctx, baseOrder, plainEvents);
+    applyOrder(debated, ctx, debatedOrder, debatedEvents);
+
+    expect(debated.special.YONG.courtStability).toBeGreaterThan(plain.special.YONG.courtStability ?? 0);
+    expect(debatedEvents[0].summary).toContain(speaker.name);
+    expect(debatedEvents[0].summary).toContain(opposition.name);
+    expect((debatedEvents[0].after as Record<string, unknown>).debateEdge).toBeGreaterThan(0);
+  });
+
+  it('主议臣与反对臣必须是不同的本国在世人物', () => {
+    const state = newGame('YONG');
+    const person = ctx.seed.characters.find((candidate) => candidate.faction_key === 'YONG')!;
+    const invalid = validateOrder(state, ctx, {
+      orderId: 'court-same-person',
+      kind: 'hold_court',
+      agenda: 'succession',
+      decision: 'balanced',
+      speakerPersonId: person.person_id,
+      oppositionPersonId: person.person_id,
+    });
+    expect(invalid.ok).toBe(false);
+    expect(invalid.issues[0].code).toBe('COURT_PAIR_DUPLICATE');
+  });
+
   it('大雍廷议折中裁决会提升朝局稳定并留下可追溯事件', () => {
     const state = newGame('YONG');
     const beforeCash = state.factions.YONG.resources.cash;
