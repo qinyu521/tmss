@@ -135,6 +135,30 @@ describe('命令权限', () => {
 });
 
 describe('回合结算', () => {
+  it('跨旬未走完的路段会保存剩余天数，不会每旬重走完整路段', () => {
+    const state = newGame('YONG');
+    const army = state.armies.find((a) => a.faction === 'YONG')!;
+    const destination = Object.values(state.regions).find(
+      (region) => region.faction === 'YONG' && region.regionId !== army.nodeId,
+    )!;
+    const startNode = army.nodeId;
+    army.path = [destination.regionId];
+    army.hopCosts = [10];
+    army.targetRegionId = destination.regionId;
+    army.stance = 'march';
+    army.status = 'marching';
+    army.marchDaysTotal = 10;
+    army.marchDaysLeft = 10;
+
+    const result = runTurn(state, ctx);
+    const marched = result.state.armies.find((a) => a.armyId === army.armyId)!;
+    expect(marched.nodeId).toBe(startNode);
+    expect(marched.path).toEqual([destination.regionId]);
+    expect(marched.hopCosts).toEqual([3]);
+    expect(marched.marchDaysLeft).toBe(3);
+    expect(marched.status).toBe('marching');
+  });
+
   it('推进 7 天后日期、回合与事件均更新', () => {
     const state = newGame('YONG');
     const result = runTurn(state, ctx);
