@@ -10,6 +10,7 @@ import {
   buildContext,
   buildPlayerView,
   courtOpinion,
+  courtRecommendedDecision,
   createGame,
   resolveBattle,
   runTurn,
@@ -260,6 +261,36 @@ describe('朝廷廷议', () => {
     expect(events[0].type).toBe('politics');
     expect(events[0].title).toContain('皇嗣与储位');
     expect(events[0].summary).toContain('朝局稳定');
+  });
+
+  it('君主采纳主议臣意见时，会按其属性倾向选择最终政策', () => {
+    const speaker = ctx.seed.characters.find(
+      (person) => person.faction_key === 'YONG' && courtRecommendedDecision(person, 'war_council') === 'assertive',
+    );
+    expect(speaker).toBeTruthy();
+    const opposition = ctx.seed.characters.find(
+      (person) => person.faction_key === 'YONG' && person.person_id !== speaker!.person_id,
+    )!;
+    const state = newGame('YONG');
+    const beforeMorale = state.armies.filter((army) => army.faction === 'YONG').reduce((sum, army) => sum + army.morale, 0);
+    const order = {
+      orderId: 'court-adopt-speaker',
+      kind: 'hold_court' as const,
+      agenda: 'war_council' as const,
+      // 即使客户端传入了另一政策，服务器仍按“采纳主议臣”重新计算。
+      decision: 'conciliatory' as const,
+      resolution: 'adopt_speaker' as const,
+      speakerPersonId: speaker!.person_id,
+      oppositionPersonId: opposition.person_id,
+    };
+    expect(validateOrder(state, ctx, order).ok).toBe(true);
+    const events: GameEvent[] = [];
+    applyOrder(state, ctx, order, events);
+    const afterMorale = state.armies.filter((army) => army.faction === 'YONG').reduce((sum, army) => sum + army.morale, 0);
+    expect((events[0].after as Record<string, unknown>).decision).toBe('assertive');
+    expect((events[0].after as Record<string, unknown>).resolution).toBe('adopt_speaker');
+    expect(events[0].summary).toContain('采纳主议臣意见');
+    expect(afterMorale).toBeGreaterThan(beforeMorale);
   });
 
   it('匈奴廷议在强化联盟协调度时，会真实付出部落忠诚代价', () => {
