@@ -1327,12 +1327,13 @@ export function applyOrder(
         army.commanderName = replacement.name;
         army.morale = moraleAfter;
         runtime.militaryLoyalty = loyaltyAfter;
+        const politicalOutcome = resolveBattleCasePolitics(state, ctx, person.person_id, order.action);
         runtime.pendingBattleSettlement = false;
         state.characters[person.person_id] = runtime;
         events.push(emitEvent(state, {
           type: 'politics',
           title: '撤换败将·' + person.name + ' → ' + replacement.name,
-          summary: '君主撤换战败统将' + person.name + '，改由' + replacement.name + '接掌' + army.name + '。旧将军令忠诚由 ' + Math.round(before) + ' 降至 ' + Math.round(loyaltyAfter) + '；新旧指挥交接使所部士气 ' + Math.round(moraleBefore) + ' → ' + Math.round(moraleAfter) + '。',
+          summary: '君主撤换战败统将' + person.name + '，改由' + replacement.name + '接掌' + army.name + '。旧将军令忠诚由 ' + Math.round(before) + ' 降至 ' + Math.round(loyaltyAfter) + '；新旧指挥交接使所部士气 ' + Math.round(moraleBefore) + ' → ' + Math.round(moraleAfter) + '。' + (politicalOutcome ? ' ' + politicalOutcome : ''),
           actorId,
           actorName,
           factionKey: fk,
@@ -1384,15 +1385,16 @@ export function applyOrder(
         }
       }
       runtime.militaryLoyalty = loyaltyAfter;
+      const politicalOutcome = resolveBattleCasePolitics(state, ctx, person.person_id, order.action);
       runtime.pendingBattleSettlement = false;
       state.characters[person.person_id] = runtime;
       const isRelief = order.action === 'relieve';
       events.push(emitEvent(state, {
         type: 'politics',
         title: isRelief ? `抚恤败军·${person.name}` : `追责败将·${person.name}`,
-        summary: isRelief
+        summary: (isRelief
           ? `君主拨银 12000 两抚恤败军，${person.name}军令忠诚由 ${Math.round(before)} 升至 ${Math.round(loyaltyAfter)}。${army ? '所部士气得到恢复。' : '原军团已不复存在，抚恤仅影响将领忠诚。'}`
-          : `君主追究${person.name}战败之责，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}。${army ? '所部训练加强，但士气受挫。' : '原军团已不复存在，追责仅影响将领忠诚。'}`,
+          : `君主追究${person.name}战败之责，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}。${army ? '所部训练加强，但士气受挫。' : '原军团已不复存在，追责仅影响将领忠诚。'}`) + (politicalOutcome ? ' ' + politicalOutcome : ''),
         actorId,
         actorName,
         factionKey: fk,
