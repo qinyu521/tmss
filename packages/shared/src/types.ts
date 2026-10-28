@@ -646,7 +646,15 @@ export type Order =
       resolution?: CourtResolution;
     }
   | { orderId: string; kind: 'reward_commander'; personId: string; amount: number }
-  | { orderId: string; kind: 'settle_defeated_commander'; personId: string; action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial'; replacementPersonId?: string }
+  | {
+      orderId: string;
+      kind: 'settle_defeated_commander';
+      personId: string;
+      action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial';
+      replacementPersonId?: string;
+      /** 仅由 NPC 规则生成，用于解释自动裁决依据；玩家提交的该字段不会用于规则判定 */
+      npcRulingNote?: string;
+    }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }
