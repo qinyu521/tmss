@@ -297,10 +297,9 @@ function migrateV2toV3(state: GameState, roster?: CharacterSeed[]): void {
   for (const c of roster ?? []) {
     if (!state.characters[c.person_id]) {
       state.characters[c.person_id] = { personId: c.person_id, alive: true, ageBand: c.age_band, courtStanding: 50 };
-    } else if (state.characters[c.person_id].courtStanding == null) {
-      state.characters[c.person_id].courtStanding = 50;
     }
   }
+  for (const runtime of Object.values(state.characters)) runtime.courtStanding ??= 50;
 }
 
 const MIGRATIONS: Migration[] = [
