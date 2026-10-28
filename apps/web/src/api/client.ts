@@ -112,6 +112,8 @@ export interface CharacterSummary {
   deathCause?: string;
   /** 本局廷议声望（0-100）；未加载运行时数据时为空 */
   courtStanding?: number;
+  /** 本局军令忠诚度（0-100）；未加载运行时数据时默认为人物种子忠诚 */
+  militaryLoyalty?: number;
 }
 
 export interface GameListItem {
