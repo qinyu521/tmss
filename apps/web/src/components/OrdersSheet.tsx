@@ -7,12 +7,14 @@ import {
   ROLE_LABEL,
   SCHEME_LABELS,
   courtOpinion,
+  courtRecommendedDecision,
   courtSkill,
   fmt,
   type Order,
   type SchemeKind,
   type CourtAgenda,
   type CourtDecision,
+  type CourtResolution,
 } from '@tianming/shared';
 import { api, type CharacterSummary } from '../api/client';
 import { useApp } from '../state/store';
@@ -81,7 +83,7 @@ export default function OrdersSheet() {
   const [commanders, setCommanders] = useState<CharacterSummary[]>([]);
   const [searching, setSearching] = useState(false);
   const [courtAgenda, setCourtAgenda] = useState<CourtAgenda>('war_council');
-  const [courtDecision, setCourtDecision] = useState<CourtDecision>('balanced');
+  const [courtResolution, setCourtResolution] = useState<CourtResolution>('compromise');
   const [courtSpeakerId, setCourtSpeakerId] = useState('');
   const [courtOppositionId, setCourtOppositionId] = useState('');
   const [scheme, setScheme] = useState<SchemeKind>('fire');
@@ -189,6 +191,11 @@ export default function OrdersSheet() {
     balanced: { label: '折中调和', desc: '以适度成本改善战备或稳定政治关系，避免单方面倾斜。' },
     conciliatory: { label: '怀柔让步', desc: '优先恢复疲劳、信任或支持度；通常牺牲部分短期控制力。' },
   };
+  const courtResolutionCopy: Record<CourtResolution, { label: string; desc: string }> = {
+    adopt_speaker: { label: '采纳主议臣', desc: '以主议臣基于自身身份与属性提出的政策为准。' },
+    adopt_opposition: { label: '驳回主议，采纳反对臣', desc: '否决主议臣的主张，转而执行反对臣所倡方案。' },
+    compromise: { label: '折中调和', desc: '不完全采纳任何一方，采用折中政策。' },
+  };
   const activeCourtAgenda = courtAgendas.some((item) => item.key === courtAgenda)
     ? courtAgenda
     : courtAgendas[0].key;
@@ -200,6 +207,11 @@ export default function OrdersSheet() {
   const courtDebateEdge = courtSpeaker && courtOpponent && courtSpeaker.person_id !== courtOpponent.person_id
     ? Math.max(-3, Math.min(3, Math.round((speakerCourtScore - oppositionCourtScore) / 15)))
     : 0;
+  const effectiveCourtDecision: CourtDecision = courtResolution === 'adopt_speaker'
+    ? (courtSpeaker ? courtRecommendedDecision(courtSpeaker, activeCourtAgenda) : 'balanced')
+    : courtResolution === 'adopt_opposition'
+      ? (courtOpponent ? courtRecommendedDecision(courtOpponent, activeCourtAgenda) : 'balanced')
+      : 'balanced';
 
   const tradeCost = Math.round((BALANCE.prices[resource] ?? 0) * tradeAmount * BALANCE.tradePremium);
   const recruitCost = Math.round(recruitAmount * BALANCE.recruit.cashPerMan);
@@ -260,7 +272,8 @@ export default function OrdersSheet() {
           orderId,
           kind: 'hold_court',
           agenda: activeCourtAgenda,
-          decision: courtDecision,
+          decision: effectiveCourtDecision,
+          resolution: courtResolution,
           ...(courtSpeaker && courtOpponent && courtSpeaker.person_id !== courtOpponent.person_id
             ? { speakerPersonId: courtSpeaker.person_id, oppositionPersonId: courtOpponent.person_id }
             : {}),
@@ -580,7 +593,7 @@ export default function OrdersSheet() {
                 <div className="form-row">
                   <label>主议臣</label>
                   <select value={courtSpeakerId} onChange={(e) => setCourtSpeakerId(e.target.value)}>
-                    <option value="">采用廷臣集议</option>
+                    <option value="">请选择主议臣</option>
                     {courtOfficials.map((person) => (
                       <option key={person.person_id} value={person.person_id}>
                         {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkill(person, activeCourtAgenda))}
@@ -591,7 +604,7 @@ export default function OrdersSheet() {
                 <div className="form-row">
                   <label>反对臣</label>
                   <select value={courtOppositionId} onChange={(e) => setCourtOppositionId(e.target.value)}>
-                    <option value="">不指定反对臣</option>
+                    <option value="">请选择反对臣</option>
                     {courtOfficials.filter((person) => person.person_id !== courtSpeakerId).map((person) => (
                       <option key={person.person_id} value={person.person_id}>
                         {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkill(person, activeCourtAgenda))}
@@ -604,15 +617,21 @@ export default function OrdersSheet() {
                     ? `争辩比较：${courtSpeaker.name}（能力 ${Math.round(speakerCourtScore)}）对阵${courtOpponent.name}（能力 ${Math.round(oppositionCourtScore)}），本次议案效果 ${courtDebateEdge > 0 ? '+' : ''}${courtDebateEdge}。`
                     : '同时指定主议臣与反对臣后，双方与议题相关的能力差会影响裁决效果；不指定则采用集议默认效果。'}
                 </div>
-                <div className="subhead" style={{ marginTop: 10 }}>拟定裁决</div>
+                <div className="subhead" style={{ marginTop: 10 }}>君主裁定</div>
                 <div className="action-grid">
-                  {(Object.keys(courtDecisionCopy) as CourtDecision[]).map((key) => (
-                    <button key={key} className={`action-chip ${courtDecision === key ? 'active' : ''}`} onClick={() => setCourtDecision(key)}>
-                      {courtDecisionCopy[key].label}
+                  {(Object.keys(courtResolutionCopy) as CourtResolution[]).map((key) => (
+                    <button key={key} className={`action-chip ${courtResolution === key ? 'active' : ''}`} onClick={() => setCourtResolution(key)}>
+                      {courtResolutionCopy[key].label}
                     </button>
                   ))}
                 </div>
-                <div className="form-note">{courtDecisionCopy[courtDecision].desc}</div>
+                <div className="form-note">
+                  {courtResolutionCopy[courtResolution].desc}
+                  当前将执行政策：{courtDecisionCopy[effectiveCourtDecision].label}。
+                  {courtResolution !== 'compromise' && !(courtSpeaker && courtOpponent)
+                    ? '请先选择主议臣与反对臣。'
+                    : courtDecisionCopy[effectiveCourtDecision].desc}
+                </div>
                 <div className="card" style={{ marginTop: 10, background: 'rgba(0,0,0,0.16)' }}>
                   <div className="subhead">廷臣意见</div>
                   <div className="small" style={{ lineHeight: 1.9 }}>
@@ -747,7 +766,7 @@ export default function OrdersSheet() {
           )}
 
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-            <button className="btn primary" disabled={!order || busy} onClick={() => void submit()}>下达此命令</button>
+            <button className="btn primary" disabled={!order || busy || (action === 'hold_court' && (!courtSpeaker || !courtOpponent || courtSpeaker.person_id === courtOpponent.person_id))} onClick={() => void submit()}>下达此命令</button>
             <button className="btn ghost" onClick={() => setOrdersOpen(false)}>稍后再下</button>
             {view.pendingOrders.length > 0 && <span className="muted small" style={{ alignSelf: 'center' }}>已有 {view.pendingOrders.length} 条待结算命令（上限 6）</span>}
           </div>
