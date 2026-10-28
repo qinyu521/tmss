@@ -502,9 +502,9 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       const runtime = state.characters[person.person_id];
       if (
         runtime?.lastBattleOutcome !== 'defeat' ||
-        runtime.lastBattleTurn !== state.date.turn - 1
+        runtime.pendingBattleSettlement !== true
       ) {
-        return issues('NO_RECENT_DEFEAT', '只能处置上一回合亲自统兵且战败的将领；不能追责旧战或凭空制造战败。');
+        return issues('NO_RECENT_DEFEAT', '只能处置尚未善后的最近一场战败；不能重复追责旧战或凭空制造战败。');
       }
       const army = state.armies.find((item) => item.faction === state.factionKey && item.commanderId === person.person_id);
       if (order.action === 'relieve') {
@@ -1258,6 +1258,7 @@ export function applyOrder(
         }
       }
       runtime.militaryLoyalty = loyaltyAfter;
+      runtime.pendingBattleSettlement = false;
       state.characters[person.person_id] = runtime;
       const isRelief = order.action === 'relieve';
       events.push(emitEvent(state, {
