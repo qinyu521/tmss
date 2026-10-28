@@ -279,9 +279,17 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     const pageSize = Math.min(80, Math.max(1, Number(q.pageSize ?? 40)));
     const clauses: string[] = [];
     const params: any[] = [];
-    if (q.faction && FACTION_KEYS.includes(q.faction as FactionKey)) {
+    const validFactionFilter = q.faction && FACTION_KEYS.includes(q.faction as FactionKey)
+      ? q.faction as FactionKey
+      : undefined;
+    // A game save can change a character's current allegiance. In game-aware queries,
+    // faction filtering must happen after runtime allegiance is applied, not in SQL
+    // against the immutable source roster.
+    const gameState = q.gameId ? getGameState(db, q.gameId, seed.characters) : null;
+    const runtimeMap = gameState?.characters ?? null;
+    if (validFactionFilter && !runtimeMap) {
       clauses.push('faction_key = ?');
-      params.push(q.faction);
+      params.push(validFactionFilter);
     }
     if (q.q) {
       clauses.push('(name LIKE ? OR identity_type LIKE ? OR current_position_standard LIKE ? OR payload LIKE ?)');
@@ -297,22 +305,52 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       params.push(q.house);
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = runtimeMap
+      ? db.prepare(`SELECT payload FROM characters ${where} ORDER BY person_id`).all(...params) as any[]
+      : db.prepare(`SELECT payload FROM characters ${where} ORDER BY faction_key, person_id LIMIT ? OFFSET ?`)
+        .all(...params, pageSize, (page - 1) * pageSize) as any[];
+
+    const items = rows.map((r) => {
+      const item = summariseCharacter(JSON.parse(r.payload));
+      const rt = runtimeMap?.[item.person_id];
+      if (!rt) return item;
+      const currentFaction = rt.allegianceFaction ?? item.faction_key;
+      return {
+        ...item,
+        ...(currentFaction !== item.faction_key ? { originalFactionKey: item.faction_key } : {}),
+        faction_key: currentFaction,
+        allegianceFaction: rt.allegianceFaction,
+        defectionWarningTurn: rt.defectionWarningTurn,
+        defectionTargetFaction: rt.defectionTargetFaction,
+        command: Math.max(1, item.command - (rt.commandPenalty ?? 0)),
+        commandPenalty: rt.commandPenalty ?? 0,
+        alive: rt.alive,
+        deathCause: rt.deathCause,
+        courtStanding: rt.courtStanding ?? 50,
+        militaryLoyalty: rt.militaryLoyalty ?? item.loyalty,
+        lastBattleTurn: rt.lastBattleTurn,
+        lastBattleOutcome: rt.lastBattleOutcome,
+        lastBattleLossRate: rt.lastBattleLossRate,
+        pendingBattleSettlement: rt.pendingBattleSettlement ?? false,
+        pendingBattleCase: rt.pendingBattleCase,
+        battlePoliticalOpponentId: rt.battlePoliticalOpponentId,
+      };
+    });
+
+    if (runtimeMap) {
+      const currentRoster = items
+        .filter((item) => !validFactionFilter || item.faction_key === validFactionFilter)
+        .sort((a, b) => a.faction_key.localeCompare(b.faction_key) || a.person_id.localeCompare(b.person_id));
+      return {
+        total: currentRoster.length,
+        page,
+        pageSize,
+        items: currentRoster.slice((page - 1) * pageSize, page * pageSize),
+      };
+    }
+
     const total = (db.prepare(`SELECT COUNT(*) AS n FROM characters ${where}`).get(...params) as { n: number }).n;
-    const rows = db
-      .prepare(`SELECT payload FROM characters ${where} ORDER BY faction_key, person_id LIMIT ? OFFSET ?`)
-      .all(...params, pageSize, (page - 1) * pageSize) as any[];
-    // 携带 gameId 时合并该局人物运行时状态（生死/死因）；人物档案本就公开属性，生死讣闻同理公开
-    const runtimeMap = q.gameId ? (getGameState(db, q.gameId, seed.characters)?.characters ?? null) : null;
-    return {
-      total,
-      page,
-      pageSize,
-      items: rows.map((r) => {
-        const item = summariseCharacter(JSON.parse(r.payload));
-        const rt = runtimeMap?.[item.person_id];
-        return rt ? { ...item, command: Math.max(1, item.command - (rt.commandPenalty ?? 0)), commandPenalty: rt.commandPenalty ?? 0, alive: rt.alive, deathCause: rt.deathCause, courtStanding: rt.courtStanding ?? 50, militaryLoyalty: rt.militaryLoyalty ?? item.loyalty, lastBattleTurn: rt.lastBattleTurn, lastBattleOutcome: rt.lastBattleOutcome, lastBattleLossRate: rt.lastBattleLossRate, pendingBattleSettlement: rt.pendingBattleSettlement ?? false, pendingBattleCase: rt.pendingBattleCase, battlePoliticalOpponentId: rt.battlePoliticalOpponentId } : item;
-      }),
-    };
+    return { total, page, pageSize, items };
   });
 
   app.get('/api/characters/:id', async (req, reply) => {
