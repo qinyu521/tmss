@@ -682,6 +682,10 @@ export interface CharacterRuntime {
   lastBattleLossRate?: number;
   /** 战败后尚未处置；下一场战斗会覆盖该状态 */
   pendingBattleSettlement?: boolean;
+  /** 大败后的政治案件：低军令忠诚引发请调，或显式敌对关系推动弹劾 */
+  pendingBattleCase?: 'transfer_request' | 'impeachment';
+  /** 发起弹劾/政治施压的人物，仅记录种子关系明确连接者 */
+  battlePoliticalOpponentId?: string;
   deathTurn?: number;
   deathCause?: string;
   /** 成长提示（仅人物视图展示，不发事件刷屏） */
