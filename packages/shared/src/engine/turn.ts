@@ -269,7 +269,7 @@ export function resolveCommanderDefectionThreats(
       events.push(emitEvent(state, {
         type: 'politics',
         title: `倒戈风险预警·${commander.name}`,
-        summary: `${commander.name}军令忠诚仅 ${Math.round(loyalty)，且与交战势力${state.factions[target.targetFaction].name}的${target.targetPersonName}存在明确强关系。其所部暂未叛离，但若下一旬前仍未恢复忠诚，可能携军倒戈并献出${region?.name ?? '驻地'}。君主可先行赏赐；战后待处置将领也可撤换。`,
+        summary: `${commander.name}军令忠诚仅 ${Math.round(loyalty)}，且与交战势力${state.factions[target.targetFaction].name}的${target.targetPersonName}存在明确强关系。其所部暂未叛离，但若下一旬前仍未恢复忠诚，可能携军倒戈并献出${region?.name ?? '驻地'}。君主可先行赏赐；战后待处置将领也可撤换。`,
         actorId: commander.person_id,
         actorName: commander.name,
         factionKey: army.faction,
