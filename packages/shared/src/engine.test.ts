@@ -695,6 +695,47 @@ describe('将领倒戈与挽回', () => {
     }
   });
 
+  it('预警后若停战或失去独占驻地，倒戈预警会撤销而不是继续误判', () => {
+    const state = newGame('CHU', 'ruler', 'defection-warning-stale-conditions');
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const region = state.regions[army.nodeId];
+    const commanderId = army.commanderId;
+    const rivalRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    state.diplomacy['HUN|CHU'] = -100;
+    state.characters[commanderId].militaryLoyalty = 10;
+    const restore = attachDefectionTie(commanderId, rivalRuler.person_id);
+    try {
+      const warningEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, warningEvents);
+      expect(state.characters[commanderId].defectionWarningTurn).toBe(state.date.turn);
+
+      // War ends before the warning deadline: the target is no longer a valid enemy allegiance.
+      state.diplomacy['HUN|CHU'] = 0;
+      state.date.turn += 1;
+      const peaceEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, peaceEvents);
+      expect(state.characters[commanderId].defectionWarningTurn).toBeUndefined();
+      expect(state.characters[commanderId].defectionTargetFaction).toBeUndefined();
+      expect(army.faction).toBe('CHU');
+      expect(region.faction).toBe('CHU');
+      expect(peaceEvents.some((event) => event.title.includes('将领倒戈'))).toBe(false);
+
+      // Re-enter war and create a new warning; a rival army at the same node breaks exclusive control.
+      state.diplomacy['HUN|CHU'] = -100;
+      resolveCommanderDefectionThreats(state, ctx, []);
+      expect(state.characters[commanderId].defectionWarningTurn).toBe(state.date.turn);
+      state.armies.push({ ...army, armyId: 'rival-friendly-army-at-same-node', faction: 'CHU' });
+      state.date.turn += 1;
+      const sharedGarrisonEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, sharedGarrisonEvents);
+      expect(army.faction).toBe('CHU');
+      expect(region.faction).toBe('CHU');
+      expect(sharedGarrisonEvents.some((event) => event.title.includes('将领倒戈'))).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
   it('君主可在预警期限内撤换统将，以士气和声望代价阻止倒戈', () => {
     const state = newGame('CHU', 'ruler', 'defection-preemptive-replacement');
     const army = state.armies.find((item) => item.faction === 'CHU')!;
