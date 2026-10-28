@@ -89,7 +89,7 @@ export default function OrdersSheet() {
   const [rewardCommanderId, setRewardCommanderId] = useState('');
   const [rewardAmount, setRewardAmount] = useState(10_000);
   const [settlementCommanderId, setSettlementCommanderId] = useState('');
-  const [settlementAction, setSettlementAction] = useState<'relieve' | 'discipline' | 'replace'>('relieve');
+  const [settlementAction, setSettlementAction] = useState<'relieve' | 'discipline' | 'replace' | 'demote' | 'trial'>('relieve');
   const [settlementReplacementId, setSettlementReplacementId] = useState('');
   const [scheme, setScheme] = useState<SchemeKind>('fire');
   const [schemeTarget, setSchemeTarget] = useState('');
@@ -759,10 +759,11 @@ export default function OrdersSheet() {
                 </div>
                 <div className="form-row">
                   <label>处置方式</label>
-                  <select value={settlementAction} onChange={(e) => setSettlementAction(e.target.value as 'relieve' | 'discipline' | 'replace')}>
-                    <option value="relieve">抚恤败军 · 耗银 12000 · 忠诚 +8、所部士气 +6</option>
-                    <option value="discipline">追责败将 · 不耗银 · 忠诚 -8、训练 +5、士气 -3</option>
+                  <select value={settlementAction} onChange={(e) => setSettlementAction(e.target.value as 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial')}>
+                    <option value="relieve">留任抚恤 · 耗银 12000 · 忠诚 +8、所部士气 +6</option>
+                    <option value="demote">降职问责 · 不耗银 · 忠诚 -6、统率 -8、士气 -2</option>
                     <option value="replace" disabled={!canReplaceSelectedCommander}>撤换统将 · 不耗银 · 旧将忠诚 -10、所部士气 -5</option>
+                    <option value="trial">公开审判 · 不耗银 · 忠诚 -15、统率 -12、士气 -5、声望重创</option>
                   </select>
                 </div>
                 {settlementAction === 'replace' && (
@@ -781,17 +782,21 @@ export default function OrdersSheet() {
                 {selectedDefeatedCommander?.pendingBattleCase && (
                   <div className="form-note">
                     {selectedDefeatedCommander.pendingBattleCase === 'impeachment'
-                      ? `案由：战损引发弹劾${battlePoliticalOpponent ? `，发起者为${battlePoliticalOpponent.name}` : '，朝中要求裁断'}。抚恤将保护败将，追责或撤换则响应问责。`
-                      : '案由：战败将领请求调离前线。抚恤留用会支持其继续统兵，追责会驳回请求，撤换则批准调离。'}
+                      ? `案由：战损引发弹劾${battlePoliticalOpponent ? `，发起者为${battlePoliticalOpponent.name}` : '，朝中要求裁断'}。留任会保护败将；降职部分采纳问责；撤换或公开审判会更强烈地响应弹劾。`
+                      : '案由：战败将领请求调离前线。留任抚恤会支持其继续统兵；降职驳回请求但惩处统将；撤换批准调离；公开审判则公开追责并冲击政治秩序。'}
                   </div>
                 )}
                 <div className="form-note">
                   {selectedDefeatedCommander
                     ? settlementAction === 'relieve'
                       ? `抚恤后忠诚预计为 ${Math.min(100, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) + 8)}；若原军团已溃散，则只恢复将领忠诚。`
-                      : settlementAction === 'discipline'
-                        ? `追责后忠诚预计为 ${Math.max(0, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) - 8)}；若原军团仍在，则以训练提升换取士气下降。`
-                        : canReplaceSelectedCommander
+                      : settlementAction === 'demote'
+                        ? `降职后忠诚预计为 ${Math.max(0, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) - 6)}，有效统率将再受 -8 惩罚；若军团仍在，训练 +2、士气 -2。`
+                        : settlementAction === 'trial'
+                          ? `公开审判后忠诚预计为 ${Math.max(0, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) - 15)}，统率惩罚再增加 12，朝廷声望重创；若军团仍在，士气 -5、训练 +3。`
+                          : settlementAction === 'discipline'
+                            ? `追责后忠诚预计为 ${Math.max(0, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) - 8)}；若原军团仍在，则以训练提升换取士气下降。`
+                            : canReplaceSelectedCommander
                           ? settlementReplacementCandidates.some((person) => person.person_id === settlementReplacementId)
                             ? `撤换后由${settlementReplacementCandidates.find((person) => person.person_id === settlementReplacementId)?.name}接掌军团；旧将忠诚 -10、部队士气 -5。已掌领军团或州兵的将领不会列为接任人选。`
                             : '请指定一名在世、同属本方且未统领军团或州兵的接任将领。'
