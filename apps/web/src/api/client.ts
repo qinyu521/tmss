@@ -101,6 +101,7 @@ export interface CharacterSummary {
   archetype_trait: string;
   governance: number;
   command: number;
+  commandPenalty?: number;
   strategy: number;
   intrigue: number;
   commerce: number;
