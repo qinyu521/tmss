@@ -8,6 +8,7 @@ import { courtCost, courtRecommendedDecision, courtRelationshipAffinity, courtSk
 import { buildAdjacency, findPath } from './movement.js';
 import { factionTroops } from './economy.js';
 import { clamp, isCharacterAlive } from './state.js';
+import { findDefectionAllegiance } from './relationships.js';
 
 /**
  * NPC 决策：基于自身利益、资源、已知边境与性格的启发式。
@@ -24,7 +25,11 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     let seq = 0;
     const oid = () => `npc-${key}-T${state.date.turn}-${++seq}`;
 
-    // 0) 战败善后：NPC 君主会先处理上旬留下的败将案件，再安排其他国策。
+    // 0) 若上旬已收到倒戈预警，优先以最低必要赏赐挽回军心。
+    const defectionProtection = generateNpcDefectionProtection(state, ctx, key, res.cash, oid);
+    if (defectionProtection) orders.push(defectionProtection);
+
+    // 1) 战败善后：NPC 君主会先处理上旬留下的败将案件，再安排其他国策。
     const battleSettlement = generateNpcBattleSettlement(state, ctx, key, oid);
     if (battleSettlement) orders.push(battleSettlement);
 
@@ -100,6 +105,68 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
  * NPC 战后裁决：结合败将/弹劾者声望、同僚显式关系网络以及案件严重程度，
  * 确定性地选择留任、降职、追责、撤换或公开审判。每个势力每旬最多处理一名败将。
  */
+function generateNpcDefectionProtection(
+  state: GameState,
+  ctx: DerivedContext,
+  factionKey: FactionKey,
+  cash: number,
+  nextOrderId: () => string,
+): Order | null {
+  const risks = state.armies
+    .filter((army) => army.faction === factionKey)
+    .map((army) => {
+      const commander = ctx.charactersById[army.commanderId];
+      const runtime = state.characters[army.commanderId];
+      const region = state.regions[army.nodeId];
+      if (!commander || !runtime || !region ||
+        runtime.allegianceFaction ||
+        commander.faction_key !== factionKey ||
+        region.faction !== factionKey ||
+        runtime.defectionWarningTurn === undefined ||
+        runtime.defectionWarningTurn >= state.date.turn) return null;
+      if (state.armies.some((other) =>
+        other.armyId !== army.armyId &&
+        other.faction === factionKey &&
+        other.nodeId === army.nodeId,
+      )) return null;
+      const loyalty = runtime.militaryLoyalty ?? commander.loyalty;
+      if (loyalty > 15) return null;
+      const target = findDefectionAllegiance(
+        ctx.seed.relationships,
+        ctx.charactersById,
+        commander.person_id,
+        factionKey,
+        (personId) => state.characters[personId]?.allegianceFaction ?? ctx.charactersById[personId]?.faction_key,
+        (personId, targetFaction) =>
+          state.characters[personId]?.alive !== false &&
+          isAtWar(state.diplomacy, factionKey, targetFaction),
+      );
+      if (!target || target.targetFaction !== runtime.defectionTargetFaction) return null;
+      return { army, personId: commander.person_id, loyalty, warningTurn: runtime.defectionWarningTurn };
+    })
+    .filter((risk): risk is NonNullable<typeof risk> => risk !== null)
+    .sort((a, b) =>
+      a.warningTurn - b.warningTurn ||
+      a.loyalty - b.loyalty ||
+      b.army.troops - a.army.troops ||
+      a.army.armyId.localeCompare(b.army.armyId),
+    );
+
+  const risk = risks[0];
+  if (!risk) return null;
+  // 用能把忠诚提升到 15 以上的最低档赏赐，避免 AI 为保一个将领过度挥霍国库。
+  const amount = [5_000, 10_000, 20_000].find(
+    (candidate) => cash >= candidate && risk.loyalty + candidate / 1_000 > 15,
+  );
+  if (!amount) return null;
+  return {
+    orderId: nextOrderId(),
+    kind: 'reward_commander',
+    personId: risk.personId,
+    amount,
+  };
+}
+
 function generateNpcBattleSettlement(
   state: GameState,
   ctx: DerivedContext,
