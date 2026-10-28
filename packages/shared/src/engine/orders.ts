@@ -1533,7 +1533,7 @@ export function applyOrder(
       events.push(emitEvent(state, {
         type: 'order_accepted',
         title: `君主赏赐将领·${person.name}`,
-        summary: `赐银 ${order.amount.toLocaleString()} 两，${person.name}军令忠诚度由 ${Math.round(before)} 升至 ${Math.round(after)}。忠诚度会影响夺嫡危机期间的拒命风险。`,
+        summary: `赐银 ${order.amount.toLocaleString()} 两，${person.name}军令忠诚度由 ${Math.round(before)} 升至 ${Math.round(after)}。忠诚不足不仅会影响夺嫡期间的奉诏，也可能使与敌对势力有强关系的统将倒戈。`,
         actorId,
         actorName,
         factionKey: fk,
