@@ -371,6 +371,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     runtime.lastBattleTurn = state.date.turn;
     runtime.lastBattleOutcome = won ? 'victory' : 'defeat';
     runtime.lastBattleLossRate = Math.max(0, Math.min(1, casualtyRate));
+    runtime.pendingBattleSettlement = !won;
     state.characters[personId] = runtime;
     allCommanderLoyaltyChanges.push({
       personId,
