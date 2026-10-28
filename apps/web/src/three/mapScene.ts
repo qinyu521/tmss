@@ -30,6 +30,7 @@ interface ArmyMarker {
   icon: THREE.Sprite | null;
   label: HTMLDivElement;
   position: THREE.Vector3;
+  targetPosition: THREE.Vector3;
   route: THREE.Line | null;
   isOwn: boolean;
 }
@@ -937,6 +938,8 @@ export class MapScene {
   }
 
   private rebuildArmies(): void {
+    // 保留旧位置，视图刷新后让军队标记平滑移动到新位置，而不是瞬间跳点。
+    const previousPositions = new Map(this.armyMarkers.map((marker) => [marker.armyId, marker.group.position.clone()]));
     for (const marker of this.armyMarkers) {
       this.scene.remove(marker.group);
       marker.label.remove();
@@ -1025,7 +1028,9 @@ export class MapScene {
         }
       }
 
-      group.position.copy(position);
+      const targetPosition = position.clone();
+      const previousPosition = previousPositions.get(army.armyId);
+      group.position.copy(previousPosition ?? targetPosition);
       group.scale.setScalar(1.3);
       group.userData = { type: 'army', armyId: army.armyId };
       this.scene.add(group);
@@ -1046,7 +1051,8 @@ export class MapScene {
         detailed,
         icon,
         label,
-        position: position.clone(),
+        position: (previousPosition ?? targetPosition).clone(),
+        targetPosition,
         route: routeLine,
         isOwn: army.own,
       });
@@ -1238,6 +1244,11 @@ export class MapScene {
     if (this.decorGroup) this.decorGroup.visible = this.distance < 640 && this.quality === 'high';
 
     for (const marker of this.armyMarkers) {
+      // 每帧插值只负责表现层；权威位置、路线与耗时仍由规则引擎决定。
+      marker.group.position.lerp(marker.targetPosition, 0.055);
+      if (marker.group.position.distanceToSquared(marker.targetPosition) < 0.16) {
+        marker.group.position.copy(marker.targetPosition);
+      }
       const dist = this.camera.position.distanceTo(marker.group.position);
       const detailed = dist < 750;
       marker.detailed.visible = detailed;
