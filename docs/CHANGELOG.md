@@ -9,9 +9,12 @@
 - 修订 `AGENTS.md`：不允许静默修改原始数据；用户明确确认的错误可在独立分支通过可审查 diff、变更日志和回归测试修复。
 - 更新数据校验报告，说明旧版 12 条原型冲突来自过时规则。本分支的 Node/Vitest 运行结果仍需 CI 或本地实际执行确认。
 
-### 验证
-- 静态审计：100 个历史原型、336 个原创人物；主归属字段与角色映射未发现冲突，118 个中立候选原型角色均处于在野/地方官/世家相关岗位。
-- **本修改环境尚未执行 Node/Vitest 测试。** 合并前须实际运行 `npm run validate:seed`、`npm test`、`npm run typecheck`、`npm run build`。
+### 验证（GitHub Actions 实际执行）
+- `npm run validate:seed`：硬性错误 0、警告 3、原型冲突 0。
+- `npm test`：6 个测试文件，67/67 通过。
+- `npm run typecheck`：通过（shared / api / web）。
+- `npm run build`：通过，Vite 生产构建成功并再次完成类型检查。
+- CI 记录：https://github.com/qinyu521/tmss/actions/runs/40667972238
 
 
 ## 0.6.0 · 2026-10-28
