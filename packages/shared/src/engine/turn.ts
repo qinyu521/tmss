@@ -212,6 +212,7 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
       remainingDays -= hop;
       const nextRegionId = army.path.shift() as string;
       army.hopCosts.shift();
+      army.currentHopDaysTotal = army.hopCosts[0] ?? 0;
       army.marchDaysLeft = army.hopCosts.reduce((s, d) => s + d, 0);
       const previous = army.nodeId;
       army.nodeId = nextRegionId;
