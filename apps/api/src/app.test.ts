@@ -161,6 +161,39 @@ describe('API 集成', () => {
     expect(turnBody.report.chronicle.length).toBeGreaterThan(0);
   });
 
+  it('API 接受廷议议案，并在结算后返回真实政治事件', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'YONG', playerRole: 'ruler', seed: 20261028 },
+    });
+    expect(created.statusCode).toBe(200);
+    const gid = created.json().gameId as string;
+    const order = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: {
+        orders: [{
+          orderId: 'court-api',
+          kind: 'hold_court',
+          agenda: 'succession',
+          decision: 'balanced',
+        }],
+      },
+    });
+    expect(order.statusCode).toBe(200);
+    expect(order.json().accepted).toHaveLength(1);
+    expect(order.json().view.pendingOrders[0].kind).toBe('hold_court');
+
+    const turn = await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
+    expect(turn.statusCode).toBe(200);
+    const body = turn.json();
+    const court = body.report.events.find((event: any) => event.type === 'politics' && event.title.includes('皇嗣与储位'));
+    expect(court).toBeTruthy();
+    expect(court.after.courtStability).toBeGreaterThan(0);
+    expect(body.view.special.courtStability).toBeGreaterThan(0);
+  });
+
   it('分兵/州兵/计谋可通过 API 下达并结算', async () => {
     const created = await app.inject({
       method: 'POST',
