@@ -372,6 +372,42 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     runtime.lastBattleOutcome = won ? 'victory' : 'defeat';
     runtime.lastBattleLossRate = Math.max(0, Math.min(1, casualtyRate));
     runtime.pendingBattleSettlement = !won;
+    const normalizedLossRate = Math.max(0, Math.min(1, Number.isFinite(casualtyRate) ? casualtyRate : 0));
+    const hostileLinks = !won && normalizedLossRate >= 0.25
+      ? ctx.seed.relationships
+          .filter((edge) => {
+            const otherId = edge.source_person_id === personId
+              ? edge.target_person_id
+              : edge.target_person_id === personId
+                ? edge.source_person_id
+                : '';
+            const other = otherId ? ctx.charactersById[otherId] : undefined;
+            return Boolean(
+              otherId &&
+              otherId !== personId &&
+              other?.faction_key === factionKey &&
+              state.characters[otherId]?.alive !== false &&
+              /竞争|制衡|敌对|不和|争夺/.test(edge.relation + ' ' + edge.notes)
+            );
+          })
+          .sort((a, b) => {
+            const weight = (strength: string) => strength === '强' ? 3 : strength === '中' ? 2 : 1;
+            return weight(b.strength) - weight(a.strength);
+          })
+      : [];
+    const hostileEdge = hostileLinks[0];
+    const opponentId = hostileEdge
+      ? hostileEdge.source_person_id === personId
+        ? hostileEdge.target_person_id
+        : hostileEdge.source_person_id
+      : undefined;
+    if (!won && normalizedLossRate >= 0.25) {
+      runtime.pendingBattleCase = opponentId ? 'impeachment' : 'transfer_request';
+      runtime.battlePoliticalOpponentId = opponentId;
+    } else {
+      runtime.pendingBattleCase = undefined;
+      runtime.battlePoliticalOpponentId = undefined;
+    }
     state.characters[personId] = runtime;
     allCommanderLoyaltyChanges.push({
       personId,
@@ -389,6 +425,36 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     : outcome.garrisonLosses / garrisonTroopsBefore;
   applyBattleLoyalty(attackerCommanderId, attackerCommanderName, attacker.faction, outcome.attackerWon, attackerLossRate);
   applyBattleLoyalty(defenderCommanderId, defenderCommanderName, defenderCommanderFaction, !outcome.attackerWon, defenderLossRate);
+  for (const change of allCommanderLoyaltyChanges.filter((item) => item.side === 'defeated')) {
+    const runtime = state.characters[change.personId];
+    if (!runtime?.pendingBattleCase) continue;
+    const opponent = runtime.battlePoliticalOpponentId
+      ? ctx.charactersById[runtime.battlePoliticalOpponentId]
+      : undefined;
+    const impeachment = runtime.pendingBattleCase === 'impeachment';
+    events.push(emitEvent(state, {
+      type: 'politics',
+      title: impeachment ? '战败后遭弹劾·' + change.personName : '战败将领请调·' + change.personName,
+      summary: impeachment
+        ? change.personName + '部战损达到 ' + Math.round((runtime.lastBattleLossRate ?? 0) * 100) + '%。' +
+          (opponent
+            ? opponent.name + '凭借两人之间明确记载的竞争/制衡关系，弹劾其用兵失当。君主可抚恤以护其留任、追责以支持弹劾，或撤换统将。'
+            : '朝中对其用兵提出质疑，要求君主裁断。')
+        : change.personName + '所部战损达到 ' + Math.round((runtime.lastBattleLossRate ?? 0) * 100) + '%，将领以军心受挫、难以继续统兵为由呈请调离前线。君主可抚恤留用、追责驳回或另换统将。',
+      actorId: opponent?.person_id ?? change.personId,
+      actorName: opponent?.name ?? (impeachment ? '朝中言官' : change.personName),
+      factionKey: change.factionKey,
+      targetId: change.personId,
+      targetLabel: change.personName,
+      before: { pendingBattleCase: runtime.pendingBattleCase, casualtyRate: runtime.lastBattleLossRate },
+      after: { pendingBattleSettlement: true, politicalOpponentId: opponent?.person_id },
+      evidence: impeachment
+        ? '战损比例达到 25% 且人物关系种子中存在明确的竞争/制衡/敌对关系，生成弹劾案'
+        : '战损比例达到 25%，且未发现符合条件的显式敌对关系，生成统将请调案',
+      source: 'engine',
+      visibleToPlayer: change.factionKey === state.factionKey,
+    }));
+  }
   const visibleCommanderLoyaltyChanges = allCommanderLoyaltyChanges.filter((change) => change.factionKey === state.factionKey);
   const commanderLoyaltySummary = visibleCommanderLoyaltyChanges.length
     ? `己方统将军令忠诚变化：${visibleCommanderLoyaltyChanges.map((change) => `${change.personName} ${change.delta > 0 ? '+' : ''}${change.delta}` ).join('、')}。`
