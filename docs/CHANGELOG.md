@@ -9,8 +9,12 @@
 - 新增路线回归测试：小部队选择短支路，大军在更高容量官道可用时选择绕行；覆盖容量阈值。
 - 更新规则说明与数据字典，明确 `map_edges.throughput` 从描述字段转为参与行军路线计算的规则字段。
 
-### 验证状态
-- 当前提交的 CI 正在执行种子校验、测试、类型检查、构建与 Compose 检查；实际结果会在 CI 完成后记录。
+### 验证（GitHub Actions 实际执行）
+- `npm run validate:seed`：硬性错误 0、警告 3、原型冲突 0、24/24 州府连通。
+- `npm test`：8 个测试文件，72/72 通过，其中新增路线容量与选路回归测试 2 项。
+- `npm run typecheck` 与 `npm run build`：通过。
+- `docker compose config --quiet` 与宿主机回环端口绑定检查：通过。
+- CI 记录：https://github.com/qinyu521/tmss/actions/runs/40671882345
 - 未在真实 VPS 上进行军队规模与路线表现的人工试玩；地图的历史地理合理性仍需单独审阅。
 
 
