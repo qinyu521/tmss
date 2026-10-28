@@ -629,7 +629,16 @@ export type Order =
   | { orderId: string; kind: 'appease_tribe'; tribeId: string; amount: number }
   | { orderId: string; kind: 'balance_princes'; amount: number }
   | { orderId: string; kind: 'negotiate_house'; houseId: string; amount: number }
-  | { orderId: string; kind: 'hold_court'; agenda: CourtAgenda; decision: CourtDecision }
+  | {
+      orderId: string;
+      kind: 'hold_court';
+      agenda: CourtAgenda;
+      decision: CourtDecision;
+      /** 主议臣：以其相关能力决定议案论证效果 */
+      speakerPersonId?: string;
+      /** 反对臣：能力越强，主议效果越容易被制衡 */
+      oppositionPersonId?: string;
+    }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }
