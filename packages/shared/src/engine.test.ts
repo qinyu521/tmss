@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   BALANCE,
   UNIT_PROFILES,
+  applyOrder,
   applyUnitNames,
   buildContext,
   buildPlayerView,
@@ -12,6 +13,7 @@ import {
   resolveBattle,
   runTurn,
   validateOrder,
+  type GameEvent,
   type GameState,
   type SeedRoster,
 } from './index.js';
@@ -159,6 +161,85 @@ describe('命令权限', () => {
     const res = validateOrder(state, ctx, { orderId: 'o5', kind: 'recruit', amount: 10_000 });
     expect(res.ok).toBe(false);
     expect(res.issues[0].code).toBe('NO_CASH');
+  });
+});
+
+describe('朝廷廷议', () => {
+  it('廷议只允许君主发起，且不能套用其他势力的专属议题', () => {
+    const governor = newGame('CHU', 'governor');
+    const forbiddenRole = validateOrder(governor, ctx, {
+      orderId: 'court-role',
+      kind: 'hold_court',
+      agenda: 'clan_relations',
+      decision: 'balanced',
+    });
+    expect(forbiddenRole.ok).toBe(false);
+    expect(forbiddenRole.issues[0].code).toBe('ROLE_FORBIDDEN');
+
+    const yong = newGame('YONG');
+    const wrongAgenda = validateOrder(yong, ctx, {
+      orderId: 'court-agenda',
+      kind: 'hold_court',
+      agenda: 'clan_relations',
+      decision: 'balanced',
+    });
+    expect(wrongAgenda.ok).toBe(false);
+    expect(wrongAgenda.issues[0].code).toBe('WRONG_FACTION');
+  });
+
+  it('大雍廷议折中裁决会提升朝局稳定并留下可追溯事件', () => {
+    const state = newGame('YONG');
+    const beforeCash = state.factions.YONG.resources.cash;
+    const beforeStability = state.special.YONG.courtStability ?? 60;
+    const order = {
+      orderId: 'court-yong',
+      kind: 'hold_court' as const,
+      agenda: 'succession' as const,
+      decision: 'balanced' as const,
+    };
+    expect(validateOrder(state, ctx, order).ok).toBe(true);
+    const events: GameEvent[] = [];
+    applyOrder(state, ctx, order, events);
+    expect(state.factions.YONG.resources.cash).toBe(beforeCash - 12_000);
+    expect(state.special.YONG.courtStability).toBeGreaterThan(beforeStability);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('politics');
+    expect(events[0].title).toContain('皇嗣与储位');
+    expect(events[0].summary).toContain('朝局稳定');
+  });
+
+  it('匈奴廷议在强化联盟协调度时，会真实付出部落忠诚代价', () => {
+    const state = newGame('HUN');
+    const beforeCohesion = state.special.HUN.cohesion ?? 58;
+    const beforeLoyalty = state.special.HUN.tribes?.[0].loyalty ?? 50;
+    const order = {
+      orderId: 'court-hun',
+      kind: 'hold_court' as const,
+      agenda: 'tribal_alliance' as const,
+      decision: 'assertive' as const,
+    };
+    const events: GameEvent[] = [];
+    applyOrder(state, ctx, order, events);
+    expect(state.special.HUN.cohesion).toBeGreaterThan(beforeCohesion);
+    expect(state.special.HUN.tribes?.[0].loyalty).toBeLessThan(beforeLoyalty);
+    expect(events[0].summary).toContain('忠诚各降 3');
+  });
+
+  it('大楚廷议收归权力时会提升中枢权威并降低世家支持', () => {
+    const state = newGame('CHU');
+    const beforeAuthority = state.special.CHU.centralAuthority ?? 55;
+    const beforeSupport = state.special.CHU.houses?.[0].support ?? 50;
+    const order = {
+      orderId: 'court-chu',
+      kind: 'hold_court' as const,
+      agenda: 'clan_relations' as const,
+      decision: 'assertive' as const,
+    };
+    const events: GameEvent[] = [];
+    applyOrder(state, ctx, order, events);
+    expect(state.special.CHU.centralAuthority).toBeGreaterThan(beforeAuthority);
+    expect(state.special.CHU.houses?.[0].support).toBeLessThan(beforeSupport);
+    expect(events[0].summary).toContain('各家支持下降 5');
   });
 });
 
