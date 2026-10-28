@@ -727,6 +727,64 @@ describe('回合结算', () => {
     }).issues[0].code).toBe('NO_RECENT_DEFEAT');
   });
 
+  it('战败后可撤换统将，接任人选必须未掌兵且交接会影响忠诚与士气', () => {
+    const state = newGame('YONG');
+    state.date.turn = 2;
+    const army = state.armies.find((item) => item.faction === 'YONG')!;
+    const oldCommanderId = army.commanderId;
+    const oldRuntime = state.characters[oldCommanderId];
+    oldRuntime.lastBattleTurn = 1;
+    oldRuntime.lastBattleOutcome = 'defeat';
+    oldRuntime.lastBattleLossRate = 0.42;
+    oldRuntime.pendingBattleSettlement = true;
+    oldRuntime.militaryLoyalty = 54;
+    army.morale = 63;
+
+    const replacement = Object.values(ctx.charactersById).find((person) =>
+      person.faction_key === 'YONG' &&
+      person.person_id !== oldCommanderId &&
+      state.characters[person.person_id]?.alive !== false &&
+      !state.armies.some((item) => item.faction === 'YONG' && item.commanderId === person.person_id) &&
+      !Object.values(state.regions).some((region) => region.faction === 'YONG' && region.garrisonCommanderId === person.person_id)
+    );
+    expect(replacement).toBeTruthy();
+    const order = {
+      orderId: 'replace-after-defeat',
+      kind: 'settle_defeated_commander' as const,
+      personId: oldCommanderId,
+      action: 'replace' as const,
+      replacementPersonId: replacement!.person_id,
+    };
+
+    expect(validateOrder(state, ctx, {
+      ...order,
+      replacementPersonId: oldCommanderId,
+    }).issues[0].code).toBe('INVALID_REPLACEMENT');
+
+    const occupied = state.armies.find((item) => item.faction === 'YONG' && item.commanderId !== oldCommanderId);
+    if (occupied) {
+      expect(validateOrder(state, ctx, {
+        ...order,
+        replacementPersonId: occupied.commanderId,
+      }).issues[0].code).toBe('COMMANDER_BUSY');
+    }
+
+    expect(validateOrder(state, ctx, order).ok).toBe(true);
+    const beforeCash = state.factions.YONG.resources.cash;
+    const events: GameEvent[] = [];
+    applyOrder(state, ctx, order, events);
+
+    expect(state.factions.YONG.resources.cash).toBe(beforeCash);
+    expect(army.commanderId).toBe(replacement!.person_id);
+    expect(army.commanderName).toBe(replacement!.name);
+    expect(army.morale).toBe(58);
+    expect(state.characters[oldCommanderId].militaryLoyalty).toBe(44);
+    expect(state.characters[oldCommanderId].pendingBattleSettlement).toBe(false);
+    expect(events[0].title).toContain('撤换败将');
+    expect(events[0].summary).toContain(replacement!.name);
+    expect(validateOrder(state, ctx, order).issues[0].code).toBe('NO_RECENT_DEFEAT');
+  });
+
   it('战斗使用固定随机种子，并按战果改变军令忠诚且不泄露敌将忠诚', () => {
     const base = newGame('HUN', 'ruler', 'battle-seed');
     const attackerBefore = base.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
