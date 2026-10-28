@@ -609,6 +609,16 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
           preview: '撤换败将' + person.name + '，由' + replacement.name + '接掌' + army.name + '；不耗银，但旧将军令忠诚 -10，交接使所部士气 -5。',
         };
       }
+      if (order.action === 'demote') {
+        const current = runtime.militaryLoyalty ?? person.loyalty;
+        const effectiveCommand = Math.max(1, person.command - (runtime.commandPenalty ?? 0));
+        return { ok: true, issues: [], preview: '降职' + person.name + '：不耗银，军令忠诚 -6、有效统率 ' + effectiveCommand + ' → ' + Math.max(1, effectiveCommand - 8) + '，' + (army ? '所部训练 +2、士气 -2。' : '不改变已不存在军团的状态。') };
+      }
+      if (order.action === 'trial') {
+        const current = runtime.militaryLoyalty ?? person.loyalty;
+        const effectiveCommand = Math.max(1, person.command - (runtime.commandPenalty ?? 0));
+        return { ok: true, issues: [], preview: '公开审判' + person.name + '：不耗银，军令忠诚 ' + Math.round(current) + ' → ' + Math.max(0, Math.round(current) - 15) + '，有效统率 ' + effectiveCommand + ' → ' + Math.max(1, effectiveCommand - 12) + '，' + (army ? '所部士气 -5、训练 +3；政治声望将受到重创。' : '将领声望与统率受罚，原军团已不复存在。') };
+      }
       if (order.action === 'relieve') {
         if (faction.resources.cash < 12_000) return issues('NO_CASH', '抚恤败军需银 12000 两。');
         const current = runtime.militaryLoyalty ?? person.loyalty;
