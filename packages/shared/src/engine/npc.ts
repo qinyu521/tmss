@@ -4,7 +4,7 @@ import type { DerivedContext } from '../dataset.js';
 import { isAtWar } from '../dataset.js';
 import { hashString, mulberry32 } from '../dataset.js';
 import { BALANCE } from '../balance.js';
-import { courtCost, courtRecommendedDecision, courtSkill } from './court.js';
+import { courtCost, courtRecommendedDecision, courtRelationshipAffinity, courtSkill } from './court.js';
 import { buildAdjacency, findPath } from './movement.js';
 import { factionTroops } from './economy.js';
 import { clamp, isCharacterAlive } from './state.js';
@@ -135,6 +135,14 @@ function generateNpcCourtOrder(
     else if (averageMorale < 58) situationPreference = 'balanced';
   }
 
+  const politicalTargetIds = agenda === 'succession'
+    ? (state.special.YONG.princes ?? []).map((prince) => prince.personId)
+    : agenda === 'tribal_alliance'
+      ? (state.special.HUN.tribes ?? []).map((tribe) => tribe.chiefId)
+      : agenda === 'clan_relations'
+        ? (state.special.CHU.houses ?? []).map((house) => house.patriarchId)
+        : state.armies.filter((army) => army.faction === factionKey).map((army) => army.commanderId);
+
   const advisors = ctx.seed.characters
     .filter((person) => person.faction_key === factionKey && isCharacterAlive(state, person.person_id))
     .map((person) => ({
@@ -143,7 +151,7 @@ function generateNpcCourtOrder(
       score: courtSkill({
         ...person,
         courtStanding: state.characters[person.person_id]?.courtStanding ?? 50,
-      }, agenda),
+      }, agenda) + courtRelationshipAffinity(ctx.seed.relationships, person.person_id, agenda, politicalTargetIds),
     }))
     .sort((a, b) => b.score - a.score);
   if (advisors.length < 2) return null;
