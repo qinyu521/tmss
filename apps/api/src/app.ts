@@ -387,6 +387,8 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     return {
       character,
       runtime,
+      currentFactionKey: runtime?.allegianceFaction ?? character.faction_key,
+      originalFactionKey: runtime?.allegianceFaction ? character.faction_key : undefined,
       coreConflict: coreConflictOf(character, seed.historical_archetypes),
       appointment: appointment ? JSON.parse(appointment) : null,
       archetype: archetype ? JSON.parse(archetype) : null,
