@@ -102,6 +102,60 @@ function adjustCourtStanding(state: GameState, ctx: DerivedContext, personId: st
   return runtime.courtStanding;
 }
 
+function resolveBattleCasePolitics(
+  state: GameState,
+  ctx: DerivedContext,
+  commanderId: string,
+  action: 'relieve' | 'discipline' | 'replace',
+): string {
+  const runtime = state.characters[commanderId];
+  const person = ctx.charactersById[commanderId];
+  const caseType = runtime?.pendingBattleCase;
+  const opponentId = runtime?.battlePoliticalOpponentId;
+  if (!runtime || !person || !caseType) return '';
+
+  let outcome = '';
+  if (caseType === 'impeachment' && opponentId && ctx.charactersById[opponentId]) {
+    const backsCommander = action === 'relieve';
+    adjustCourtStanding(state, ctx, commanderId, backsCommander ? 3 : -5);
+    adjustCourtStanding(state, ctx, opponentId, backsCommander ? -4 : 3);
+    if (person.faction_key === 'YONG') {
+      const prince = (state.special.YONG.princes ?? []).find((item) => item.personId === opponentId);
+      if (prince) {
+        prince.influence = clamp(prince.influence + (backsCommander ? -2 : 2));
+        state.special.YONG.courtStability = clamp((state.special.YONG.courtStability ?? 50) + (backsCommander ? -2 : 1));
+      }
+    } else if (person.faction_key === 'HUN') {
+      const tribe = (state.special.HUN.tribes ?? []).find((item) => item.chiefId === opponentId);
+      if (tribe) {
+        tribe.loyalty = clamp(tribe.loyalty + (backsCommander ? -4 : 3));
+        state.special.HUN.cohesion = clamp((state.special.HUN.cohesion ?? 50) + (backsCommander ? -2 : 1));
+      }
+    } else if (person.faction_key === 'CHU') {
+      const house = (state.special.CHU.houses ?? []).find((item) => item.patriarchId === opponentId);
+      if (house) {
+        house.support = clamp(house.support + (backsCommander ? -4 : 3));
+        state.special.CHU.centralAuthority = clamp((state.special.CHU.centralAuthority ?? 50) + (backsCommander ? 2 : -2));
+      }
+    }
+    outcome = backsCommander
+      ? '君主驳回' + ctx.charactersById[opponentId].name + '的弹劾，败将声望 +3、弹劾者声望 -4；相关派系因裁决出现反弹。'
+      : '君主采纳' + ctx.charactersById[opponentId].name + '的弹劾，败将声望 -5、弹劾者声望 +3；相关政治派系获得回应。';
+  } else if (caseType === 'transfer_request') {
+    const delta = action === 'replace' ? 2 : action === 'relieve' ? 1 : -4;
+    adjustCourtStanding(state, ctx, commanderId, delta);
+    outcome = action === 'replace'
+      ? '君主批准调离前线的请求，将领在朝声望 +2。'
+      : action === 'relieve'
+        ? '君主抚恤并决定留用该将领，其在朝声望 +1。'
+        : '君主驳回调任请求并追责，将领在朝声望 -4。';
+  }
+  runtime.pendingBattleCase = undefined;
+  runtime.battlePoliticalOpponentId = undefined;
+  state.characters[commanderId] = runtime;
+  return outcome;
+}
+
 function courtAgendaAllowed(faction: FactionKey, agenda: CourtAgenda): boolean {
   if (agenda === 'war_council') return true;
   if (agenda === 'succession') return faction === 'YONG';
