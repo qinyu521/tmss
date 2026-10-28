@@ -14,6 +14,7 @@ import {
   courtRelationshipAffinity,
   appointmentRelationshipEffect,
   successionNetworkInfluence,
+  successionCommandRisk,
   runPolitics,
   createGame,
   generateNpcOrders,
@@ -283,6 +284,75 @@ describe('朝廷廷议', () => {
     expect(courtRelationshipAffinity([relationship], 'YONG-A', 'succession', ['YONG-PRINCE'])).toBe(10);
     expect(courtRelationshipAffinity([relationship], 'YONG-A', 'war_council', ['YONG-PRINCE'])).toBe(8);
     expect(courtRelationshipAffinity([relationship], 'YONG-A', 'succession', ['OTHER-PRINCE'])).toBe(0);
+  });
+
+  it('夺嫡危机中低忠诚、亲近竞争皇子的将领会拒绝奉诏', () => {
+    const princes = [
+      { personId: 'YONG-HEIR', name: '储君甲', influence: 58, isCrownPrince: true },
+      { personId: 'YONG-RIVAL', name: '皇子乙', influence: 65, isCrownPrince: false },
+      { personId: 'YONG-OTHER', name: '皇子丙', influence: 40, isCrownPrince: false },
+    ];
+    const relationship = {
+      faction: '大雍',
+      source_person_id: 'YONG-GENERAL',
+      source_name: '将领',
+      relation: '父子/继承关系',
+      target_person_id: 'YONG-RIVAL',
+      target_name: '皇子乙',
+      strength: '强',
+      notes: '测试中的明确亲缘关系',
+    };
+    const risk = successionCommandRisk([relationship], princes, 'YONG-GENERAL', 25, true);
+    expect(risk?.rivalPrinceId).toBe('YONG-RIVAL');
+    expect(risk?.rivalAffinity).toBe(1);
+    expect(successionCommandRisk([relationship], princes, 'YONG-GENERAL', 80, true)).toBeNull();
+    expect(successionCommandRisk([relationship], princes, 'YONG-GENERAL', 25, false)).toBeNull();
+    expect(successionCommandRisk(
+      [{ ...relationship, relation: '世家竞争/利益制衡' }],
+      princes,
+      'YONG-GENERAL',
+      25,
+      true,
+    )).toBeNull();
+
+    const state = newGame('YONG');
+    state.flags.successionCrisis = true;
+    const army = state.armies.find((item) => item.faction === 'YONG')!;
+    const commander = ctx.seed.characters.find(
+      (person) => person.faction_key === 'YONG' && person.person_id !== state.playerPersonId,
+    )!;
+    const previousLoyalty = commander.loyalty;
+    const previousRelationships = ctx.seed.relationships;
+    const rival = state.special.YONG.princes!.find((prince) => !prince.isCrownPrince)!;
+    const heir = state.special.YONG.princes!.find((prince) => prince.isCrownPrince)!;
+    rival.influence = 65;
+    heir.influence = 58;
+    commander.loyalty = 25;
+    army.commanderId = commander.person_id;
+    army.commanderName = commander.name;
+    ctx.seed.relationships = [...previousRelationships, {
+      ...relationship,
+      source_person_id: commander.person_id,
+      source_name: commander.name,
+      target_person_id: rival.personId,
+      target_name: rival.name,
+    }];
+    try {
+      const target = Object.values(state.regions).find(
+        (region) => region.faction === 'YONG' && region.regionId !== army.nodeId,
+      )!;
+      const validation = validateOrder(state, ctx, {
+        orderId: 'crisis-refusal',
+        kind: 'move_army',
+        armyId: army.armyId,
+        targetRegionId: target.regionId,
+      });
+      expect(validation.ok).toBe(false);
+      expect(validation.issues[0].code).toBe('COMMANDER_POLITICAL_SPLIT');
+    } finally {
+      commander.loyalty = previousLoyalty;
+      ctx.seed.relationships = previousRelationships;
+    }
   });
 
   it('任命时真实关系会改变地方秩序与忠诚的交接结果', () => {
