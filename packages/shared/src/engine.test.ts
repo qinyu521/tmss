@@ -7,6 +7,7 @@ import {
   UNIT_PROFILES,
   applyUnitNames,
   buildContext,
+  buildPlayerView,
   createGame,
   resolveBattle,
   runTurn,
@@ -180,6 +181,26 @@ describe('回合结算', () => {
     expect(marched.status).toBe('marching');
     expect(marched.supply).toBeLessThan(supplyBefore);
     expect(marched.fatigue).toBeGreaterThan(fatigueBefore);
+  });
+
+  it('地图显示进度按当前路段计算，而不是把全程进度套到剩余路线', () => {
+    const state = newGame('YONG');
+    const army = state.armies.find((a) => a.faction === 'YONG')!;
+    const destinations = Object.values(state.regions).filter(
+      (region) => region.faction === 'YONG' && region.regionId !== army.nodeId,
+    );
+    army.path = [destinations[0].regionId, destinations[1].regionId];
+    army.hopCosts = [2, 8];
+    army.targetRegionId = destinations[1].regionId;
+    army.stance = 'march';
+    army.status = 'marching';
+    army.marchDaysTotal = 13;
+    army.marchDaysLeft = 10;
+    army.currentHopDaysTotal = 5;
+
+    const armyView = buildPlayerView(state, ctx).armies.find((item) => item.armyId === army.armyId)!;
+    expect(armyView.progress).toBeCloseTo(0.6);
+    expect(armyView.progress).not.toBeCloseTo(1 - army.marchDaysLeft / army.marchDaysTotal);
   });
 
   it('推进 7 天后日期、回合与事件均更新', () => {
