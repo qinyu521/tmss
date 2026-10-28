@@ -54,7 +54,7 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
       .sort((a, b) => b.troops - a.troops);
     if (hostileRegion && idleArmies.length > 0 && rng() > 0.2) {
       const army = idleArmies[0];
-      const path = findPath(state, ctx, key, army.nodeId, hostileRegion);
+      const path = findPath(state, ctx, key, army.nodeId, hostileRegion, { troops: army.troops });
       if (path.ok && path.totalDays <= BALANCE.turnDays * 2) {
         orders.push({ orderId: oid(), kind: 'move_army', armyId: army.armyId, targetRegionId: hostileRegion });
       }
