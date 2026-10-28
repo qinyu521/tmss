@@ -223,6 +223,17 @@ describe('朝廷廷议', () => {
     expect(state.special.HUN.cohesion).toBeGreaterThan(beforeCohesion);
     expect(state.special.HUN.tribes?.[0].loyalty).toBeLessThan(beforeLoyalty);
     expect(events[0].summary).toContain('忠诚各降 3');
+
+    const durableState = newGame('HUN');
+    const durableBefore = durableState.special.HUN.cohesion ?? 58;
+    durableState.pendingOrders = [{
+      orderId: 'court-hun-durable',
+      kind: 'hold_court',
+      agenda: 'tribal_alliance',
+      decision: 'assertive',
+    }];
+    const settled = runTurn(durableState, ctx);
+    expect(settled.state.special.HUN.cohesion).toBeGreaterThan(durableBefore);
   });
 
   it('大楚廷议收归权力时会提升中枢权威并降低世家支持', () => {
@@ -242,6 +253,17 @@ describe('朝廷廷议', () => {
     expect(state.special.CHU.houses?.[0].support).toBeLessThan(beforeSupport);
     expect(state.special.CHU.houses?.[0].privateForce).toBeLessThan(beforePrivateForce);
     expect(events[0].summary).toContain('各家支持下降 5');
+
+    const durableState = newGame('CHU');
+    const durableBefore = durableState.special.CHU.centralAuthority ?? 52;
+    durableState.pendingOrders = [{
+      orderId: 'court-chu-durable',
+      kind: 'hold_court',
+      agenda: 'clan_relations',
+      decision: 'assertive',
+    }];
+    const settled = runTurn(durableState, ctx);
+    expect(settled.state.special.CHU.centralAuthority).toBeGreaterThan(durableBefore);
   });
 });
 
