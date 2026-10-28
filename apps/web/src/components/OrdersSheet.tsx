@@ -89,7 +89,8 @@ export default function OrdersSheet() {
   const [rewardCommanderId, setRewardCommanderId] = useState('');
   const [rewardAmount, setRewardAmount] = useState(10_000);
   const [settlementCommanderId, setSettlementCommanderId] = useState('');
-  const [settlementAction, setSettlementAction] = useState<'relieve' | 'discipline'>('relieve');
+  const [settlementAction, setSettlementAction] = useState<'relieve' | 'discipline' | 'replace'>('relieve');
+  const [settlementReplacementId, setSettlementReplacementId] = useState('');
   const [scheme, setScheme] = useState<SchemeKind>('fire');
   const [schemeTarget, setSchemeTarget] = useState('');
   const [strategistId, setStrategistId] = useState('');
@@ -144,6 +145,11 @@ export default function OrdersSheet() {
         const firstArmyCommander = view.armies.find((army) => army.own)?.commanderId;
         setRewardCommanderId(firstArmyCommander && available.some((person) => person.person_id === firstArmyCommander) ? firstArmyCommander : '');
         setSettlementCommanderId(available.find((person) => person.pendingBattleSettlement && person.lastBattleOutcome === 'defeat')?.person_id ?? '');
+        const replacement = available.find((person) =>
+          !view.armies.some((army) => army.own && army.commanderId === person.person_id) &&
+          !view.regions.some((region) => region.owned && region.garrisonCommanderName === person.name)
+        );
+        setSettlementReplacementId(replacement?.person_id ?? '');
       })
       .catch(() => {
         setCommanders([]);
@@ -213,6 +219,11 @@ export default function OrdersSheet() {
   const selectedRewardCommander = rewardCandidates.find((person) => person.person_id === rewardCommanderId);
   const defeatedCommanderCandidates = courtOfficials.filter((person) => person.pendingBattleSettlement === true && person.lastBattleOutcome === 'defeat');
   const selectedDefeatedCommander = defeatedCommanderCandidates.find((person) => person.person_id === settlementCommanderId);
+  const canReplaceSelectedCommander = Boolean(selectedDefeatedCommander && view?.armies.some((army) => army.own && army.commanderId === selectedDefeatedCommander.person_id));
+  const settlementReplacementCandidates = courtOfficials.filter((person) =>
+    !view?.armies.some((army) => army.own && army.commanderId === person.person_id) &&
+    !view?.regions.some((region) => region.owned && region.garrisonCommanderName === person.name)
+  );
   const courtSpeaker = courtOfficials.find((person) => person.person_id === courtSpeakerId);
   const courtOpponent = courtOfficials.find((person) => person.person_id === courtOppositionId);
   const speakerCourtScore = courtSpeaker ? courtSkill(courtSpeaker, activeCourtAgenda) : 50;
@@ -298,8 +309,9 @@ export default function OrdersSheet() {
           ? { orderId, kind: 'reward_commander', personId: rewardCommanderId, amount: rewardAmount }
           : null;
       case 'settle_defeated_commander':
-        return settlementCommanderId && defeatedCommanderCandidates.some((person) => person.person_id === settlementCommanderId)
-          ? { orderId, kind: 'settle_defeated_commander', personId: settlementCommanderId, action: settlementAction }
+        return settlementCommanderId && defeatedCommanderCandidates.some((person) => person.person_id === settlementCommanderId) &&
+          (settlementAction !== 'replace' || (canReplaceSelectedCommander && settlementReplacementCandidates.some((person) => person.person_id === settlementReplacementId)))
+          ? { orderId, kind: 'settle_defeated_commander', personId: settlementCommanderId, action: settlementAction, ...(settlementAction === 'replace' ? { replacementPersonId: settlementReplacementId } : {}) }
           : null;
       case 'appoint':
         return personId && appointRegion ? { orderId, kind: 'appoint', personId, regionId: appointRegion } : null;
@@ -744,16 +756,36 @@ export default function OrdersSheet() {
                 </div>
                 <div className="form-row">
                   <label>处置方式</label>
-                  <select value={settlementAction} onChange={(e) => setSettlementAction(e.target.value as 'relieve' | 'discipline')}>
+                  <select value={settlementAction} onChange={(e) => setSettlementAction(e.target.value as 'relieve' | 'discipline' | 'replace')}>
                     <option value="relieve">抚恤败军 · 耗银 12000 · 忠诚 +8、所部士气 +6</option>
                     <option value="discipline">追责败将 · 不耗银 · 忠诚 -8、训练 +5、士气 -3</option>
+                    <option value="replace" disabled={!canReplaceSelectedCommander}>撤换统将 · 不耗银 · 旧将忠诚 -10、所部士气 -5</option>
                   </select>
                 </div>
+                {settlementAction === 'replace' && (
+                  <div className="form-row">
+                    <label>接任统将</label>
+                    <select value={settlementReplacementId} onChange={(e) => setSettlementReplacementId(e.target.value)}>
+                      <option value="">选择未掌兵的本方将领</option>
+                      {settlementReplacementCandidates.map((person) => (
+                        <option key={person.person_id} value={person.person_id}>
+                          {person.name} · 统率 {person.command} · 忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="form-note">
                   {selectedDefeatedCommander
                     ? settlementAction === 'relieve'
                       ? `抚恤后忠诚预计为 ${Math.min(100, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) + 8)}；若原军团已溃散，则只恢复将领忠诚。`
-                      : `追责后忠诚预计为 ${Math.max(0, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) - 8)}；若原军团仍在，则以训练提升换取士气下降。`
+                      : settlementAction === 'discipline'
+                        ? `追责后忠诚预计为 ${Math.max(0, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) - 8)}；若原军团仍在，则以训练提升换取士气下降。`
+                        : canReplaceSelectedCommander
+                          ? settlementReplacementCandidates.some((person) => person.person_id === settlementReplacementId)
+                            ? `撤换后由${settlementReplacementCandidates.find((person) => person.person_id === settlementReplacementId)?.name}接掌军团；旧将忠诚 -10、部队士气 -5。已掌领军团或州兵的将领不会列为接任人选。`
+                            : '请指定一名在世、同属本方且未统领军团或州兵的接任将领。'
+                          : '原军团已不存在，无法撤换统将；仍可抚恤或追责败将。'
                     : '这里只显示最近一场战斗尚未善后的战败将领；每场战败只能处置一次。'}
                 </div>
               </>
