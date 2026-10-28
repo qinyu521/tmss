@@ -1402,7 +1402,7 @@ export function applyOrder(
           army.morale = clamp(army.morale + 6);
           moraleAfter = army.morale;
         }
-      } else {
+      } else if (order.action === 'discipline') {
         loyaltyAfter = clamp(before - 8);
         if (army) {
           moraleBefore = army.morale;
@@ -1412,18 +1412,54 @@ export function applyOrder(
           moraleAfter = army.morale;
           trainingAfter = army.training;
         }
+      } else if (order.action === 'demote') {
+        loyaltyAfter = clamp(before - 6);
+        runtime.commandPenalty = Math.min(25, (runtime.commandPenalty ?? 0) + 8);
+        if (army) {
+          moraleBefore = army.morale;
+          trainingBefore = army.training;
+          army.training = clamp(army.training + 2);
+          army.morale = clamp(army.morale - 2);
+          moraleAfter = army.morale;
+          trainingAfter = army.training;
+        }
+      } else if (order.action === 'trial') {
+        loyaltyAfter = clamp(before - 15);
+        runtime.commandPenalty = Math.min(30, (runtime.commandPenalty ?? 0) + 12);
+        if (army) {
+          moraleBefore = army.morale;
+          trainingBefore = army.training;
+          army.training = clamp(army.training + 3);
+          army.morale = clamp(army.morale - 5);
+          moraleAfter = army.morale;
+          trainingAfter = army.training;
+        }
       }
       runtime.militaryLoyalty = loyaltyAfter;
       const politicalOutcome = resolveBattleCasePolitics(state, ctx, person.person_id, order.action);
+      if (!politicalOutcome && order.action === 'demote') adjustCourtStanding(state, ctx, person.person_id, -5);
+      if (!politicalOutcome && order.action === 'trial') adjustCourtStanding(state, ctx, person.person_id, -10);
       runtime.pendingBattleSettlement = false;
       state.characters[person.person_id] = runtime;
       const isRelief = order.action === 'relieve';
+      const settlementTitle = isRelief
+        ? `抚恤留任·${person.name}`
+        : order.action === 'demote'
+          ? `降职问责·${person.name}`
+          : order.action === 'trial'
+            ? `公开审判·${person.name}`
+            : `追责败将·${person.name}`;
+      const settlementSummary = isRelief
+        ? `君主拨银 12000 两抚恤并留用${person.name}，军令忠诚由 ${Math.round(before)} 升至 ${Math.round(loyaltyAfter)}。${army ? '所部士气得到恢复。' : '原军团已不复存在，抚恤仅影响将领忠诚。'}`
+        : order.action === 'demote'
+          ? `君主降职处分${person.name}，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}，有效统率惩罚累计为 ${runtime.commandPenalty ?? 0}。${army ? '所部训练提高，但士气下降。' : '原军团已不复存在。'}`
+          : order.action === 'trial'
+            ? `君主公开审判${person.name}，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}，有效统率惩罚累计为 ${runtime.commandPenalty ?? 0}。${army ? '公开审判令部队士气受损，训练有所加强。' : '原军团已不复存在。'}`
+            : `君主追究${person.name}战败之责，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}。${army ? '所部训练加强，但士气受挫。' : '原军团已不复存在，追责仅影响将领忠诚。'}`;
       events.push(emitEvent(state, {
         type: 'politics',
-        title: isRelief ? `抚恤败军·${person.name}` : `追责败将·${person.name}`,
-        summary: (isRelief
-          ? `君主拨银 12000 两抚恤败军，${person.name}军令忠诚由 ${Math.round(before)} 升至 ${Math.round(loyaltyAfter)}。${army ? '所部士气得到恢复。' : '原军团已不复存在，抚恤仅影响将领忠诚。'}`
-          : `君主追究${person.name}战败之责，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}。${army ? '所部训练加强，但士气受挫。' : '原军团已不复存在，追责仅影响将领忠诚。'}`) + (politicalOutcome ? ' ' + politicalOutcome : ''),
+        title: settlementTitle,
+        summary: settlementSummary + (politicalOutcome ? ' ' + politicalOutcome : ''),
         actorId,
         actorName,
         factionKey: fk,
