@@ -1443,7 +1443,7 @@ export function applyOrder(
       state.characters[person.person_id] = runtime;
       const isRelief = order.action === 'relieve';
       const settlementTitle = isRelief
-        ? `抚恤留任·${person.name}`
+        ? `抚恤败军·留任·${person.name}`
         : order.action === 'demote'
           ? `降职问责·${person.name}`
           : order.action === 'trial'
