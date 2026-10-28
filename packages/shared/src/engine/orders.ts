@@ -815,6 +815,7 @@ export function applyOrder(
       if (house) {
         house.support = clamp(house.support + BALANCE.negotiateHouse.supportGain);
         house.taxCompliance = Math.round((0.6 + house.support / 250) * 100) / 100;
+        house.privateForce = Math.round(3_000 + house.support * BALANCE.politics.chu.privateForcePerSupport);
         house.lastNegotiationTurn = state.date.turn;
       }
       events.push(
@@ -927,7 +928,10 @@ export function applyOrder(
           chu.centralAuthority = clamp((chu.centralAuthority ?? 55) - 3);
           for (const house of houses) house.support = clamp(house.support + 6);
         }
-        for (const house of houses) house.taxCompliance = Math.round((0.6 + house.support / 250) * 100) / 100;
+        for (const house of houses) {
+          house.taxCompliance = Math.round((0.6 + house.support / 250) * 100) / 100;
+          house.privateForce = Math.round(3_000 + house.support * BALANCE.politics.chu.privateForcePerSupport);
+        }
         summary = order.decision === 'assertive'
           ? `台谏要求收归财赋与任官之权，世家代表警告反弹。中枢权威升至 ${Math.round(chu.centralAuthority ?? 0)}，各家支持下降 5。`
           : order.decision === 'balanced'
