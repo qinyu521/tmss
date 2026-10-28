@@ -595,6 +595,63 @@ describe('朝廷廷议', () => {
   });
 });
 
+describe('NPC 战后案件与政治站队', () => {
+  it('NPC 会根据声望与同僚关系网络自动选择站队或问责，并真实结算处置', () => {
+    const state = newGame('YONG', 'ruler', 'npc-battle-case-ruling');
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const commanderId = army.commanderId;
+    const accuser = ctx.seed.characters.find((person) => person.faction_key === 'CHU' && person.person_id !== commanderId)!;
+    const runtime = state.characters[commanderId];
+    Object.assign(runtime, {
+      lastBattleOutcome: 'defeat',
+      lastBattleLossRate: 0.3,
+      pendingBattleSettlement: true,
+      pendingBattleCase: 'impeachment',
+      battlePoliticalOpponentId: accuser.person_id,
+      militaryLoyalty: 55,
+      courtStanding: 95,
+    });
+    state.characters[accuser.person_id].courtStanding = 10;
+    state.factions.CHU.resources.cash = 100_000;
+
+    const orders = generateNpcOrders(state, ctx);
+    const ruling = orders.find((order) => order.kind === 'settle_defeated_commander' && order.personId === commanderId);
+    expect(ruling).toBeTruthy();
+    expect(ruling!.kind).toBe('settle_defeated_commander');
+    if (ruling?.kind !== 'settle_defeated_commander') return;
+    expect(ruling.action).toBe('relieve');
+    expect(ruling.npcRulingNote).toContain('同僚支持');
+    const events: GameEvent[] = [];
+    applyOrder(state, ctx, ruling, events, 'npc_ai', 'CHU');
+    expect(state.characters[commanderId].pendingBattleSettlement).toBe(false);
+    expect(state.characters[commanderId].militaryLoyalty).toBe(63);
+    expect(events[0].source).toBe('npc_ai');
+    expect(events[0].actorId).toBe(ctx.seed.characters.find((person) => person.faction_key === 'CHU' && person.identity_type === '君主')!.person_id);
+    expect(events[0].summary).toContain('关系网络裁量');
+
+    const hostileState = newGame('YONG', 'ruler', 'npc-battle-case-trial');
+    const hostileArmy = hostileState.armies.find((item) => item.faction === 'CHU')!;
+    const hostileCommanderId = hostileArmy.commanderId;
+    const hostileAccuser = ctx.seed.characters.find((person) => person.faction_key === 'CHU' && person.person_id !== hostileCommanderId)!;
+    Object.assign(hostileState.characters[hostileCommanderId], {
+      lastBattleOutcome: 'defeat',
+      lastBattleLossRate: 0.55,
+      pendingBattleSettlement: true,
+      pendingBattleCase: 'impeachment',
+      battlePoliticalOpponentId: hostileAccuser.person_id,
+      militaryLoyalty: 40,
+      courtStanding: 5,
+    });
+    hostileState.characters[hostileAccuser.person_id].courtStanding = 100;
+    const hostileRuling = generateNpcOrders(hostileState, ctx).find(
+      (order) => order.kind === 'settle_defeated_commander' && order.personId === hostileCommanderId,
+    );
+    expect(hostileRuling?.kind).toBe('settle_defeated_commander');
+    if (hostileRuling?.kind !== 'settle_defeated_commander') return;
+    expect(hostileRuling.action).toBe('trial');
+  });
+});
+
 describe('战后政治仇怨的自主反应', () => {
   it('达到阈值的仇怨会在后续回合触发反击、消耗积怨并受冷却限制', () => {
     const state = newGame('YONG', 'ruler', 'grudge-backlash-test');
