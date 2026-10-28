@@ -995,7 +995,7 @@ export function applyOrder(
           state.factions.CHU.stability = clamp(chu.centralAuthority);
           after = { ...after, centralAuthority: chu.centralAuthority };
         }
-        summary += ` 主议臣论证能力占优，议案主要效果额外修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。`;
+        summary += ` 双方论证能力差使议案主要效果${debate.edge > 0 ? '增强' : '减弱'} ${debate.edge > 0 ? '+' : ''}${debate.edge}。`;
       }
       const debateRecord = {
         speakerPersonId: debate.speaker?.person_id ?? null,
