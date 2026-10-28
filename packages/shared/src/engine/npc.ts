@@ -24,6 +24,10 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     let seq = 0;
     const oid = () => `npc-${key}-T${state.date.turn}-${++seq}`;
 
+    // 0) 战败善后：NPC 君主会先处理上旬留下的败将案件，再安排其他国策。
+    const battleSettlement = generateNpcBattleSettlement(state, ctx, key, oid);
+    if (battleSettlement) orders.push(battleSettlement);
+
     // 1) 粮食与财政自保
     if (res.grain < troops * BALANCE.grainPerThousandPerWeek * 2.5) {
       const stores = Object.values(state.regions)
@@ -90,6 +94,124 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     if (courtOrder) orders.push(courtOrder);
   }
   return orders;
+}
+
+/**
+ * NPC 战后裁决：结合败将/弹劾者声望、同僚显式关系网络以及案件严重程度，
+ * 确定性地选择留任、降职、追责、撤换或公开审判。每个势力每旬最多处理一名败将。
+ */
+function generateNpcBattleSettlement(
+  state: GameState,
+  ctx: DerivedContext,
+  factionKey: FactionKey,
+  nextOrderId: () => string,
+): Order | null {
+  const candidates = Object.values(state.characters)
+    .filter((runtime) => {
+      const person = ctx.charactersById[runtime.personId];
+      return person?.faction_key === factionKey &&
+        runtime.alive &&
+        runtime.lastBattleOutcome === 'defeat' &&
+        runtime.pendingBattleSettlement === true &&
+        isCharacterAlive(state, runtime.personId);
+    })
+    .sort((a, b) =>
+      (b.lastBattleLossRate ?? 0) - (a.lastBattleLossRate ?? 0) ||
+      a.personId.localeCompare(b.personId),
+    );
+  const runtime = candidates[0];
+  if (!runtime) return null;
+  const commander = ctx.charactersById[runtime.personId];
+  if (!commander) return null;
+
+  const army = state.armies.find((item) => item.faction === factionKey && item.commanderId === commander.person_id);
+  const opponentId = runtime.battlePoliticalOpponentId;
+  const opponent = opponentId ? ctx.charactersById[opponentId] : undefined;
+  const ruler = ctx.seed.characters.find((person) => person.faction_key === factionKey && person.identity_type === '君主');
+  const standingOf = (personId: string): number => state.characters[personId]?.courtStanding ?? 50;
+
+  const networkBacking = (personId: string, excludedId?: string): { score: number; supporters: number } => {
+    let total = 0;
+    const supporters = new Set<string>();
+    for (const edge of ctx.seed.relationships) {
+      const otherId = edge.source_person_id === personId
+        ? edge.target_person_id
+        : edge.target_person_id === personId
+          ? edge.source_person_id
+          : '';
+      if (!otherId || otherId === excludedId || otherId === personId) continue;
+      const other = ctx.charactersById[otherId];
+      if (!other || other.faction_key !== factionKey || !isCharacterAlive(state, otherId)) continue;
+      const relationText = `${edge.relation} ${edge.notes}`;
+      const weight = edge.strength === '强' ? 1.5 : edge.strength === '中' ? 1 : 0.5;
+      if (/竞争|制衡|敌对|不和/.test(relationText)) {
+        total -= weight;
+      } else {
+        total += weight;
+        supporters.add(otherId);
+      }
+    }
+    const rulerDisfavor = ruler ? (state.characters[ruler.person_id]?.politicalGrudges?.[personId] ?? 0) : 0;
+    return {
+      score: Math.max(-8, Math.min(8, total)) - rulerDisfavor * 0.5,
+      supporters: supporters.size,
+    };
+  };
+  const commanderBacking = networkBacking(commander.person_id, opponentId);
+  const commanderScore = standingOf(commander.person_id) + commanderBacking.score * 2;
+  const opponentBacking = opponent && opponent.faction_key === factionKey
+    ? networkBacking(opponent.person_id, commander.person_id)
+    : { score: 0, supporters: 0 };
+  const opponentScore = opponent && opponent.faction_key === factionKey
+    ? standingOf(opponent.person_id) + opponentBacking.score * 2
+    : 50;
+  const loyalty = runtime.militaryLoyalty ?? commander.loyalty;
+  const lossRate = runtime.lastBattleLossRate ?? 0;
+  const resources = state.factions[factionKey].resources;
+  let action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial' = 'discipline';
+  let replacementPersonId: string | undefined;
+
+  if (runtime.pendingBattleCase === 'impeachment' && opponent && opponent.faction_key === factionKey) {
+    if (commanderScore >= opponentScore + 6 && resources.cash >= 12_000) {
+      action = 'relieve';
+    } else if (opponentScore >= commanderScore + 18 && lossRate >= 0.35) {
+      action = 'trial';
+    } else if (opponentScore > commanderScore) {
+      action = 'demote';
+    } else if (resources.cash >= 12_000 && loyalty < 45 && lossRate < 0.4) {
+      action = 'relieve';
+    }
+  } else if (commanderScore >= 68 && loyalty >= 42 && resources.cash >= 12_000) {
+    action = 'relieve';
+  } else if (lossRate >= 0.45 && army) {
+    const replacement = ctx.seed.characters
+      .filter((person) => person.faction_key === factionKey && person.person_id !== commander.person_id)
+      .filter((person) => isCharacterAlive(state, person.person_id))
+      .filter((person) => !state.armies.some((item) => item.faction === factionKey && item.commanderId === person.person_id))
+      .filter((person) => !Object.values(state.regions).some((region) => region.faction === factionKey && region.garrisonCommanderId === person.person_id))
+      .sort((a, b) => b.command - a.command || a.person_id.localeCompare(b.person_id))[0];
+    if (replacement) {
+      action = 'replace';
+      replacementPersonId = replacement.person_id;
+    } else {
+      action = 'demote';
+    }
+  } else if (lossRate >= 0.25) {
+    action = 'demote';
+  }
+
+  const opponentName = opponent?.name ?? '未明弹劾者';
+  const rulingNote = runtime.pendingBattleCase === 'impeachment' && opponent && opponent.faction_key === factionKey
+    ? `关系网络裁量：败将声望 ${Math.round(standingOf(commander.person_id))}、同僚支持 ${commanderBacking.supporters} 人；弹劾者${opponent.name}声望 ${Math.round(standingOf(opponent.person_id))}、同僚支持 ${opponentBacking.supporters} 人。裁决按双方声望、显式关系与伤亡程度自动作出。`
+    : `战后善后裁量：败将声望 ${Math.round(standingOf(commander.person_id))}、同僚支持 ${commanderBacking.supporters} 人、伤亡 ${Math.round(lossRate * 100)}%、军令忠诚 ${Math.round(loyalty)}；按损失严重程度与国库状况选择处置。`;
+  return {
+    orderId: nextOrderId(),
+    kind: 'settle_defeated_commander',
+    personId: commander.person_id,
+    action,
+    replacementPersonId,
+    npcRulingNote: rulingNote,
+  };
 }
 
 function generateNpcCourtOrder(
