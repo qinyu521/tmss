@@ -19,7 +19,7 @@ import { BALANCE } from '../balance.js';
 import { FACTION_SHORT, ROLE_ALLOWED_ORDERS, ROLE_LABEL, SCHEME_LABELS } from '../constants.js';
 import { emitEvent } from './events.js';
 import { clamp, isCharacterAlive } from './state.js';
-import { assignMarch, dayCostsFor, findPath, regionNameById } from './movement.js';
+import { assignMarch, dayCostsFor, estimatePathDays, findPath, regionNameById } from './movement.js';
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
@@ -219,10 +219,23 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
         commanderNote = `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）`;
       }
+      const previewArmy = isSplit
+        ? {
+            faction: army.faction,
+            troops: amount,
+            levies: amount - unitSum,
+            units: unitRequests.map((req) => {
+              const stack = army.units.find((u) => u.unitId === req.unitId);
+              return { ...stack!, count: req.count };
+            }),
+            fatigue: army.fatigue,
+          }
+        : army;
+      const estimatedDays = estimatePathDays(previewArmy, path, seasonOf(state.date.month));
       return {
         ok: true,
         issues: [],
-        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
+        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${estimatedDays} 日（约 ${Math.ceil(estimatedDays / BALANCE.turnDays)} 回合）。`,
       };
     }
     case 'recruit': {
@@ -375,6 +388,11 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       if (order.regionId === order.targetRegionId) return issues('BAD_TARGET', '州兵已在目标州府，无须调遣。');
       const path = findPath(state, ctx, state.factionKey, order.regionId, order.targetRegionId, { troops: order.amount });
       if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
+      const estimatedDays = estimatePathDays(
+        { faction: state.factionKey, troops: order.amount, levies: order.amount, units: [], fatigue: 8 },
+        path,
+        seasonOf(state.date.month),
+      );
       let commanderId = order.commanderId;
       if (commanderId) {
         const cmd = commanderOf(ctx, commanderId);
