@@ -1031,7 +1031,9 @@ describe('回合结算', () => {
     expect(prince.influence).toBe(Math.max(0, princeInfluenceBefore - 2));
     expect(yong.special.YONG.courtStability).toBe(Math.max(0, stabilityBefore - 2));
     expect(yong.characters[yongCommander].pendingBattleCase).toBeUndefined();
-    expect(yongEvents[0].summary).toContain('驳回');
+    const yongSettlementEvent = yongEvents.find((event) => event.title.includes('抚恤败军'));
+    expect(yongSettlementEvent?.summary).toContain('驳回');
+    expect(yongEvents.some((event) => event.title.includes('联名求情') || event.title.includes('联名弹劾'))).toBe(true);
 
     const hun = newGame('HUN');
     const hunArmy = hun.armies.find((army) => army.faction === 'HUN')!;
