@@ -657,6 +657,76 @@ describe('回合结算', () => {
     expect(afterTroops).toBeLessThanOrEqual(beforeTroops);
   });
 
+  it('战败后可抚恤或追责，处置会产生不同的国库、忠诚与部队后果', () => {
+    const relieveState = newGame('YONG');
+    const relieveArmy = relieveState.armies.find((army) => army.faction === 'YONG')!;
+    const personId = relieveArmy.commanderId;
+    const person = ctx.charactersById[personId]!;
+    const relieveRuntime = relieveState.characters[personId];
+    relieveState.date.turn = 2;
+    relieveRuntime.lastBattleTurn = 1;
+    relieveRuntime.lastBattleOutcome = 'defeat';
+    relieveRuntime.lastBattleLossRate = 0.42;
+    relieveRuntime.pendingBattleSettlement = true;
+    relieveRuntime.militaryLoyalty = 40;
+    relieveArmy.morale = 50;
+    relieveArmy.training = 60;
+    const cashBefore = relieveState.factions.YONG.resources.cash;
+    const reliefOrder = {
+      orderId: 'relieve-after-defeat',
+      kind: 'settle_defeated_commander' as const,
+      personId,
+      action: 'relieve' as const,
+    };
+    expect(validateOrder(relieveState, ctx, reliefOrder).ok).toBe(true);
+    const reliefEvents: GameEvent[] = [];
+    applyOrder(relieveState, ctx, reliefOrder, reliefEvents);
+    expect(relieveState.factions.YONG.resources.cash).toBe(cashBefore - 12_000);
+    expect(relieveState.characters[personId].militaryLoyalty).toBe(48);
+    expect(relieveState.characters[personId].pendingBattleSettlement).toBe(false);
+    expect(relieveArmy.morale).toBe(56);
+    expect(reliefEvents[0].title).toContain('抚恤败军');
+    expect(validateOrder(relieveState, ctx, reliefOrder).issues[0].code).toBe('NO_RECENT_DEFEAT');
+
+    const disciplineState = newGame('YONG');
+    const disciplineArmy = disciplineState.armies.find((army) => army.faction === 'YONG')!;
+    const disciplinePersonId = disciplineArmy.commanderId;
+    const disciplineRuntime = disciplineState.characters[disciplinePersonId];
+    disciplineState.date.turn = 2;
+    disciplineRuntime.lastBattleTurn = 1;
+    disciplineRuntime.lastBattleOutcome = 'defeat';
+    disciplineRuntime.lastBattleLossRate = 0.42;
+    disciplineRuntime.pendingBattleSettlement = true;
+    disciplineRuntime.militaryLoyalty = 40;
+    disciplineArmy.morale = 50;
+    disciplineArmy.training = 60;
+    const disciplineOrder = {
+      orderId: 'discipline-after-defeat',
+      kind: 'settle_defeated_commander' as const,
+      personId: disciplinePersonId,
+      action: 'discipline' as const,
+    };
+    expect(validateOrder(disciplineState, ctx, disciplineOrder).ok).toBe(true);
+    const disciplineEvents: GameEvent[] = [];
+    applyOrder(disciplineState, ctx, disciplineOrder, disciplineEvents);
+    expect(disciplineState.characters[disciplinePersonId].militaryLoyalty).toBe(32);
+    expect(disciplineState.characters[disciplinePersonId].pendingBattleSettlement).toBe(false);
+    expect(disciplineArmy.training).toBe(65);
+    expect(disciplineArmy.morale).toBe(47);
+    expect(disciplineEvents[0].title).toContain('追责败将');
+
+    const noLongerRecent = newGame('YONG');
+    const oldCommander = noLongerRecent.armies.find((army) => army.faction === 'YONG')!.commanderId;
+    noLongerRecent.characters[oldCommander].pendingBattleSettlement = false;
+    noLongerRecent.characters[oldCommander].lastBattleOutcome = 'defeat';
+    expect(validateOrder(noLongerRecent, ctx, {
+      orderId: 'invalid-old-defeat',
+      kind: 'settle_defeated_commander',
+      personId: oldCommander,
+      action: 'relieve',
+    }).issues[0].code).toBe('NO_RECENT_DEFEAT');
+  });
+
   it('战斗使用固定随机种子，并按战果改变军令忠诚且不泄露敌将忠诚', () => {
     const base = newGame('HUN', 'ruler', 'battle-seed');
     const attackerBefore = base.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
