@@ -873,6 +873,7 @@ export function applyOrder(
     case 'hold_court': {
       const cost = courtCost(order.agenda, order.decision);
       faction.resources.cash -= cost;
+      const debate = courtDebateEdge(ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
       const agendaLabel = COURT_AGENDA_LABEL[order.agenda];
       const decisionLabel = COURT_DECISION_LABEL[order.decision];
       let summary = '';
@@ -973,11 +974,44 @@ export function applyOrder(
             : `朝廷允诺地方保留更多利益，各家支持 +6，但中枢权威降至 ${Math.round(chu.centralAuthority ?? 0)}。`;
         after = { ...after, centralAuthority: chu.centralAuthority, houses: houses.map((h) => ({ id: h.houseId, support: h.support, taxCompliance: h.taxCompliance })) };
       }
+      if (debate.edge !== 0) {
+        if (order.agenda === 'war_council') {
+          for (const army of state.armies.filter((a) => a.faction === fk)) {
+            army.morale = clamp(army.morale + debate.edge);
+          }
+        } else if (order.agenda === 'succession') {
+          const yong = state.special.YONG;
+          yong.courtStability = clamp((yong.courtStability ?? 60) + debate.edge);
+          state.factions.YONG.stability = clamp(yong.courtStability);
+          after = { ...after, courtStability: yong.courtStability };
+        } else if (order.agenda === 'tribal_alliance') {
+          const hun = state.special.HUN;
+          hun.cohesion = clamp((hun.cohesion ?? 58) + debate.edge);
+          state.factions.HUN.stability = clamp(hun.cohesion);
+          after = { ...after, cohesion: hun.cohesion };
+        } else {
+          const chu = state.special.CHU;
+          chu.centralAuthority = clamp((chu.centralAuthority ?? 55) + debate.edge);
+          state.factions.CHU.stability = clamp(chu.centralAuthority);
+          after = { ...after, centralAuthority: chu.centralAuthority };
+        }
+        summary += ` 主议臣论证能力占优，议案主要效果额外修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。`;
+      }
+      const debateRecord = {
+        speakerPersonId: debate.speaker?.person_id ?? null,
+        speakerName: debate.speaker?.name ?? '廷臣集议',
+        speakerScore: debate.speakerScore,
+        oppositionPersonId: debate.opposition?.person_id ?? null,
+        oppositionName: debate.opposition?.name ?? '未指定反对臣',
+        oppositionScore: debate.oppositionScore,
+        debateEdge: debate.edge,
+      };
+      after = { ...after, ...debateRecord };
       events.push(
         emitEvent(state, {
           type: 'politics',
           title: `朝廷廷议·${agendaLabel}：${decisionLabel}`,
-          summary: `${summary} 廷议所列分歧：${order.agenda === 'war_council' ? '兵部主战、仓曹顾虑军需' : order.agenda === 'succession' ? '储位名分与诸王平衡' : order.agenda === 'tribal_alliance' ? '盟约兑现与统一军令' : '世家利益与中枢权威'}。执行耗银 ${cost.toLocaleString()} 两。`,
+          summary: `${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}（议题能力 ${debate.speakerScore}）与反对臣${debate.opposition.name}（议题能力 ${debate.oppositionScore}）展开辩论。 ` : ''}${summary} 廷议所列分歧：${order.agenda === 'war_council' ? '兵部主战、仓曹顾虑军需' : order.agenda === 'succession' ? '储位名分与诸王平衡' : order.agenda === 'tribal_alliance' ? '盟约兑现与统一军令' : '世家利益与中枢权威'}。执行耗银 ${cost.toLocaleString()} 两。`,
           actorId,
           actorName,
           factionKey: fk,
@@ -985,7 +1019,7 @@ export function applyOrder(
           targetLabel: agendaLabel,
           before: {},
           after,
-          evidence: '廷议决策根据所选议题改变运行时政治状态；裁决与后果记录在事件账本。',
+          evidence: '廷议根据议题相关能力比较主议臣与反对臣；能力差每 15 点修正 1 点主要效果，最高 ±3；裁决后果记录在事件账本。',
           source,
           visibleToPlayer: fk === state.factionKey || source === 'player_order',
         }),
