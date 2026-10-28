@@ -6,6 +6,7 @@ import {
   applyUnitNames,
   buildContext,
   createGame,
+  estimatePathDays,
   findPath,
   routeCapacityMultiplier,
   type MapEdgeSeed,
@@ -86,6 +87,15 @@ describe('行军路线与道路通行能力', () => {
     expect(small.ok).toBe(true);
     expect(small.path).toEqual(['HUN-REG05']);
     expect(small.costs).toEqual([3.3]);
+    const smallLevyProfile = {
+      faction: 'HUN' as const,
+      troops: 10_000,
+      levies: 10_000,
+      units: [],
+      fatigue: 0,
+    };
+    expect(estimatePathDays(smallLevyProfile, small, 'spring')).toBe(3);
+    expect(small.totalDays).toBe(3.3); // 路线成本与实际行军日分开计算
 
     expect(large.ok).toBe(true);
     expect(large.path).toEqual(['HUN-REG02', 'HUN-REG05']);
