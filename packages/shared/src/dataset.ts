@@ -239,17 +239,19 @@ export function buildInitialArmies(ctx: DerivedContext): Army[] {
 
       const units: Army['units'] = [];
       let allocated = 0;
+      // 特种部队按数千至上万人的成建制兵团配置，而非只配几百名点缀兵；
+      // 兵种上限仍由 capPerFaction 控制，普通征集兵补足每军团总兵额。
       const slots = [
-        { profile: profiles[(di * 2) % profiles.length], ratio: 0.0075 },
-        { profile: profiles[(di * 2 + 1) % profiles.length], ratio: 0.0045 },
+        { profile: profiles[(di * 2) % profiles.length], ratio: 0.12 },
+        { profile: profiles[(di * 2 + 1) % profiles.length], ratio: 0.10 },
       ];
       for (const slot of slots) {
         if (!slot.profile) continue;
         const remaining = remainingCap.get(slot.profile.unitId) ?? 0;
-        const desired = Math.min(
-          remaining,
-          Math.round((allocation.initial_force_count * slot.ratio) / 100) * 100,
-        );
+        const requested = Math.round((allocation.initial_force_count * slot.ratio) / 100) * 100;
+        // 不为同一兵种的剩余上限拆出几百人的零碎小队；这种余量留给后续招募补齐。
+        if (remaining < 1_500) continue;
+        const desired = Math.min(remaining, requested);
         if (desired <= 0) continue;
         remainingCap.set(slot.profile.unitId, remaining - desired);
         units.push({
