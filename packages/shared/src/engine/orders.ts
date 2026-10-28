@@ -52,6 +52,29 @@ function courtCost(agenda: CourtAgenda, decision: CourtDecision): number {
   return costs[agenda][decision];
 }
 
+function courtSkill(person: CharacterSeed | undefined, agenda: CourtAgenda): number {
+  if (!person) return 50;
+  if (agenda === 'war_council') return person.strategy * 0.6 + person.command * 0.4;
+  if (agenda === 'succession') return person.intrigue * 0.45 + person.loyalty * 0.3 + person.governance * 0.25;
+  if (agenda === 'tribal_alliance') return person.loyalty * 0.5 + person.command * 0.2 + person.intrigue * 0.3;
+  return person.governance * 0.45 + person.commerce * 0.35 + person.intrigue * 0.2;
+}
+
+function courtDebateEdge(
+  ctx: DerivedContext,
+  agenda: CourtAgenda,
+  speakerPersonId?: string,
+  oppositionPersonId?: string,
+): { edge: number; speaker?: CharacterSeed; opposition?: CharacterSeed; speakerScore: number; oppositionScore: number } {
+  const speaker = speakerPersonId ? ctx.charactersById[speakerPersonId] : undefined;
+  const opposition = oppositionPersonId ? ctx.charactersById[oppositionPersonId] : undefined;
+  const speakerScore = courtSkill(speaker, agenda);
+  const oppositionScore = courtSkill(opposition, agenda);
+  // 双方能力差每 15 点改变 1 点议案效果，上下限为 3，避免人物属性压过君主裁决本身。
+  const edge = speaker && opposition ? Math.max(-3, Math.min(3, Math.round((speakerScore - oppositionScore) / 15))) : 0;
+  return { edge, speaker, opposition, speakerScore: Math.round(speakerScore), oppositionScore: Math.round(oppositionScore) };
+}
+
 function courtAgendaAllowed(faction: FactionKey, agenda: CourtAgenda): boolean {
   if (agenda === 'war_council') return true;
   if (agenda === 'succession') return faction === 'YONG';
@@ -369,7 +392,18 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       }
       const cost = courtCost(order.agenda, order.decision);
       if (faction.resources.cash < cost) return issues('NO_CASH', `廷议与执行需银 ${cost.toLocaleString()} 两，现有 ${Math.round(faction.resources.cash).toLocaleString()}。`);
-      const factionLabel = state.factionKey === 'HUN' ? '部落首领' : state.factionKey === 'YONG' ? '中书与皇子派' : '世家与台谏';
+      if (Boolean(order.speakerPersonId) !== Boolean(order.oppositionPersonId)) {
+        return issues('COURT_PAIR_REQUIRED', '廷议须同时选择主议臣与反对臣，才能计算双方的论证效果。');
+      }
+      for (const personId of [order.speakerPersonId, order.oppositionPersonId].filter((id): id is string => Boolean(id))) {
+        const person = ctx.charactersById[personId];
+        if (!person || person.faction_key !== state.factionKey) return issues('COURT_PERSON_INVALID', '主议臣与反对臣必须来自本势力。');
+        if (!isCharacterAlive(state, person.person_id)) return issues('COURT_PERSON_DEAD', `${person.name}已故，无法参与廷议。`);
+      }
+      if (order.speakerPersonId && order.speakerPersonId === order.oppositionPersonId) {
+        return issues('COURT_PAIR_DUPLICATE', '主议臣与反对臣不能由同一人担任。');
+      }
+      const debate = courtDebateEdge(ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
       const argument = order.agenda === 'war_council'
         ? '兵部请整军备边，仓曹提醒军饷与军粮不可脱离国力'
         : order.agenda === 'succession'
@@ -380,7 +414,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       return {
         ok: true,
         issues: [],
-        preview: `廷议「${COURT_AGENDA_LABEL[order.agenda]}」：${argument}；君主拟「${COURT_DECISION_LABEL[order.decision]}」，执行成本 ${cost.toLocaleString()} 两。`,
+        preview: `廷议「${COURT_AGENDA_LABEL[order.agenda]}」：${argument}；君主拟「${COURT_DECISION_LABEL[order.decision]}」，执行成本 ${cost.toLocaleString()} 两。${debate.speaker && debate.opposition ? ` 主议臣${debate.speaker.name}（议题能力 ${debate.speakerScore}）对阵${debate.opposition.name}（${debate.oppositionScore}），议案效果修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。` : ' 未指定辩论人选时采用廷臣集体议论，不额外修正议案效果。'}`,
       };
     }
     case 'appoint': {
