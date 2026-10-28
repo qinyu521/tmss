@@ -310,7 +310,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       items: rows.map((r) => {
         const item = summariseCharacter(JSON.parse(r.payload));
         const rt = runtimeMap?.[item.person_id];
-        return rt ? { ...item, alive: rt.alive, deathCause: rt.deathCause, courtStanding: rt.courtStanding ?? 50, militaryLoyalty: rt.militaryLoyalty ?? item.loyalty, lastBattleTurn: rt.lastBattleTurn, lastBattleOutcome: rt.lastBattleOutcome, lastBattleLossRate: rt.lastBattleLossRate, pendingBattleSettlement: rt.pendingBattleSettlement ?? false, pendingBattleCase: rt.pendingBattleCase, battlePoliticalOpponentId: rt.battlePoliticalOpponentId } : item;
+        return rt ? { ...item, command: Math.max(1, item.command - (rt.commandPenalty ?? 0)), commandPenalty: rt.commandPenalty ?? 0, alive: rt.alive, deathCause: rt.deathCause, courtStanding: rt.courtStanding ?? 50, militaryLoyalty: rt.militaryLoyalty ?? item.loyalty, lastBattleTurn: rt.lastBattleTurn, lastBattleOutcome: rt.lastBattleOutcome, lastBattleLossRate: rt.lastBattleLossRate, pendingBattleSettlement: rt.pendingBattleSettlement ?? false, pendingBattleCase: rt.pendingBattleCase, battlePoliticalOpponentId: rt.battlePoliticalOpponentId } : item;
       }),
     };
   });
