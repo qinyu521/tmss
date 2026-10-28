@@ -25,6 +25,7 @@ import { assignMarch, dayCostsFor, findPath, regionNameById } from './movement.j
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
+import { courtOpinion, courtSkill } from './court.js';
 
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
 
@@ -50,14 +51,6 @@ function courtCost(agenda: CourtAgenda, decision: CourtDecision): number {
     clan_relations: { assertive: 0, balanced: 6_000, conciliatory: 12_000 },
   };
   return costs[agenda][decision];
-}
-
-function courtSkill(person: CharacterSeed | undefined, agenda: CourtAgenda): number {
-  if (!person) return 50;
-  if (agenda === 'war_council') return person.strategy * 0.6 + person.command * 0.4;
-  if (agenda === 'succession') return person.intrigue * 0.45 + person.loyalty * 0.3 + person.governance * 0.25;
-  if (agenda === 'tribal_alliance') return person.loyalty * 0.5 + person.command * 0.2 + person.intrigue * 0.3;
-  return person.governance * 0.45 + person.commerce * 0.35 + person.intrigue * 0.2;
 }
 
 function courtDebateEdge(
@@ -404,6 +397,8 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         return issues('COURT_PAIR_DUPLICATE', '主议臣与反对臣不能由同一人担任。');
       }
       const debate = courtDebateEdge(ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
+      const speakerOpinion = debate.speaker ? courtOpinion(debate.speaker, order.agenda) : '廷臣依据议题共议，采用默认效果';
+      const oppositionOpinion = debate.opposition ? courtOpinion(debate.opposition, order.agenda) : '未指定反对臣';
       const argument = order.agenda === 'war_council'
         ? '兵部请整军备边，仓曹提醒军饷与军粮不可脱离国力'
         : order.agenda === 'succession'
@@ -414,7 +409,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       return {
         ok: true,
         issues: [],
-        preview: `廷议「${COURT_AGENDA_LABEL[order.agenda]}」：${argument}；君主拟「${COURT_DECISION_LABEL[order.decision]}」，执行成本 ${cost.toLocaleString()} 两。${debate.speaker && debate.opposition ? ` 主议臣${debate.speaker.name}（议题能力 ${debate.speakerScore}）对阵${debate.opposition.name}（${debate.oppositionScore}），议案效果修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。` : ' 未指定辩论人选时采用廷臣集体议论，不额外修正议案效果。'}`,
+        preview: `廷议「${COURT_AGENDA_LABEL[order.agenda]}」：${argument}；${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」；双方议题能力 ${debate.speakerScore}/${debate.oppositionScore}，效果修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。` : '未指定辩论人选时采用廷臣集体议论，不额外修正议案效果。'} 君主拟「${COURT_DECISION_LABEL[order.decision]}」，执行成本 ${cost.toLocaleString()} 两。`,
       };
     }
     case 'appoint': {
@@ -874,6 +869,8 @@ export function applyOrder(
       const cost = courtCost(order.agenda, order.decision);
       faction.resources.cash -= cost;
       const debate = courtDebateEdge(ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
+      const speakerOpinion = debate.speaker ? courtOpinion(debate.speaker, order.agenda) : '廷臣依据议题共议，采用默认效果';
+      const oppositionOpinion = debate.opposition ? courtOpinion(debate.opposition, order.agenda) : '未指定反对臣';
       const agendaLabel = COURT_AGENDA_LABEL[order.agenda];
       const decisionLabel = COURT_DECISION_LABEL[order.decision];
       let summary = '';
@@ -1011,7 +1008,7 @@ export function applyOrder(
         emitEvent(state, {
           type: 'politics',
           title: `朝廷廷议·${agendaLabel}：${decisionLabel}`,
-          summary: `${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}（议题能力 ${debate.speakerScore}）与反对臣${debate.opposition.name}（议题能力 ${debate.oppositionScore}）展开辩论。 ` : ''}${summary} 廷议所列分歧：${order.agenda === 'war_council' ? '兵部主战、仓曹顾虑军需' : order.agenda === 'succession' ? '储位名分与诸王平衡' : order.agenda === 'tribal_alliance' ? '盟约兑现与统一军令' : '世家利益与中枢权威'}。执行耗银 ${cost.toLocaleString()} 两。`,
+          summary: `${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」。 ` : ''}${summary} 廷议所列分歧：${order.agenda === 'war_council' ? '兵部主战、仓曹顾虑军需' : order.agenda === 'succession' ? '储位名分与诸王平衡' : order.agenda === 'tribal_alliance' ? '盟约兑现与统一军令' : '世家利益与中枢权威'}。执行耗银 ${cost.toLocaleString()} 两。`,
           actorId,
           actorName,
           factionKey: fk,
