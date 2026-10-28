@@ -643,6 +643,7 @@ export type Order =
       /** 君主裁定：采纳主议臣、采纳反对臣或折中；缺省保留旧版直接指定 decision 的行为 */
       resolution?: CourtResolution;
     }
+  | { orderId: string; kind: 'reward_commander'; personId: string; amount: number }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }
@@ -668,6 +669,8 @@ export interface CharacterRuntime {
   ageBand: string;
   /** 受君主采纳/驳回意见影响的在朝声望，0-100；旧档迁移时默认 50 */
   courtStanding?: number;
+  /** 本局军令忠诚度（0-100）；赏赐可以提升，旧档按种子忠诚度迁移 */
+  militaryLoyalty?: number;
   deathTurn?: number;
   deathCause?: string;
   /** 成长提示（仅人物视图展示，不发事件刷屏） */
