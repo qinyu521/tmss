@@ -88,7 +88,15 @@ export interface ConfigData {
 
 export interface CharacterSummary {
   person_id: string;
+  /** 未携带 gameId 时为种子归属；携带 gameId 时为本局当前效忠势力。 */
   faction_key: string;
+  /** 本局发生倒戈时保留的原始种子势力。 */
+  originalFactionKey?: string;
+  /** 本局运行时效忠势力；仅在人物倒戈后设置。 */
+  allegianceFaction?: string;
+  /** 当前倒戈风险的预警回合与目标势力。 */
+  defectionWarningTurn?: number;
+  defectionTargetFaction?: string;
   name: string;
   gender: string;
   age_band: string;
