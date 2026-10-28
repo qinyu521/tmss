@@ -645,6 +645,7 @@ export type Order =
       resolution?: CourtResolution;
     }
   | { orderId: string; kind: 'reward_commander'; personId: string; amount: number }
+  | { orderId: string; kind: 'settle_defeated_commander'; personId: string; action: 'relieve' | 'discipline' }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }
@@ -672,6 +673,12 @@ export interface CharacterRuntime {
   courtStanding?: number;
   /** 本局军令忠诚度（0-100）；赏赐可以提升，旧档按种子忠诚度迁移 */
   militaryLoyalty?: number;
+  /** 最近一场战斗发生的回合；处置命令只允许在下一回合使用 */
+  lastBattleTurn?: number;
+  /** 最近一场战斗结果 */
+  lastBattleOutcome?: 'victory' | 'defeat';
+  /** 最近一场战斗的本方伤亡比例，0-1 */
+  lastBattleLossRate?: number;
   deathTurn?: number;
   deathCause?: string;
   /** 成长提示（仅人物视图展示，不发事件刷屏） */
