@@ -132,7 +132,7 @@ export default function OrdersSheet() {
   useEffect(() => {
     if (!view) return;
     api
-      .characters({ faction: view.factionKey, pageSize: '80', ...(view.gameId ? { gameId: view.gameId } : {}) })
+      .characters({ faction: view.factionKey, pageSize: '100', ...(view.gameId ? { gameId: view.gameId } : {}) })
       .then((res) => {
         const available = res.items.filter((person) => person.alive !== false);
         setCommanders(res.items);
