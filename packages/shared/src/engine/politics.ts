@@ -104,7 +104,10 @@ export function runPolitics(state: GameState, ctx: DerivedContext, events: GameE
       h.taxCompliance = Math.round((0.6 + h.support / 250) * 100) / 100;
       h.privateForce = Math.round(3_000 + h.support * BALANCE.politics.chu.privateForcePerSupport);
     }
-    chu.centralAuthority = Math.round(chu.houses.reduce((s, h) => s + h.support, 0) / chu.houses.length);
+    const averageHouseSupport = chu.houses.reduce((sum, house) => sum + house.support, 0) / chu.houses.length;
+    // 中枢权威是独立政治资本，不应每旬被世家平均支持度直接覆盖；支持度变化以 20% 权重缓慢传导。
+    const currentAuthority = chu.centralAuthority ?? averageHouseSupport;
+    chu.centralAuthority = Math.round(clamp(currentAuthority * 0.8 + averageHouseSupport * 0.2));
     const boycott = (chu.centralAuthority ?? 55) < BALANCE.politics.chu.boycottThreshold;
     if (boycott !== state.flags.houseBoycott) {
       state.flags.houseBoycott = boycott;
