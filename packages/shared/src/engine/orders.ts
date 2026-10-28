@@ -144,6 +144,8 @@ function applyPoliticalBlocReaction(
   commanderId: string,
   opponentId: string,
   action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial',
+  events: GameEvent[],
+  rulingSource: GameEvent['source'],
 ): string {
   const factionKey = ctx.charactersById[commanderId]?.faction_key;
   if (!factionKey || ctx.charactersById[opponentId]?.faction_key !== factionKey) return '';
@@ -178,18 +180,47 @@ function applyPoliticalBlocReaction(
   const backsCommander = action === 'relieve';
   const swing = action === 'trial' ? 2 : 1;
   const changes: string[] = [];
-  const apply = (members: { personId: string; weight: number }[], delta: number, side: string) => {
+  const apply = (
+    members: { personId: string; weight: number }[],
+    delta: number,
+    side: string,
+    petitionTitle: string,
+    won: boolean,
+  ) => {
+    if (members.length === 0) return;
+    const details: { personId: string; name: string; before: number; after: number }[] = [];
     for (const member of members) {
       const before = state.characters[member.personId]?.courtStanding ?? 50;
       const after = adjustCourtStanding(state, ctx, member.personId, delta) ?? before;
-      if (after !== before) {
-        const name = ctx.charactersById[member.personId]?.name ?? member.personId;
-        changes.push(`${name}（${side}）声望 ${Math.round(before)}→${Math.round(after)}`);
-      }
+      const name = ctx.charactersById[member.personId]?.name ?? member.personId;
+      details.push({ personId: member.personId, name, before, after });
+      if (after !== before) changes.push(`${name}（${side}）声望 ${Math.round(before)}→${Math.round(after)}`);
     }
+    const names = details.map((item) => item.name).join('、');
+    const sideTarget = side === '败将一系'
+      ? ctx.charactersById[commanderId]
+      : ctx.charactersById[opponentId];
+    const consequence = won
+      ? `君主裁决采纳其主张，参与者在朝声望${delta >= 0 ? '+' : ''}${delta}。`
+      : `其主张未获采纳，参与者在朝声望${delta >= 0 ? '+' : ''}${delta}。`;
+    events.push(emitEvent(state, {
+      type: 'politics',
+      title: petitionTitle,
+      summary: `${names}依据与${sideTarget?.name ?? '相关人物'}的显式关系联名上疏，${side === '败将一系' ? '请求留用败将' : '支持弹劾问责'}。${consequence}`,
+      actorId: details[0].personId,
+      actorName: details[0].name,
+      factionKey,
+      targetId: side === '败将一系' ? commanderId : opponentId,
+      targetLabel: sideTarget?.name ?? (side === '败将一系' ? commanderId : opponentId),
+      before: { supporters: details.map(({ personId, name, before }) => ({ personId, name, courtStanding: before })) },
+      after: { supporters: details.map(({ personId, name, after }) => ({ personId, name, courtStanding: after })), rulingAccepted: won },
+      evidence: '关系网络中存在明确的同势力支持关系；竞争、制衡、敌对、不和与争夺关系不计入支持网络',
+      source: rulingSource === 'npc_ai' ? 'npc_ai' : 'engine',
+      visibleToPlayer: state.factionKey === factionKey,
+    }));
   };
-  apply(uniqueCommanderSupport, backsCommander ? 1 : -swing, '败将一系');
-  apply(uniqueOpponentSupport, backsCommander ? -1 : swing, '弹劾者一系');
+  apply(uniqueCommanderSupport, backsCommander ? 1 : -swing, '败将一系', '联名求情·请求留用败将', backsCommander);
+  apply(uniqueOpponentSupport, backsCommander ? -1 : swing, '弹劾者一系', '联名弹劾·要求追责败将', !backsCommander);
   if (changes.length === 0) return '未发现可区分的显式站队人物，未产生额外声望转移。';
   return `派系站队：${changes.join('；')}。`;
 }
@@ -199,6 +230,8 @@ function resolveBattleCasePolitics(
   ctx: DerivedContext,
   commanderId: string,
   action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial',
+  events: GameEvent[],
+  source: GameEvent['source'],
 ): string {
   const runtime = state.characters[commanderId];
   const person = ctx.charactersById[commanderId];
@@ -250,7 +283,7 @@ function resolveBattleCasePolitics(
         ? `因弹劾被驳，${ctx.charactersById[opponentId].name}对败将积怨（仇怨 ${grudgeScore}/20）；与其相关的后续廷议更难取信。`
         : `${person.name}对${ctx.charactersById[opponentId].name}积怨至 ${grudgeScore}/20；与仇家相关的后续廷议将降低说服力。`;
     }
-    outcome += applyPoliticalBlocReaction(state, ctx, commanderId, opponentId, action);
+    outcome += applyPoliticalBlocReaction(state, ctx, commanderId, opponentId, action, events, source);
   } else if (caseType === 'transfer_request') {
     const delta = action === 'replace' ? 2 : action === 'relieve' ? 1 : action === 'demote' ? -5 : action === 'trial' ? -10 : -4;
     adjustCourtStanding(state, ctx, commanderId, delta);
@@ -1461,7 +1494,7 @@ export function applyOrder(
         army.commanderName = replacement.name;
         army.morale = moraleAfter;
         runtime.militaryLoyalty = loyaltyAfter;
-        const politicalOutcome = resolveBattleCasePolitics(state, ctx, person.person_id, order.action);
+        const politicalOutcome = resolveBattleCasePolitics(state, ctx, person.person_id, order.action, events, source);
         runtime.pendingBattleSettlement = false;
         state.characters[person.person_id] = runtime;
         events.push(emitEvent(state, {
@@ -1541,7 +1574,7 @@ export function applyOrder(
         }
       }
       runtime.militaryLoyalty = loyaltyAfter;
-      const politicalOutcome = resolveBattleCasePolitics(state, ctx, person.person_id, order.action);
+      const politicalOutcome = resolveBattleCasePolitics(state, ctx, person.person_id, order.action, events, source);
       if (!politicalOutcome && order.action === 'demote') adjustCourtStanding(state, ctx, person.person_id, -5);
       if (!politicalOutcome && order.action === 'trial') adjustCourtStanding(state, ctx, person.person_id, -10);
       runtime.pendingBattleSettlement = false;
