@@ -368,6 +368,9 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     const before = clamp(runtime.militaryLoyalty ?? person.loyalty);
     const after = clamp(before + battleLoyaltyDelta(won, casualtyRate));
     runtime.militaryLoyalty = after;
+    runtime.lastBattleTurn = state.date.turn;
+    runtime.lastBattleOutcome = won ? 'victory' : 'defeat';
+    runtime.lastBattleLossRate = Math.max(0, Math.min(1, casualtyRate));
     state.characters[personId] = runtime;
     allCommanderLoyaltyChanges.push({
       personId,
