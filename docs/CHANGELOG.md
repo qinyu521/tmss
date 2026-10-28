@@ -1,5 +1,20 @@
 # 变更记录
 
+## 0.6.2 · 2026-10-28（个人部署安全加固）
+
+### 修复
+- Docker Compose 的宿主机端口改为仅绑定 `127.0.0.1:8787`，不再默认把游戏 API 暴露到所有网卡。
+- 直接运行 API 时默认监听 `127.0.0.1`；只有 Docker Compose 容器内部显式绑定 `0.0.0.0`。
+- 新增部署启动保护：`SINGLE_PLAYER_MODE=0` 将拒绝启动，因为当前不存在真实的登录认证与用户级存档隔离。
+- Fastify 默认不信任 `X-Forwarded-For` / `X-Forwarded-Proto` 等转发头；只有显式设置 `TRUST_PROXY=1` 才信任一层代理。
+- 将部署指南调整为 Cloudflare Tunnel + Cloudflare Access 的个人使用方案，明确 Access Allow policy 只允许所有者，并指出 CORS、HTTPS 和 Tunnel 本身不等于认证。
+- 增加部署安全配置单元测试。
+
+### 验证状态
+- 等待本分支 CI 实际运行：`npm run validate:seed`、`npm test`、`npm run typecheck`、`npm run build`。
+- 该阶段尚未在真实 1 vCPU / 2 GB VPS 上测试网络绑定、Tunnel/Access 登录和重启恢复；不能据此宣称公网部署已完成验收。
+
+
 ## 0.6.1 · 2026-10-28（人物原型归属审计修复分支）
 
 ### 修复
