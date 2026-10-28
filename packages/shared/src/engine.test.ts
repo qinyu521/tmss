@@ -630,6 +630,24 @@ describe('战后政治仇怨的自主反应', () => {
     expect(nextEvents.some((item) => item.title.includes('旧怨翻涌'))).toBe(false);
   });
 
+  it('旧存档里缺少仇怨冷却字段时，会安排下一旬反应而不是永久跳过', () => {
+    const state = newGame('YONG', 'ruler', 'grudge-legacy-cooldown');
+    const commanderId = state.armies.find((army) => army.faction === 'YONG')!.commanderId;
+    const target = state.special.YONG.princes!.find((prince) => prince.personId !== commanderId)!;
+    state.characters[commanderId].politicalGrudges = { [target.personId]: 12 };
+    delete state.characters[commanderId].politicalGrudgeNextResponseTurn;
+
+    const firstEvents: GameEvent[] = [];
+    runPolitics(state, ctx, firstEvents);
+    expect(firstEvents.some((item) => item.title.includes('旧怨翻涌'))).toBe(false);
+    expect(state.characters[commanderId].politicalGrudgeNextResponseTurn![target.personId]).toBe(state.date.turn + 1);
+
+    state.date.turn += 1;
+    const nextEvents: GameEvent[] = [];
+    runPolitics(state, ctx, nextEvents);
+    expect(nextEvents.some((item) => item.title.includes('旧怨翻涌'))).toBe(true);
+  });
+
   it('刚刚作出的战后裁决不会在同一回合立即触发仇怨反击', () => {
     const state = newGame('YONG', 'ruler', 'grudge-first-response-delay');
     const commanderId = state.armies.find((army) => army.faction === 'YONG')!.commanderId;
