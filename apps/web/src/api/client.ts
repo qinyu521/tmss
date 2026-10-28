@@ -114,6 +114,10 @@ export interface CharacterSummary {
   courtStanding?: number;
   /** 本局军令忠诚度（0-100）；未加载运行时数据时默认为人物种子忠诚 */
   militaryLoyalty?: number;
+  lastBattleTurn?: number;
+  lastBattleOutcome?: 'victory' | 'defeat';
+  lastBattleLossRate?: number;
+  pendingBattleSettlement?: boolean;
 }
 
 export interface GameListItem {
