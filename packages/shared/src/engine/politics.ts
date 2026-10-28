@@ -111,7 +111,9 @@ export function runPolitics(state: GameState, ctx: DerivedContext, events: GameE
     // 中枢权威是独立政治资本，不应每旬被世家平均支持度直接覆盖；支持度变化以 20% 权重缓慢传导。
     const currentAuthority = chu.centralAuthority ?? averageHouseSupport;
     chu.centralAuthority = Math.round(clamp(currentAuthority * 0.8 + averageHouseSupport * 0.2));
-    const boycott = (chu.centralAuthority ?? 55) < BALANCE.politics.chu.boycottThreshold;
+    // 世家平均支持跌破阈值会直接触发集体抵制；中枢权威另作独立政治资本缓慢演变。
+    const boycott = averageHouseSupport < BALANCE.politics.chu.boycottThreshold ||
+      (chu.centralAuthority ?? 55) < BALANCE.politics.chu.boycottThreshold;
     if (boycott !== state.flags.houseBoycott) {
       state.flags.houseBoycott = boycott;
       events.push(
