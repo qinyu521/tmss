@@ -238,6 +238,7 @@ describe('回合结算', () => {
 
     if (attackerWon) {
       expect(target.faction).toBe('HUN');
+      expect(result.state.factions.HUN.control).toContain('YONG-REG03');
       expect(result.report.events.some((event) => event.type === 'occupation' && event.targetId === 'YONG-REG03')).toBe(true);
       if (attacker) {
         expect(attacker.nodeId).toBe('YONG-REG03');
@@ -253,9 +254,6 @@ describe('回合结算', () => {
       }
     }
 
-    expect(result.state.factions.HUN.control).toContain(
-      ... (attackerWon ? ['YONG-REG03'] : []),
-    );
   });
 
   it('匈奴部落忠诚过低时拒绝出兵', () => {
