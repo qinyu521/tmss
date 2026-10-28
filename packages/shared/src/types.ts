@@ -583,6 +583,7 @@ export type OrderKind =
   | 'negotiate_house'
   | 'hold_court'
   | 'reward_commander'
+  | 'replace_warned_commander'
   | 'settle_defeated_commander'
   | 'appoint'
   | 'rest_army'
@@ -646,6 +647,7 @@ export type Order =
       resolution?: CourtResolution;
     }
   | { orderId: string; kind: 'reward_commander'; personId: string; amount: number }
+  | { orderId: string; kind: 'replace_warned_commander'; armyId: string; replacementPersonId: string }
   | {
       orderId: string;
       kind: 'settle_defeated_commander';
