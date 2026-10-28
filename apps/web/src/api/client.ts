@@ -118,6 +118,8 @@ export interface CharacterSummary {
   lastBattleOutcome?: 'victory' | 'defeat';
   lastBattleLossRate?: number;
   pendingBattleSettlement?: boolean;
+  pendingBattleCase?: 'transfer_request' | 'impeachment';
+  battlePoliticalOpponentId?: string;
 }
 
 export interface GameListItem {
