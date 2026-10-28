@@ -136,6 +136,15 @@ describe('API 集成', () => {
     expect(defected.allegianceFaction).toBe('HUN');
     expect(defected.defectionWarningTurn).toBe(1);
 
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/characters/${commanderId}?gameId=${gameId}`,
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().currentFactionKey).toBe('HUN');
+    expect(detail.json().originalFactionKey).toBe('CHU');
+    expect(detail.json().runtime.allegianceFaction).toBe('HUN');
+
     const chuRoster = await app.inject({
       method: 'GET',
       url: `/api/characters?faction=CHU&pageSize=80&gameId=${gameId}`,
