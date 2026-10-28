@@ -104,6 +104,30 @@ function courtDebateEdge(
   };
 }
 
+function warnedCommanderRefusal(
+  state: GameState,
+  ctx: DerivedContext,
+  army: Army,
+  targetRegionId: string,
+): { targetFaction: FactionKey; loyalty: number; commanderName: string } | null {
+  const runtime = state.characters[army.commanderId];
+  const commander = ctx.charactersById[army.commanderId];
+  const targetFaction = runtime?.defectionTargetFaction;
+  if (
+    !runtime ||
+    !commander ||
+    runtime.allegianceFaction ||
+    runtime.defectionWarningTurn === undefined ||
+    !targetFaction
+  ) return null;
+  const loyalty = runtime.militaryLoyalty ?? commander.loyalty ?? 50;
+  if (loyalty > 15) return null;
+  const targetRegion = state.regions[targetRegionId];
+  if (!targetRegion || targetRegion.faction !== targetFaction) return null;
+  if (!isAtWar(state.diplomacy, army.faction, targetFaction)) return null;
+  return { targetFaction, loyalty, commanderName: commander.name };
+}
+
 function commanderPoliticalExecutionDrag(
   state: GameState,
   ctx: DerivedContext,
@@ -531,6 +555,10 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       }
       const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
       if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
+      const warnedRefusal = warnedCommanderRefusal(state, ctx, army, order.targetRegionId);
+      const warnedRefusalNote = warnedRefusal
+        ? `；注意：${warnedRefusal.commanderName}已收到倒戈预警且忠诚仅${Math.round(warnedRefusal.loyalty)}，若本旬执行时仍未恢复忠诚，将拒绝攻击${state.factions[warnedRefusal.targetFaction].name}，可先赏赐或撤换统将`
+        : '';
 
       const amount = order.amount ?? army.troops;
       if (!Number.isFinite(amount) || amount < 1_000) return issues('BAD_AMOUNT', '调动兵力至少 1000 人。');
@@ -573,7 +601,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       return {
         ok: true,
         issues: [],
-        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}${executionNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
+        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}${executionNote}${warnedRefusalNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
       };
     }
     case 'recruit': {
@@ -996,6 +1024,29 @@ export function applyOrder(
           }));
           return;
         }
+      }
+      const warnedRefusal = warnedCommanderRefusal(state, ctx, army, order.targetRegionId);
+      if (warnedRefusal) {
+        events.push(emitEvent(state, {
+          type: 'politics',
+          title: `倒戈预警·${army.commanderName}拒绝攻击${state.factions[warnedRefusal.targetFaction].name}`,
+          summary: `${army.commanderName}已收到倒戈预警，军令忠诚仅 ${Math.round(warnedRefusal.loyalty)}，拒绝奉命进攻与其存在明确强关系的${state.factions[warnedRefusal.targetFaction].name}。军团暂留${state.regions[army.nodeId]?.name ?? '原驻地'}；君主仍可在本旬赏赐恢复忠诚或撤换统将。`,
+          actorId: army.commanderId,
+          actorName: army.commanderName,
+          factionKey: army.faction,
+          targetId: army.armyId,
+          targetLabel: army.name,
+          before: {
+            loyalty: warnedRefusal.loyalty,
+            defectionTargetFaction: warnedRefusal.targetFaction,
+            regionId: army.nodeId,
+          },
+          after: { refusal: true, orderKind: order.kind, targetRegionId: order.targetRegionId },
+          evidence: '仅对已预警、军令忠诚 ≤15 且目的州属于其拟归附交战势力的军令触发；提高忠诚或撤换统将即可解除',
+          source,
+          visibleToPlayer: army.faction === state.factionKey,
+        }));
+        return;
       }
       const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
       if (!path.ok) return;
