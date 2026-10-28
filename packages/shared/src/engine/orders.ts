@@ -25,7 +25,7 @@ import { assignMarch, dayCostsFor, findPath, regionNameById } from './movement.j
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
-import { courtCost, courtDecisionForResolution, courtOpinion, courtRelationshipAffinity, courtSkill } from './court.js';
+import { courtCost, courtDecisionForResolution, courtOpinion, courtRelationshipAffinity, courtSkill, politicalGrudgeCourtPenalty } from './court.js';
 import { appointmentRelationshipEffect, successionCommandRisk } from './relationships.js';
 
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
@@ -71,10 +71,18 @@ function courtDebateEdge(
       : agenda === 'clan_relations'
         ? (state.special.CHU.houses ?? []).map((house) => house.patriarchId)
         : state.armies.filter((army) => army.faction === factionKey).map((army) => army.commanderId);
+  const speakerGrudgePenalty = speakerPersonId
+    ? politicalGrudgeCourtPenalty(state.characters[speakerPersonId]?.politicalGrudges, politicalTargetIds)
+    : 0;
+  const oppositionGrudgePenalty = oppositionPersonId
+    ? politicalGrudgeCourtPenalty(state.characters[oppositionPersonId]?.politicalGrudges, politicalTargetIds)
+    : 0;
   const speakerScore = (courtSkill(speaker ? { ...speaker, courtStanding: speakerStanding } : undefined, agenda)
-    + (speakerPersonId ? courtRelationshipAffinity(ctx.seed.relationships, speakerPersonId, agenda, politicalTargetIds) : 0));
+    + (speakerPersonId ? courtRelationshipAffinity(ctx.seed.relationships, speakerPersonId, agenda, politicalTargetIds) : 0)
+    - speakerGrudgePenalty);
   const oppositionScore = (courtSkill(opposition ? { ...opposition, courtStanding: oppositionStanding } : undefined, agenda)
-    + (oppositionPersonId ? courtRelationshipAffinity(ctx.seed.relationships, oppositionPersonId, agenda, politicalTargetIds) : 0));
+    + (oppositionPersonId ? courtRelationshipAffinity(ctx.seed.relationships, oppositionPersonId, agenda, politicalTargetIds) : 0)
+    - oppositionGrudgePenalty);
   // 双方能力与声望差每 15 点改变 1 点议案效果，上下限为 3，避免人物属性压过君主裁决本身。
   const edge = speaker && opposition ? Math.max(-3, Math.min(3, Math.round((speakerScore - oppositionScore) / 15))) : 0;
   return {
@@ -100,6 +108,28 @@ function adjustCourtStanding(state: GameState, ctx: DerivedContext, personId: st
   runtime.courtStanding = clamp((runtime.courtStanding ?? 50) + delta);
   state.characters[personId] = runtime;
   return runtime.courtStanding;
+}
+
+function recordPoliticalGrudge(
+  state: GameState,
+  ctx: DerivedContext,
+  sourcePersonId: string,
+  targetPersonId: string,
+  amount: number,
+): number {
+  if (!sourcePersonId || !targetPersonId || sourcePersonId === targetPersonId || amount <= 0) return 0;
+  const person = ctx.charactersById[sourcePersonId];
+  if (!person) return 0;
+  const runtime = state.characters[sourcePersonId] ?? {
+    personId: sourcePersonId,
+    alive: true,
+    ageBand: person.age_band,
+  };
+  const grudges = { ...(runtime.politicalGrudges ?? {}) };
+  grudges[targetPersonId] = Math.min(20, Math.max(0, grudges[targetPersonId] ?? 0) + amount);
+  runtime.politicalGrudges = grudges;
+  state.characters[sourcePersonId] = runtime;
+  return grudges[targetPersonId];
 }
 
 function resolveBattleCasePolitics(
@@ -149,6 +179,15 @@ function resolveBattleCasePolitics(
         : mild
           ? '君主降职' + person.name + '，败将声望 -3、弹劾者声望 +2；朝廷部分采纳问责，但未完全站到弹劾一方。'
           : '君主采纳' + ctx.charactersById[opponentId].name + '的弹劾，败将声望 -5、弹劾者声望 +3；相关政治派系获得回应。';
+    const grudgeSourceId = backsCommander ? opponentId : commanderId;
+    const grudgeTargetId = backsCommander ? commanderId : opponentId;
+    const grudgeAmount = backsCommander ? 8 : publicTrial ? 12 : mild ? 4 : 6;
+    const grudgeScore = recordPoliticalGrudge(state, ctx, grudgeSourceId, grudgeTargetId, grudgeAmount);
+    if (grudgeScore > 0) {
+      outcome += backsCommander
+        ? `因弹劾被驳，${ctx.charactersById[opponentId].name}对败将积怨（仇怨 ${grudgeScore}/20）；与其相关的后续廷议更难取信。`
+        : `${person.name}对${ctx.charactersById[opponentId].name}积怨至 ${grudgeScore}/20；与仇家相关的后续廷议将降低说服力。`;
+    }
   } else if (caseType === 'transfer_request') {
     const delta = action === 'replace' ? 2 : action === 'relieve' ? 1 : action === 'demote' ? -5 : action === 'trial' ? -10 : -4;
     adjustCourtStanding(state, ctx, commanderId, delta);
