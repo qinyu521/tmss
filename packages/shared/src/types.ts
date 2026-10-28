@@ -666,6 +666,8 @@ export interface CharacterRuntime {
   personId: string;
   alive: boolean;
   ageBand: string;
+  /** 受君主采纳/驳回意见影响的在朝声望，0-100；旧档迁移时默认 50 */
+  courtStanding?: number;
   deathTurn?: number;
   deathCause?: string;
   /** 成长提示（仅人物视图展示，不发事件刷屏） */
