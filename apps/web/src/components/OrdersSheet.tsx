@@ -170,7 +170,7 @@ export default function OrdersSheet() {
         setDefectionReplacementId('');
         setSettlementCommanderId('');
       });
-  }, [view?.factionKey, view?.gameId]);
+  }, [view?.factionKey, view?.gameId, view?.date.turn]);
 
   useEffect(() => {
     if (!selectedArmy) return;
