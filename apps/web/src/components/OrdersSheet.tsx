@@ -170,6 +170,11 @@ export default function OrdersSheet() {
     ...(view.factionKey === 'HUN' ? [{ key: 'tribal_alliance' as const, label: '部落盟约', desc: '统一号令能提升联盟协调，但强压会损伤各部忠诚；兑现盟约能安抚部落。' }] : []),
     ...(view.factionKey === 'CHU' ? [{ key: 'clan_relations' as const, label: '世家与中枢', desc: '收权可增强中央权威但会激怒世家；让利则反之。' }] : []),
   ];
+  useEffect(() => {
+    const allowedAgendas = courtAgendas.map((item) => item.key);
+    if (!allowedAgendas.includes(courtAgenda)) setCourtAgenda(allowedAgendas[0] ?? 'war_council');
+  }, [view.factionKey, courtAgenda]);
+
   const courtDecisionCopy: Record<CourtDecision, { label: string; desc: string }> = {
     assertive: { label: '强硬推进', desc: '更快强化军事或中央权威，但会积累疲劳、派系反弹或忠诚损失。' },
     balanced: { label: '折中调和', desc: '以适度成本改善战备或稳定政治关系，避免单方面倾斜。' },
