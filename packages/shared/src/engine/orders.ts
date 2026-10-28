@@ -881,7 +881,7 @@ export function applyOrder(
     }
     case 'hold_court': {
       const debate = courtDebateEdge(ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
-      const decision = courtDecisionForResolution(order.agenda, order.resolution, debate.speaker, debate.opposition, decision);
+      const decision = courtDecisionForResolution(order.agenda, order.resolution, debate.speaker, debate.opposition, order.decision);
       const cost = courtCost(order.agenda, decision);
       faction.resources.cash -= cost;
       const speakerOpinion = debate.speaker ? courtOpinion(debate.speaker, order.agenda) : '廷臣依据议题共议，采用默认效果';
