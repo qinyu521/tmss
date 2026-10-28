@@ -25,6 +25,7 @@ import { courtCost } from './court.js';
 import { runLifecycle } from './lifecycle.js';
 import { buildChronicle } from './chronicle.js';
 import { clamp, factionNameOf } from './state.js';
+import { battleLoyaltyDelta } from './relationships.js';
 
 export interface TurnResult {
   state: GameState;
@@ -327,7 +328,68 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     defenderTroops: (defender?.troops ?? 0) + region.garrison,
     garrison: region.garrison,
   };
+  const attackerTroopsBefore = Math.max(1, attacker.troops);
+  const defenderArmyTroopsBefore = Math.max(1, defender?.troops ?? region.garrison);
+  const garrisonTroopsBefore = Math.max(1, region.garrison);
+  const attackerCommanderId = attacker.commanderId;
+  const attackerCommanderName = attacker.commanderName;
+  const defenderCommanderId = defender?.commanderId ?? region.garrisonCommanderId;
+  const defenderCommanderName = defender?.commanderName ?? region.garrisonCommanderName;
+  const defenderCommanderFaction = defender?.faction ?? originalOwner;
   const outcome = resolveBattle(state, ctx, attacker, defender ?? null, region, seed);
+
+  // 战果改变本局军令忠诚：败军将领因溃败与伤亡失去威望，胜方则小幅增加军心。
+  // 只把玩家自己势力的忠诚数值写进可见战报，避免透出敌方人物的精确状态。
+  const allCommanderLoyaltyChanges: {
+    personId: string;
+    personName: string;
+    factionKey: FactionKey;
+    side: 'victor' | 'defeated';
+    before: number;
+    after: number;
+    delta: number;
+  }[] = [];
+  const applyBattleLoyalty = (
+    personId: string,
+    personName: string,
+    factionKey: FactionKey,
+    won: boolean,
+    casualtyRate: number,
+  ) => {
+    const person = ctx.charactersById[personId];
+    if (!personId || !person) return;
+    const runtime = state.characters[personId] ?? {
+      personId,
+      alive: true,
+      ageBand: person.age_band,
+      courtStanding: 50,
+      militaryLoyalty: person.loyalty,
+    };
+    const before = clamp(runtime.militaryLoyalty ?? person.loyalty);
+    const after = clamp(before + battleLoyaltyDelta(won, casualtyRate));
+    runtime.militaryLoyalty = after;
+    state.characters[personId] = runtime;
+    allCommanderLoyaltyChanges.push({
+      personId,
+      personName,
+      factionKey,
+      side: won ? 'victor' : 'defeated',
+      before,
+      after,
+      delta: after - before,
+    });
+  };
+  const attackerLossRate = outcome.attackerLosses / attackerTroopsBefore;
+  const defenderLossRate = defender
+    ? outcome.defenderLosses / defenderArmyTroopsBefore
+    : outcome.garrisonLosses / garrisonTroopsBefore;
+  applyBattleLoyalty(attackerCommanderId, attackerCommanderName, attacker.faction, outcome.attackerWon, attackerLossRate);
+  applyBattleLoyalty(defenderCommanderId, defenderCommanderName, defenderCommanderFaction, !outcome.attackerWon, defenderLossRate);
+  const visibleCommanderLoyaltyChanges = allCommanderLoyaltyChanges.filter((change) => change.factionKey === state.factionKey);
+  const commanderLoyaltySummary = visibleCommanderLoyaltyChanges.length
+    ? `己方统将军令忠诚变化：${visibleCommanderLoyaltyChanges.map((change) => `${change.personName} ${change.delta > 0 ? '+' : ''}${change.delta}` ).join('、')}。`
+    : '';
+
   // 记录本旬参战主将，生命周期据此追加战死概率
   attacker.lastBattleTurn = state.date.turn;
   if (defender) defender.lastBattleTurn = state.date.turn;
@@ -339,7 +401,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     emitEvent(state, {
       type: 'battle',
       title: `${attacker.name}战于${region.name}`,
-      summary: outcome.narrative,
+      summary: `${outcome.narrative}${commanderLoyaltySummary ? ` ${commanderLoyaltySummary}` : ''}`,
       actorId: attacker.commanderId,
       actorName: attacker.commanderName,
       factionKey: attacker.faction,
@@ -353,6 +415,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
         attackerRemaining: outcome.attackerRemaining,
         defenderRemaining: outcome.defenderRemaining,
         attackerWon: outcome.attackerWon,
+        commanderLoyaltyChanges: visibleCommanderLoyaltyChanges,
       },
       payload: {
         ratio: outcome.replay.ratio,
