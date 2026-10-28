@@ -175,6 +175,9 @@ describe('API 集成', () => {
     });
     const officials = roster.json().items.filter((person: any) => person.alive !== false);
     expect(officials.length).toBeGreaterThanOrEqual(2);
+    expect(typeof officials[0].courtStanding).toBe('number');
+    const speakerStandingBefore = officials[0].courtStanding;
+    const oppositionStandingBefore = officials[1].courtStanding;
     const order = await app.inject({
       method: 'POST',
       url: `/api/games/${gid}/orders`,
@@ -204,7 +207,12 @@ describe('API 集成', () => {
     expect(court.after.oppositionPersonId).toBe(officials[1].person_id);
     expect(court.after.resolution).toBe('compromise');
     expect(court.after.decision).toBe('balanced');
+    expect(court.after.speakerStandingAfter).toBe(speakerStandingBefore + 1);
+    expect(court.after.oppositionStandingAfter).toBe(oppositionStandingBefore + 1);
     expect(court.summary).toContain(officials[0].name);
+    const updatedRoster = await app.inject({ method: 'GET', url: `/api/characters?faction=YONG&pageSize=8&gameId=${gid}` });
+    const updatedSpeaker = updatedRoster.json().items.find((person: any) => person.person_id === officials[0].person_id);
+    expect(updatedSpeaker.courtStanding).toBe(speakerStandingBefore + 1);
     expect(body.view.special.courtStability).toBeGreaterThan(0);
   });
 
