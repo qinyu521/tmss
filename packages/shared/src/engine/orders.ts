@@ -62,8 +62,18 @@ function courtDebateEdge(
   const opposition = oppositionPersonId ? ctx.charactersById[oppositionPersonId] : undefined;
   const speakerStanding = speakerPersonId ? (state.characters[speakerPersonId]?.courtStanding ?? 50) : 50;
   const oppositionStanding = oppositionPersonId ? (state.characters[oppositionPersonId]?.courtStanding ?? 50) : 50;
-  const speakerScore = courtSkill(speaker ? { ...speaker, courtStanding: speakerStanding } : undefined, agenda);
-  const oppositionScore = courtSkill(opposition ? { ...opposition, courtStanding: oppositionStanding } : undefined, agenda);
+  const factionKey = speaker?.faction_key ?? opposition?.faction_key ?? state.factionKey;
+  const politicalTargetIds = agenda === 'succession'
+    ? (state.special.YONG.princes ?? []).map((prince) => prince.personId)
+    : agenda === 'tribal_alliance'
+      ? (state.special.HUN.tribes ?? []).map((tribe) => tribe.chiefId)
+      : agenda === 'clan_relations'
+        ? (state.special.CHU.houses ?? []).map((house) => house.patriarchId)
+        : state.armies.filter((army) => army.faction === factionKey).map((army) => army.commanderId);
+  const speakerScore = (courtSkill(speaker ? { ...speaker, courtStanding: speakerStanding } : undefined, agenda)
+    + (speakerPersonId ? courtRelationshipAffinity(ctx.seed.relationships, speakerPersonId, agenda, politicalTargetIds) : 0));
+  const oppositionScore = (courtSkill(opposition ? { ...opposition, courtStanding: oppositionStanding } : undefined, agenda)
+    + (oppositionPersonId ? courtRelationshipAffinity(ctx.seed.relationships, oppositionPersonId, agenda, politicalTargetIds) : 0));
   // 双方能力与声望差每 15 点改变 1 点议案效果，上下限为 3，避免人物属性压过君主裁决本身。
   const edge = speaker && opposition ? Math.max(-3, Math.min(3, Math.round((speakerScore - oppositionScore) / 15))) : 0;
   return {
