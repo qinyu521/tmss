@@ -6,6 +6,8 @@ import {
   ROLE_ALLOWED_ORDERS,
   ROLE_LABEL,
   SCHEME_LABELS,
+  courtOpinion,
+  courtSkill,
   fmt,
   type Order,
   type SchemeKind,
@@ -193,8 +195,8 @@ export default function OrdersSheet() {
   const courtOfficials = commanders.filter((person) => person.alive !== false);
   const courtSpeaker = courtOfficials.find((person) => person.person_id === courtSpeakerId);
   const courtOpponent = courtOfficials.find((person) => person.person_id === courtOppositionId);
-  const speakerCourtScore = courtSpeaker ? courtSkillForDisplay(courtSpeaker, activeCourtAgenda) : 50;
-  const oppositionCourtScore = courtOpponent ? courtSkillForDisplay(courtOpponent, activeCourtAgenda) : 50;
+  const speakerCourtScore = courtSpeaker ? courtSkill(courtSpeaker, activeCourtAgenda) : 50;
+  const oppositionCourtScore = courtOpponent ? courtSkill(courtOpponent, activeCourtAgenda) : 50;
   const courtDebateEdge = courtSpeaker && courtOpponent && courtSpeaker.person_id !== courtOpponent.person_id
     ? Math.max(-3, Math.min(3, Math.round((speakerCourtScore - oppositionCourtScore) / 15)))
     : 0;
@@ -581,7 +583,7 @@ export default function OrdersSheet() {
                     <option value="">采用廷臣集议</option>
                     {courtOfficials.map((person) => (
                       <option key={person.person_id} value={person.person_id}>
-                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkillForDisplay(person, activeCourtAgenda))}
+                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkill(person, activeCourtAgenda))}
                       </option>
                     ))}
                   </select>
@@ -592,7 +594,7 @@ export default function OrdersSheet() {
                     <option value="">不指定反对臣</option>
                     {courtOfficials.filter((person) => person.person_id !== courtSpeakerId).map((person) => (
                       <option key={person.person_id} value={person.person_id}>
-                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkillForDisplay(person, activeCourtAgenda))}
+                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkill(person, activeCourtAgenda))}
                       </option>
                     ))}
                   </select>
@@ -613,11 +615,19 @@ export default function OrdersSheet() {
                 <div className="form-note">{courtDecisionCopy[courtDecision].desc}</div>
                 <div className="card" style={{ marginTop: 10, background: 'rgba(0,0,0,0.16)' }}>
                   <div className="subhead">廷臣意见</div>
-                  <div className="small" style={{ lineHeight: 1.8 }}>
-                    {activeCourtAgenda === 'war_council' && '兵部：应整军备边，避免战机稍纵即逝。仓曹：军饷、粮秣与马匹储备必须支撑长期作战。'}
-                    {activeCourtAgenda === 'succession' && '中书：储位必须有明确名分。诸王宾客：过度偏向一方会使朝局失衡。御史：应将朝廷稳定置于私党之上。'}
-                    {activeCourtAgenda === 'tribal_alliance' && '主战诸将：联盟需要统一号令。部落首领：盟约与赏赐若长期落空，各部将各行其是。'}
-                    {activeCourtAgenda === 'clan_relations' && '台谏：财赋与任官不可尽受世家把持。世家代表：若中央一味收权，地方税赋与征兵都可能受阻。'}
+                  <div className="small" style={{ lineHeight: 1.9 }}>
+                    <div>
+                      <span className="gold">{courtSpeaker ? `${courtSpeaker.name}·主议：` : '主议臣：'}</span>
+                      {courtSpeaker
+                        ? courtOpinion(courtSpeaker, activeCourtAgenda)
+                        : '未指定主议臣，采用廷臣集议的标准议论。'}
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      <span style={{ color: 'var(--danger)' }}>{courtOpponent ? `${courtOpponent.name}·反对：` : '反对臣：'}</span>
+                      {courtOpponent
+                        ? courtOpinion(courtOpponent, activeCourtAgenda)
+                        : '未指定反对臣，不计算人物能力差带来的效果修正。'}
+                    </div>
                   </div>
                   <div className="divider" />
                   <div className="small muted" style={{ lineHeight: 1.7 }}>
@@ -783,13 +793,6 @@ export default function OrdersSheet() {
       </div>
     </Modal>
   );
-}
-
-function courtSkillForDisplay(person: CharacterSummary, agenda: CourtAgenda): number {
-  if (agenda === 'war_council') return person.strategy * 0.6 + person.command * 0.4;
-  if (agenda === 'succession') return person.intrigue * 0.45 + person.loyalty * 0.3 + person.governance * 0.25;
-  if (agenda === 'tribal_alliance') return person.loyalty * 0.5 + person.command * 0.2 + person.intrigue * 0.3;
-  return person.governance * 0.45 + person.commerce * 0.35 + person.intrigue * 0.2;
 }
 
 function describeOrder(o: Order): string {
