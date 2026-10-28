@@ -8,8 +8,9 @@
 2. 若种子文件缺失，必须在 `docs/IMPLEMENTATION_STATUS.md` 记录缺失原因和人工导入路径（`data/source/tianming_world_roster_v0_3_1.json`），不得凭空生成替代数据。
 3. 允许新增的内容必须放在 `data/derived/`（派生边、美术地理、部署映射）或迁移文件，并在 `docs/DATA_DICTIONARY.md` 记录依据。
 4. 修改数据前先运行 `npm run validate:seed`。硬性错误（计数、ID 重复、引用失效、兵力合计）导致构建失败。
-5. 原型归属与用户既定规则冲突时，只生成 `docs/DATA_VALIDATION_REPORT.md` 冲突报告，**不得静默修正**。
-6. Excel 仅供人工核对，程序只读取 JSON。
+5. 原型归属与用户既定规则冲突时，先生成 `docs/DATA_VALIDATION_REPORT.md` 冲突报告；**不得静默修正**。
+6. 对已经由用户明确确认的阵营/原型规则，可在独立分支中修复权威种子 JSON，必须同步更新原型映射、关系/任命引用、变更日志及回归测试；不可直接覆写 `main`，必须提供可审查 diff。
+7. Excel 仅供人工核对，程序只读取 JSON。
 
 ## 二、事实由规则引擎决定
 
