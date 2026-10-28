@@ -17,7 +17,7 @@ import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
 import { buildContext, buildInitialArmies, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -251,7 +251,7 @@ export function createGame(
     characters: Object.fromEntries(
       seed.characters.map((c) => [
         c.person_id,
-        { personId: c.person_id, alive: true, ageBand: c.age_band },
+        { personId: c.person_id, alive: true, ageBand: c.age_band, courtStanding: 50 },
       ]),
     ),
     statistics: { battles: 0, casualties: 0, turnsPlayed: 0, occupiedRegions: 0 },
@@ -291,7 +291,22 @@ function migrateV1toV2(state: GameState, roster?: CharacterSeed[]): void {
   }
 }
 
-const MIGRATIONS: Migration[] = [{ from: 1, to: 2, apply: migrateV1toV2 }];
+/** v2 → v3：为旧档人物补充朝廷声望，不改写其存活状态与既有属性。 */
+function migrateV2toV3(state: GameState, roster?: CharacterSeed[]): void {
+  if (!state.characters) state.characters = {};
+  for (const c of roster ?? []) {
+    if (!state.characters[c.person_id]) {
+      state.characters[c.person_id] = { personId: c.person_id, alive: true, ageBand: c.age_band, courtStanding: 50 };
+    } else if (state.characters[c.person_id].courtStanding == null) {
+      state.characters[c.person_id].courtStanding = 50;
+    }
+  }
+}
+
+const MIGRATIONS: Migration[] = [
+  { from: 1, to: 2, apply: migrateV1toV2 },
+  { from: 2, to: 3, apply: migrateV2toV3 },
+];
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
 export function migrateState(state: GameState, roster?: CharacterSeed[]): GameState {
