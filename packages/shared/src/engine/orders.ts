@@ -128,6 +128,12 @@ function recordPoliticalGrudge(
   const grudges = { ...(runtime.politicalGrudges ?? {}) };
   grudges[targetPersonId] = Math.min(20, Math.max(0, grudges[targetPersonId] ?? 0) + amount);
   runtime.politicalGrudges = grudges;
+  const nextResponses = { ...(runtime.politicalGrudgeNextResponseTurn ?? {}) };
+  if (!Number.isFinite(nextResponses[targetPersonId])) {
+    // 首次积怨最早在下一旬反应，避免同一项裁决刚发生就立刻出现反噬。
+    nextResponses[targetPersonId] = state.date.turn + 1;
+  }
+  runtime.politicalGrudgeNextResponseTurn = nextResponses;
   state.characters[sourcePersonId] = runtime;
   return grudges[targetPersonId];
 }
