@@ -344,7 +344,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     return {
       character,
       runtime,
-      coreConflict: coreConflictOf(character),
+      coreConflict: coreConflictOf(character, seed.historical_archetypes),
       appointment: appointment ? JSON.parse(appointment) : null,
       archetype: archetype ? JSON.parse(archetype) : null,
       audit: audit ?? null,
