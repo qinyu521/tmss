@@ -52,6 +52,7 @@ import {
   updateChroniclePolish,
 } from './gameRepo.js';
 import { loadLlmConfig, polishChronicle, type LlmFetcher } from './llm.js';
+import { assertSupportedDeploymentMode, resolveTrustProxy } from './security.js';
 
 const factionEnum = z.enum(['HUN', 'YONG', 'CHU']);
 const roleEnum = z.enum(['ruler', 'governor', 'general', 'strategist']);
@@ -160,6 +161,7 @@ export interface BuiltApp {
 const rateBuckets = new Map<string, number[]>();
 
 export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
+  assertSupportedDeploymentMode();
   const seed = options.seed ?? loadSeed();
   applyUnitNames(seed.military_units);
   const dbPath = options.dbPath ?? resolveDbPath();
@@ -176,7 +178,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
             transport: undefined,
           },
     bodyLimit: 256 * 1024,
-    trustProxy: true,
+    trustProxy: resolveTrustProxy(),
   });
 
   await app.register(cors, {
@@ -207,7 +209,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     ok: true,
     version: '0.6.0',
     schemaVersion: SCHEMA_VERSION,
-    mode: process.env.SINGLE_PLAYER_MODE === '0' ? 'multi-user' : 'single-player',
+    mode: 'single-player',
     db: path.basename(dbPath),
     seedCounts: referenceCounts(db),
     llm: process.env.LLM_PROVIDER ? 'configured（可选）' : 'disabled（本地模板史官）',
@@ -221,7 +223,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     initialResources: INITIAL_RESOURCES,
     turnDays: BALANCE.turnDays,
     schemaVersion: SCHEMA_VERSION,
-    singlePlayer: process.env.SINGLE_PLAYER_MODE !== '0',
+    singlePlayer: true,
     llmEnabled: Boolean(process.env.LLM_PROVIDER && process.env.LLM_API_KEY),
   }));
 
