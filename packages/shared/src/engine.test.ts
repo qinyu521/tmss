@@ -229,6 +229,7 @@ describe('朝廷廷议', () => {
     const state = newGame('CHU');
     const beforeAuthority = state.special.CHU.centralAuthority ?? 55;
     const beforeSupport = state.special.CHU.houses?.[0].support ?? 50;
+    const beforePrivateForce = state.special.CHU.houses?.[0].privateForce ?? 3000;
     const order = {
       orderId: 'court-chu',
       kind: 'hold_court' as const,
@@ -239,6 +240,7 @@ describe('朝廷廷议', () => {
     applyOrder(state, ctx, order, events);
     expect(state.special.CHU.centralAuthority).toBeGreaterThan(beforeAuthority);
     expect(state.special.CHU.houses?.[0].support).toBeLessThan(beforeSupport);
+    expect(state.special.CHU.houses?.[0].privateForce).toBeLessThan(beforePrivateForce);
     expect(events[0].summary).toContain('各家支持下降 5');
   });
 });
