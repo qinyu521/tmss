@@ -222,6 +222,42 @@ describe('回合结算', () => {
     expect((battleA!.after as any).totalLosses).toBe((battleB!.after as any).totalLosses);
   });
 
+  it('攻入敌方州府后，战斗结果与占领、行军状态更新保持一致', () => {
+    const state = newGame('HUN', 'ruler', 'battle-transition');
+    state.pendingOrders = [
+      { orderId: 'b-transition', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' },
+    ];
+
+    const result = runTurn(state, ctx);
+    const battle = result.report.events.find((event) => event.type === 'battle');
+    expect(battle).toBeTruthy();
+
+    const attackerWon = (battle!.after as any).attackerWon as boolean;
+    const target = result.state.regions['YONG-REG03'];
+    const attacker = result.state.armies.find((army) => army.armyId === 'HUN-ARMY-02');
+
+    if (attackerWon) {
+      expect(target.faction).toBe('HUN');
+      expect(result.report.events.some((event) => event.type === 'occupation' && event.targetId === 'YONG-REG03')).toBe(true);
+      if (attacker) {
+        expect(attacker.nodeId).toBe('YONG-REG03');
+        expect(attacker.path).toEqual([]);
+        expect(attacker.status).toBe('idle');
+      }
+    } else {
+      expect(target.faction).toBe('YONG');
+      if (attacker) {
+        expect(attacker.nodeId).not.toBe('YONG-REG03');
+        expect(attacker.path).toEqual([]);
+        expect(attacker.status).toBe('idle');
+      }
+    }
+
+    expect(result.state.factions.HUN.control).toContain(
+      ... (attackerWon ? ['YONG-REG03'] : []),
+    );
+  });
+
   it('匈奴部落忠诚过低时拒绝出兵', () => {
     const state = newGame('HUN');
     const tribe = state.special.HUN.tribes!.find((t) => state.armies.some((a) => a.faction === 'HUN' && a.nodeId === t.regionId));
