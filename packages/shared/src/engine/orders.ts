@@ -25,7 +25,7 @@ import { assignMarch, dayCostsFor, findPath, regionNameById } from './movement.j
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
-import { courtOpinion, courtSkill } from './court.js';
+import { courtDecisionForResolution, courtOpinion, courtSkill } from './court.js';
 
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
 
@@ -381,12 +381,16 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         return issues('WRONG_FACTION', '该廷议议题不属于本势力的政制矛盾。');
       }
       if (!['assertive', 'balanced', 'conciliatory'].includes(order.decision)) {
-        return issues('BAD_DECISION', '未知廷议裁决。');
+        return issues('BAD_DECISION', '未知廷议议案政策。');
       }
-      const cost = courtCost(order.agenda, order.decision);
-      if (faction.resources.cash < cost) return issues('NO_CASH', `廷议与执行需银 ${cost.toLocaleString()} 两，现有 ${Math.round(faction.resources.cash).toLocaleString()}。`);
+      if (order.resolution && !['adopt_speaker', 'adopt_opposition', 'compromise'].includes(order.resolution)) {
+        return issues('BAD_RESOLUTION', '未知君主裁定方式。');
+      }
       if (Boolean(order.speakerPersonId) !== Boolean(order.oppositionPersonId)) {
         return issues('COURT_PAIR_REQUIRED', '廷议须同时选择主议臣与反对臣，才能计算双方的论证效果。');
+      }
+      if (order.resolution && (!order.speakerPersonId || !order.oppositionPersonId)) {
+        return issues('COURT_PAIR_REQUIRED', '采纳或驳回某方意见前，必须指定主议臣与反对臣。');
       }
       for (const personId of [order.speakerPersonId, order.oppositionPersonId].filter((id): id is string => Boolean(id))) {
         const person = ctx.charactersById[personId];
@@ -397,6 +401,9 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         return issues('COURT_PAIR_DUPLICATE', '主议臣与反对臣不能由同一人担任。');
       }
       const debate = courtDebateEdge(ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
+      const decision = courtDecisionForResolution(order.agenda, order.resolution, debate.speaker, debate.opposition, order.decision);
+      const cost = courtCost(order.agenda, decision);
+      if (faction.resources.cash < cost) return issues('NO_CASH', `廷议与执行需银 ${cost.toLocaleString()} 两，现有 ${Math.round(faction.resources.cash).toLocaleString()}。`);
       const speakerOpinion = debate.speaker ? courtOpinion(debate.speaker, order.agenda) : '廷臣依据议题共议，采用默认效果';
       const oppositionOpinion = debate.opposition ? courtOpinion(debate.opposition, order.agenda) : '未指定反对臣';
       const argument = order.agenda === 'war_council'
@@ -406,10 +413,17 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
           : order.agenda === 'tribal_alliance'
             ? '诸部首领要求兑现盟约，主战派则要求统一号令'
             : '世家要求保全地方利益，台谏主张中枢不得失去征税与任官之权';
+      const resolutionLabel = order.resolution === 'adopt_speaker'
+        ? `采纳主议臣意见（${debate.speaker?.name ?? '主议臣'}）`
+        : order.resolution === 'adopt_opposition'
+          ? `驳回主议、采纳反对臣意见（${debate.opposition?.name ?? '反对臣'}）`
+          : order.resolution === 'compromise'
+            ? '折中调和双方意见'
+            : '君主直接裁定政策方向';
       return {
         ok: true,
         issues: [],
-        preview: `廷议「${COURT_AGENDA_LABEL[order.agenda]}」：${argument}；${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」；双方议题能力 ${debate.speakerScore}/${debate.oppositionScore}，效果修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。` : '未指定辩论人选时采用廷臣集体议论，不额外修正议案效果。'} 君主拟「${COURT_DECISION_LABEL[order.decision]}」，执行成本 ${cost.toLocaleString()} 两。`,
+        preview: `廷议「${COURT_AGENDA_LABEL[order.agenda]}」：${argument}；${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」；双方议题能力 ${debate.speakerScore}/${debate.oppositionScore}，争辩修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。` : '未指定辩论人选时采用廷臣集议默认效果。'} 君主选择「${resolutionLabel}」，最终政策为「${COURT_DECISION_LABEL[decision]}」，执行成本 ${cost.toLocaleString()} 两。`,
       };
     }
     case 'appoint': {
@@ -866,24 +880,25 @@ export function applyOrder(
       return;
     }
     case 'hold_court': {
-      const cost = courtCost(order.agenda, order.decision);
-      faction.resources.cash -= cost;
       const debate = courtDebateEdge(ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
+      const decision = courtDecisionForResolution(order.agenda, order.resolution, debate.speaker, debate.opposition, decision);
+      const cost = courtCost(order.agenda, decision);
+      faction.resources.cash -= cost;
       const speakerOpinion = debate.speaker ? courtOpinion(debate.speaker, order.agenda) : '廷臣依据议题共议，采用默认效果';
       const oppositionOpinion = debate.opposition ? courtOpinion(debate.opposition, order.agenda) : '未指定反对臣';
       const agendaLabel = COURT_AGENDA_LABEL[order.agenda];
-      const decisionLabel = COURT_DECISION_LABEL[order.decision];
+      const decisionLabel = COURT_DECISION_LABEL[decision];
       let summary = '';
-      let after: Record<string, unknown> = { agenda: order.agenda, decision: order.decision, cost };
+      let after: Record<string, unknown> = { agenda: order.agenda, decision, resolution: order.resolution ?? 'direct_policy', cost };
 
       if (order.agenda === 'war_council') {
         const armies = state.armies.filter((a) => a.faction === fk);
         for (const army of armies) {
-          if (order.decision === 'assertive') {
+          if (decision === 'assertive') {
             army.morale = clamp(army.morale + 5);
             army.training = clamp(army.training + 2);
             army.fatigue = clamp(army.fatigue + 3);
-          } else if (order.decision === 'balanced') {
+          } else if (decision === 'balanced') {
             army.morale = clamp(army.morale + 3);
             army.training = clamp(army.training + 1);
           } else {
@@ -892,25 +907,25 @@ export function applyOrder(
             army.supply = clamp(army.supply + 2);
           }
         }
-        summary = order.decision === 'assertive'
+        summary = decision === 'assertive'
           ? `兵部主张立即整军备边，仓曹警告军饷压力。廷议决定强硬推进：${armies.length} 支军队士气 +5、训练 +2、疲劳 +3。`
-          : order.decision === 'balanced'
+          : decision === 'balanced'
             ? `诸将与文臣折中议定：${armies.length} 支军队士气 +3、训练 +1，以有限军费改善战备。`
             : `廷议采纳缓进整训：${armies.length} 支军队士气 +1、疲劳 -5、补给 +2，暂不追加军费。`;
-        after = { ...after, affectedArmies: armies.length, moraleDelta: order.decision === 'assertive' ? 5 : order.decision === 'balanced' ? 3 : 1, trainingDelta: order.decision === 'assertive' ? 2 : order.decision === 'balanced' ? 1 : 0 };
+        after = { ...after, affectedArmies: armies.length, moraleDelta: decision === 'assertive' ? 5 : decision === 'balanced' ? 3 : 1, trainingDelta: decision === 'assertive' ? 2 : decision === 'balanced' ? 1 : 0 };
       } else if (order.agenda === 'succession') {
         const yong = state.special.YONG;
         const princes = yong.princes ?? [];
         const heir = princes.find((p) => p.isCrownPrince);
         const strongest = [...princes].sort((a, b) => b.influence - a.influence)[0];
-        if (order.decision === 'assertive') {
+        if (decision === 'assertive') {
           if (heir) {
             heir.influence = clamp(heir.influence + 10);
             heir.trust = clamp(heir.trust + 4);
           }
           for (const prince of princes) if (prince.personId !== heir?.personId) prince.trust = clamp(prince.trust - 4);
           yong.courtStability = clamp((yong.courtStability ?? 60) - 4);
-        } else if (order.decision === 'balanced') {
+        } else if (decision === 'balanced') {
           yong.courtStability = clamp((yong.courtStability ?? 60) + 7);
           if (strongest && strongest.personId !== heir?.personId) strongest.influence = clamp(strongest.influence - 5);
           for (const prince of princes) prince.trust = clamp(prince.trust + 2);
@@ -919,19 +934,19 @@ export function applyOrder(
           for (const prince of princes) prince.trust = clamp(prince.trust + 5);
           if (heir) heir.influence = clamp(heir.influence - 3);
         }
-        summary = order.decision === 'assertive'
+        summary = decision === 'assertive'
           ? `中书主张尊储以定名分，诸王宾客反对偏袒。朝廷公开支持${heir?.name ?? '储君'}，其影响力上升，但朝局稳定下降至 ${Math.round(yong.courtStability ?? 0)}。`
-          : order.decision === 'balanced'
+          : decision === 'balanced'
             ? `廷议压低最强藩王的扩张空间、安抚各方，朝局稳定升至 ${Math.round(yong.courtStability ?? 0)}。`
             : `皇帝暂缓站队，给各皇子留足体面；信任回升，但储位支持度有所稀释。朝局稳定升至 ${Math.round(yong.courtStability ?? 0)}。`;
         after = { ...after, courtStability: yong.courtStability, crownPrinceInfluence: heir?.influence, strongestPrinceInfluence: strongest?.influence };
       } else if (order.agenda === 'tribal_alliance') {
         const hun = state.special.HUN;
         const tribes = hun.tribes ?? [];
-        if (order.decision === 'assertive') {
+        if (decision === 'assertive') {
           hun.cohesion = clamp((hun.cohesion ?? 58) + 8);
           for (const tribe of tribes) tribe.loyalty = clamp(tribe.loyalty - 3);
-        } else if (order.decision === 'balanced') {
+        } else if (decision === 'balanced') {
           hun.cohesion = clamp((hun.cohesion ?? 58) + 4);
           for (const tribe of tribes) tribe.loyalty = clamp(tribe.loyalty + 2);
         } else {
@@ -941,19 +956,19 @@ export function applyOrder(
         for (const tribe of tribes) {
           tribe.stance = tribe.loyalty >= 65 ? 'eager' : tribe.loyalty >= 50 ? 'watchful' : tribe.loyalty >= 38 ? 'reluctant' : 'refusing';
         }
-        summary = order.decision === 'assertive'
+        summary = decision === 'assertive'
           ? `诸将要求统一号令，君主以强令整合联盟：协调度升至 ${Math.round(hun.cohesion ?? 0)}，但各部忠诚各降 3。`
-          : order.decision === 'balanced'
+          : decision === 'balanced'
             ? `廷议以赏赐与军令折中：协调度升至 ${Math.round(hun.cohesion ?? 0)}，各部忠诚 +2。`
             : `廷议优先兑现盟约，各部忠诚 +5，联盟协调度升至 ${Math.round(hun.cohesion ?? 0)}。`;
         after = { ...after, cohesion: hun.cohesion, tribes: tribes.map((t) => ({ id: t.tribeId, loyalty: t.loyalty, stance: t.stance })) };
       } else {
         const chu = state.special.CHU;
         const houses = chu.houses ?? [];
-        if (order.decision === 'assertive') {
+        if (decision === 'assertive') {
           chu.centralAuthority = clamp((chu.centralAuthority ?? 55) + 10);
           for (const house of houses) house.support = clamp(house.support - 5);
-        } else if (order.decision === 'balanced') {
+        } else if (decision === 'balanced') {
           chu.centralAuthority = clamp((chu.centralAuthority ?? 55) + 4);
           for (const house of houses) house.support = clamp(house.support + 2);
         } else {
@@ -964,9 +979,9 @@ export function applyOrder(
           house.taxCompliance = Math.round((0.6 + house.support / 250) * 100) / 100;
           house.privateForce = Math.round(3_000 + house.support * BALANCE.politics.chu.privateForcePerSupport);
         }
-        summary = order.decision === 'assertive'
+        summary = decision === 'assertive'
           ? `台谏要求收归财赋与任官之权，世家代表警告反弹。中枢权威升至 ${Math.round(chu.centralAuthority ?? 0)}，各家支持下降 5。`
-          : order.decision === 'balanced'
+          : decision === 'balanced'
             ? `廷议以让利换取合作：中枢权威升至 ${Math.round(chu.centralAuthority ?? 0)}，各家支持 +2。`
             : `朝廷允诺地方保留更多利益，各家支持 +6，但中枢权威降至 ${Math.round(chu.centralAuthority ?? 0)}。`;
         after = { ...after, centralAuthority: chu.centralAuthority, houses: houses.map((h) => ({ id: h.houseId, support: h.support, taxCompliance: h.taxCompliance })) };
@@ -994,6 +1009,15 @@ export function applyOrder(
         }
         summary += ` 双方论证能力差使议案主要效果${debate.edge > 0 ? '增强' : '减弱'} ${debate.edge > 0 ? '+' : ''}${debate.edge}。`;
       }
+      const resolutionLabel = order.resolution === 'adopt_speaker'
+        ? `采纳主议臣意见（${debate.speaker?.name ?? '主议臣'}）`
+        : order.resolution === 'adopt_opposition'
+          ? `驳回主议、采纳反对臣意见（${debate.opposition?.name ?? '反对臣'}）`
+          : order.resolution === 'compromise'
+            ? '折中调和双方意见'
+            : '君主直接裁定政策方向';
+      const decisionRecord = { resolutionLabel, finalPolicy: COURT_DECISION_LABEL[decision] };
+      after = { ...after, ...decisionRecord };
       const debateRecord = {
         speakerPersonId: debate.speaker?.person_id ?? null,
         speakerName: debate.speaker?.name ?? '廷臣集议',
@@ -1008,7 +1032,7 @@ export function applyOrder(
         emitEvent(state, {
           type: 'politics',
           title: `朝廷廷议·${agendaLabel}：${decisionLabel}`,
-          summary: `${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」。 ` : ''}${summary} 廷议所列分歧：${order.agenda === 'war_council' ? '兵部主战、仓曹顾虑军需' : order.agenda === 'succession' ? '储位名分与诸王平衡' : order.agenda === 'tribal_alliance' ? '盟约兑现与统一军令' : '世家利益与中枢权威'}。执行耗银 ${cost.toLocaleString()} 两。`,
+          summary: `${resolutionLabel}；最终政策「${COURT_DECISION_LABEL[decision]}」。 ${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」。 ` : ''}${summary} 廷议所列分歧：${order.agenda === 'war_council' ? '兵部主战、仓曹顾虑军需' : order.agenda === 'succession' ? '储位名分与诸王平衡' : order.agenda === 'tribal_alliance' ? '盟约兑现与统一军令' : '世家利益与中枢权威'}。执行耗银 ${cost.toLocaleString()} 两。`,
           actorId,
           actorName,
           factionKey: fk,
