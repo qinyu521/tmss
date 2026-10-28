@@ -795,8 +795,11 @@ export function applyOrder(
 ): void {
   const fk = factionKeyOverride ?? state.factionKey;
   const faction = state.factions[fk];
-  const actorId = source === 'npc_ai' ? orderActorFor(state, order) : state.playerPersonId;
-  const actorName = source === 'npc_ai' ? orderActorNameFor(state, order) : state.playerPersonName;
+  const npcSettlementActor = source === 'npc_ai' && order.kind === 'settle_defeated_commander'
+    ? npcActor(ctx, fk)
+    : undefined;
+  const actorId = source === 'npc_ai' ? (npcSettlementActor?.id ?? orderActorFor(state, order)) : state.playerPersonId;
+  const actorName = source === 'npc_ai' ? (npcSettlementActor?.name ?? orderActorNameFor(state, order)) : state.playerPersonName;
   switch (order.kind) {
     case 'move_army': {
       const army = state.armies.find((a) => a.armyId === order.armyId);
@@ -1504,7 +1507,7 @@ export function applyOrder(
       events.push(emitEvent(state, {
         type: 'politics',
         title: settlementTitle,
-        summary: settlementSummary + (politicalOutcome ? ' ' + politicalOutcome : ''),
+        summary: settlementSummary + (politicalOutcome ? ' ' + politicalOutcome : '') + (source === 'npc_ai' && order.npcRulingNote ? ' ' + order.npcRulingNote : ''),
         actorId,
         actorName,
         factionKey: fk,
@@ -1525,7 +1528,9 @@ export function applyOrder(
           training: trainingAfter,
           armyId: army?.armyId,
         },
-        evidence: '仅允许处置上一回合记录为战败的在世将领；抚恤/追责结果由规则引擎结算',
+        evidence: source === 'npc_ai'
+          ? 'NPC 君主依据在朝声望、显式关系网络、伤亡比例与国库状况自主裁决；结算由同一规则引擎执行'
+          : '仅允许处置上一回合记录为战败的在世将领；抚恤/追责结果由规则引擎结算',
         source,
       }));
       return;
