@@ -12,6 +12,7 @@ import {
   courtOpinion,
   courtRecommendedDecision,
   courtRelationshipAffinity,
+  politicalGrudgeCourtPenalty,
   appointmentRelationshipEffect,
   successionNetworkInfluence,
   successionCommandRisk,
@@ -233,6 +234,16 @@ describe('朝廷廷议', () => {
     expect(debatedEvents[0].summary).toContain(courtOpinion(speaker, 'succession'));
     expect(debatedEvents[0].summary).toContain(courtOpinion(opposition, 'succession'));
     expect((debatedEvents[0].after as Record<string, unknown>).debateEdge).toBeGreaterThan(0);
+
+    const rivalPrince = debated.special.YONG.princes!.find((prince) => prince.personId !== speaker.person_id)!;
+    const resentful = newGame('YONG');
+    resentful.characters[speaker.person_id].politicalGrudges = { [rivalPrince.personId]: 18 };
+    const resentfulEvents: GameEvent[] = [];
+    applyOrder(resentful, ctx, { ...debatedOrder, orderId: 'court-resentful' }, resentfulEvents);
+    expect((resentfulEvents[0].after as Record<string, unknown>).speakerScore).toBeLessThan(
+      (debatedEvents[0].after as Record<string, unknown>).speakerScore as number,
+    );
+    expect(politicalGrudgeCourtPenalty({ [rivalPrince.personId]: 18 }, [rivalPrince.personId])).toBe(6);
   });
 
   it('主议臣与反对臣必须是不同的本国在世人物', () => {
@@ -892,6 +903,8 @@ describe('回合结算', () => {
     expect(trialState.characters[trialCommanderId].pendingBattleCase).toBeUndefined();
     expect(trialEvents[0].title).toContain('公开审判');
     expect(trialEvents[0].summary).toContain('公开审判');
+    expect(trialState.characters[trialCommanderId].politicalGrudges?.[rivalPrince.personId]).toBe(12);
+    expect(trialEvents[0].summary).toContain('后续廷议');
   });
 
   it('惨重战败会生成请调或弹劾事件，且案件只对败军所属势力可见', () => {
