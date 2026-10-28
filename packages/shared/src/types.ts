@@ -674,6 +674,8 @@ export interface CharacterRuntime {
   courtStanding?: number;
   /** 本局军令忠诚度（0-100）；赏赐可以提升，旧档按种子忠诚度迁移 */
   militaryLoyalty?: number;
+  /** 战后降职/公开审判造成的统率惩罚，参与后续战斗计算；恢复任命可逐步清除 */
+  commandPenalty?: number;
   /** 最近一场战斗发生的回合；处置命令只允许在下一回合使用 */
   lastBattleTurn?: number;
   /** 最近一场战斗结果 */
