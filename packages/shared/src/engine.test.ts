@@ -838,6 +838,62 @@ describe('回合结算', () => {
     expect(chu.characters[chuCommander].courtStanding).toBe(45);
   });
 
+  it('降职会持久降低统率并影响后续战斗，公开审判会造成更强烈的政治代价', () => {
+    const demoteState = newGame('YONG');
+    const demoteArmy = demoteState.armies.find((army) => army.faction === 'YONG')!;
+    const demoteCommanderId = demoteArmy.commanderId;
+    const demoteRuntime = demoteState.characters[demoteCommanderId];
+    Object.assign(demoteRuntime, { lastBattleOutcome: 'defeat', pendingBattleSettlement: true, pendingBattleCase: 'transfer_request', militaryLoyalty: 50 });
+    demoteArmy.morale = 60;
+    demoteArmy.training = 60;
+    const demoteEvents: GameEvent[] = [];
+    const demoteOrder = { orderId: 'demote-after-defeat', kind: 'settle_defeated_commander' as const, personId: demoteCommanderId, action: 'demote' as const };
+    expect(validateOrder(demoteState, ctx, demoteOrder).ok).toBe(true);
+    applyOrder(demoteState, ctx, demoteOrder, demoteEvents);
+    expect(demoteState.characters[demoteCommanderId].militaryLoyalty).toBe(44);
+    expect(demoteState.characters[demoteCommanderId].commandPenalty).toBe(8);
+    expect(demoteState.characters[demoteCommanderId].courtStanding).toBe(45);
+    expect(demoteArmy.morale).toBe(58);
+    expect(demoteArmy.training).toBe(62);
+    expect(demoteState.characters[demoteCommanderId].pendingBattleSettlement).toBe(false);
+    expect(demoteEvents[0].title).toContain('降职问责');
+
+    const withPenalty = clone(demoteState);
+    const withoutPenalty = clone(demoteState);
+    withoutPenalty.characters[demoteCommanderId].commandPenalty = 0;
+    const battlePower = (state: GameState) => {
+      const army = state.armies.find((item) => item.armyId === demoteArmy.armyId)!;
+      const region = state.regions[army.nodeId];
+      return resolveBattle(state, ctx, army, null, region, 98765).attackerPower;
+    };
+    expect(battlePower(withPenalty)).toBeLessThan(battlePower(withoutPenalty));
+
+    const trialState = newGame('YONG');
+    const trialArmy = trialState.armies.find((army) => army.faction === 'YONG')!;
+    const trialCommanderId = trialArmy.commanderId;
+    const rivalPrince = trialState.special.YONG.princes!.find((prince) => prince.personId !== trialCommanderId)!;
+    const influenceBefore = rivalPrince.influence;
+    const stabilityBefore = trialState.special.YONG.courtStability ?? 50;
+    const trialRuntime = trialState.characters[trialCommanderId];
+    Object.assign(trialRuntime, { lastBattleOutcome: 'defeat', pendingBattleSettlement: true, pendingBattleCase: 'impeachment', battlePoliticalOpponentId: rivalPrince.personId, militaryLoyalty: 70, courtStanding: 50 });
+    trialArmy.morale = 60;
+    trialArmy.training = 50;
+    const trialEvents: GameEvent[] = [];
+    const trialOrder = { orderId: 'public-trial-after-defeat', kind: 'settle_defeated_commander' as const, personId: trialCommanderId, action: 'trial' as const };
+    expect(validateOrder(trialState, ctx, trialOrder).ok).toBe(true);
+    applyOrder(trialState, ctx, trialOrder, trialEvents);
+    expect(trialState.characters[trialCommanderId].militaryLoyalty).toBe(55);
+    expect(trialState.characters[trialCommanderId].commandPenalty).toBe(12);
+    expect(trialState.characters[trialCommanderId].courtStanding).toBe(40);
+    expect(rivalPrince.influence).toBe(Math.min(100, influenceBefore + 4));
+    expect(trialState.special.YONG.courtStability).toBe(Math.max(0, stabilityBefore - 4));
+    expect(trialArmy.morale).toBe(55);
+    expect(trialArmy.training).toBe(53);
+    expect(trialState.characters[trialCommanderId].pendingBattleCase).toBeUndefined();
+    expect(trialEvents[0].title).toContain('公开审判');
+    expect(trialEvents[0].summary).toContain('公开审判');
+  });
+
   it('惨重战败会生成请调或弹劾事件，且案件只对败军所属势力可见', () => {
     const state = newGame('HUN', 'ruler', 'aftermath-politics-case');
     const attacker = state.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
