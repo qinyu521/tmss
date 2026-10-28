@@ -1,4 +1,54 @@
-import type { RelationshipSeed } from '../types.js';
+import type { CharacterSeed, FactionKey, RelationshipSeed } from '../types.js';
+
+export interface DefectionAllegiance {
+  targetFaction: FactionKey;
+  targetPersonId: string;
+  targetPersonName: string;
+  strength: number;
+}
+
+/**
+ * A commander can consider defecting only when a strong, explicit, non-hostile
+ * relationship connects them to a living person of another faction. War status
+ * and runtime allegiance are injected by the caller, so this helper stays pure.
+ */
+export function findDefectionAllegiance(
+  relationships: readonly RelationshipSeed[],
+  charactersById: Record<string, CharacterSeed>,
+  commanderId: string,
+  currentFaction: FactionKey,
+  targetFactionOf: (personId: string) => FactionKey | undefined,
+  isEligibleTarget: (personId: string, factionKey: FactionKey) => boolean,
+): DefectionAllegiance | null {
+  const hostile = /竞争|制衡|敌对|不和|争夺|仇敌|追杀/;
+  const candidates = new Map<string, DefectionAllegiance>();
+  for (const edge of relationships) {
+    const targetId = edge.source_person_id === commanderId
+      ? edge.target_person_id
+      : edge.target_person_id === commanderId
+        ? edge.source_person_id
+        : '';
+    if (!targetId || targetId === commanderId || edge.strength !== '强') continue;
+    const target = charactersById[targetId];
+    const targetFaction = targetFactionOf(targetId);
+    if (!target || !targetFaction || targetFaction === currentFaction) continue;
+    if (hostile.test(`${edge.relation} ${edge.notes}`)) continue;
+    if (!isEligibleTarget(targetId, targetFaction)) continue;
+    const existing = candidates.get(targetId);
+    const candidate = {
+      targetFaction,
+      targetPersonId: targetId,
+      targetPersonName: target.name,
+      strength: 3,
+    };
+    if (!existing || candidate.strength > existing.strength) candidates.set(targetId, candidate);
+  }
+  return [...candidates.values()].sort(
+    (a, b) => b.strength - a.strength ||
+      a.targetFaction.localeCompare(b.targetFaction) ||
+      a.targetPersonId.localeCompare(b.targetPersonId),
+  )[0] ?? null;
+}
 
 export interface AppointmentRelationshipEffect {
   orderDelta: number;
