@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, type BuiltApp } from './app.js';
+import { createGame } from '@tianming/shared';
+import { saveGameState } from './gameRepo.js';
 import type { LlmFetcher } from './llm.js';
 
 let built: BuiltApp;
@@ -98,6 +100,49 @@ describe('API 集成', () => {
     await app.inject({ method: 'POST', url: `/api/games/${gid}/turn` });
     const after = await app.inject({ method: 'GET', url: `/api/characters/${items[0].person_id}?gameId=${gid}` });
     expect(after.json().runtime).toBeTruthy();
+  });
+
+  it('携带 gameId 查询势力名册时会按倒戈后的本局效忠归属重新筛选和分页', async () => {
+    const gameId = 'api-runtime-defection-roster';
+    const state = createGame(built.seed, {
+      gameId,
+      factionKey: 'CHU',
+      playerRole: 'ruler',
+      seed: 20261028,
+    });
+    const defectingArmy = state.armies.find((army) => army.faction === 'CHU')!;
+    const commanderId = defectingArmy.commanderId;
+    state.characters[commanderId].allegianceFaction = 'HUN';
+    state.characters[commanderId].defectionWarningTurn = 1;
+    state.characters[commanderId].defectionTargetFaction = 'HUN';
+    saveGameState(built.db, state);
+
+    const hunRoster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=HUN&pageSize=80&gameId=${gameId}`,
+    });
+    expect(hunRoster.statusCode).toBe(200);
+    const hunBody = hunRoster.json();
+    expect(hunBody.total).toBe(113);
+    const hunPageTwo = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=HUN&page=2&pageSize=80&gameId=${gameId}`,
+    });
+    const hunItems = [...hunBody.items, ...hunPageTwo.json().items];
+    const defected = hunItems.find((person: any) => person.person_id === commanderId);
+    expect(defected).toBeTruthy();
+    expect(defected.faction_key).toBe('HUN');
+    expect(defected.originalFactionKey).toBe('CHU');
+    expect(defected.allegianceFaction).toBe('HUN');
+    expect(defected.defectionWarningTurn).toBe(1);
+
+    const chuRoster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=CHU&pageSize=80&gameId=${gameId}`,
+    });
+    expect(chuRoster.statusCode).toBe(200);
+    expect(chuRoster.json().total).toBe(111);
+    expect(chuRoster.json().items.some((person: any) => person.person_id === commanderId)).toBe(false);
   });
 
   it('22 个兵种含派生数值档案', async () => {
