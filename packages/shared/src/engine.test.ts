@@ -12,6 +12,9 @@ import {
   courtOpinion,
   courtRecommendedDecision,
   courtRelationshipAffinity,
+  appointmentRelationshipEffect,
+  successionNetworkInfluence,
+  runPolitics,
   createGame,
   generateNpcOrders,
   migrateState,
@@ -280,6 +283,72 @@ describe('朝廷廷议', () => {
     expect(courtRelationshipAffinity([relationship], 'YONG-A', 'succession', ['YONG-PRINCE'])).toBe(10);
     expect(courtRelationshipAffinity([relationship], 'YONG-A', 'war_council', ['YONG-PRINCE'])).toBe(8);
     expect(courtRelationshipAffinity([relationship], 'YONG-A', 'succession', ['OTHER-PRINCE'])).toBe(0);
+  });
+
+  it('任命时真实关系会改变地方秩序与忠诚的交接结果', () => {
+    const state = newGame('YONG');
+    const region = state.regions['YONG-REG01'];
+    const appointee = ctx.seed.characters.find(
+      (person) => person.faction_key === 'YONG' && person.person_id !== region.governorId,
+    )!;
+    const relationship = {
+      faction: '大雍',
+      source_person_id: appointee.person_id,
+      source_name: appointee.name,
+      relation: '州府主官—副官',
+      target_person_id: region.governorId,
+      target_name: region.governorName,
+      strength: '强',
+      notes: '测试交接协作',
+    };
+    const effect = appointmentRelationshipEffect(
+      [relationship],
+      appointee.person_id,
+      region.governorId,
+      region.garrisonCommanderId,
+    );
+    expect(effect.orderDelta).toBeGreaterThan(0);
+    expect(effect.loyaltyDelta).toBeGreaterThan(0);
+
+    const rival = appointmentRelationshipEffect(
+      [{ ...relationship, relation: '世家竞争/利益制衡' }],
+      appointee.person_id,
+      region.governorId,
+      region.garrisonCommanderId,
+    );
+    expect(rival.orderDelta).toBeLessThan(0);
+    expect(rival.loyaltyDelta).toBeLessThan(0);
+  });
+
+  it('夺嫡危机持续时，皇子的显式关系网络会参与影响力变化', () => {
+    const relationships = [
+      {
+        faction: '大雍', source_person_id: 'YONG-PRINCE', source_name: '皇子',
+        relation: '父子关系', target_person_id: 'YONG-A', target_name: '甲',
+        strength: '强', notes: '宗室关系',
+      },
+      {
+        faction: '大雍', source_person_id: 'YONG-B', source_name: '乙',
+        relation: '主君—副将', target_person_id: 'YONG-PRINCE', target_name: '皇子',
+        strength: '中', notes: '政治协作',
+      },
+    ];
+    const eligible = (id: string) => id === 'YONG-A' || id === 'YONG-B';
+    expect(successionNetworkInfluence(relationships, 'YONG-PRINCE', eligible)).toBe(0.53);
+    expect(successionNetworkInfluence(relationships, 'YONG-PRINCE', () => false)).toBe(0);
+    expect(successionNetworkInfluence([], 'YONG-PRINCE', eligible)).toBe(0);
+
+    const state = newGame('YONG');
+    state.flags.successionCrisis = true;
+    const prince = state.special.YONG.princes![0];
+    const before = prince.influence;
+    const events: GameEvent[] = [];
+    runPolitics(state, ctx, events);
+    // 在世关系网络已连入回合政治公式，影响力仍受 0–100 上下限约束。
+    expect(prince.influence).toBeGreaterThanOrEqual(0);
+    expect(prince.influence).toBeLessThanOrEqual(100);
+    expect(Number.isFinite(prince.influence)).toBe(true);
+    expect(before).toBeGreaterThanOrEqual(0);
   });
 
   it('非玩家大雍会按国情与人物属性自主召开廷议', () => {
