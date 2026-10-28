@@ -507,6 +507,36 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         return issues('NO_RECENT_DEFEAT', '只能处置尚未善后的最近一场战败；不能重复追责旧战或凭空制造战败。');
       }
       const army = state.armies.find((item) => item.faction === state.factionKey && item.commanderId === person.person_id);
+      if (order.action === 'replace') {
+        if (!army) return issues('NO_ACTIVE_ARMY', '原军团已溃散或不复存在，无法在战后撤换统将。');
+        if (!order.replacementPersonId) return issues('REPLACEMENT_REQUIRED', '撤换统将必须指定接任人选。');
+        const replacement = ctx.charactersById[order.replacementPersonId];
+        if (
+          !replacement ||
+          replacement.faction_key !== state.factionKey ||
+          replacement.person_id === person.person_id
+        ) {
+          return issues('INVALID_REPLACEMENT', '接任人选必须是另一名本方人物。');
+        }
+        if (!isCharacterAlive(state, replacement.person_id)) {
+          return issues('PERSON_DEAD', '接任人选已故，不能统兵。');
+        }
+        const commandsArmy = state.armies.some(
+          (item) => item.faction === state.factionKey && item.commanderId === replacement.person_id,
+        );
+        const commandsGarrison = Object.values(state.regions).some(
+          (region) => region.faction === state.factionKey && region.garrisonCommanderId === replacement.person_id,
+        );
+        if (commandsArmy || commandsGarrison) {
+          return issues('COMMANDER_BUSY', '接任人选已统领其他军团或州兵，不能重复任命；请先选择未掌兵的将领。');
+        }
+        const current = runtime.militaryLoyalty ?? person.loyalty;
+        return {
+          ok: true,
+          issues: [],
+          preview: '撤换败将' + person.name + '，由' + replacement.name + '接掌' + army.name + '；不耗银，但旧将军令忠诚 -10，交接使所部士气 -5。',
+        };
+      }
       if (order.action === 'relieve') {
         if (faction.resources.cash < 12_000) return issues('NO_CASH', '抚恤败军需银 12000 两。');
         const current = runtime.militaryLoyalty ?? person.loyalty;
@@ -1232,6 +1262,49 @@ export function applyOrder(
       if (!runtime) return;
       const before = clamp(runtime.militaryLoyalty ?? person.loyalty);
       const army = state.armies.find((item) => item.faction === fk && item.commanderId === person.person_id);
+      if (order.action === 'replace') {
+        const replacement = order.replacementPersonId ? ctx.charactersById[order.replacementPersonId] : null;
+        if (!army || !replacement || !state.characters[replacement.person_id]) return;
+        const loyaltyAfter = clamp(before - 10);
+        const moraleBefore = army.morale;
+        const moraleAfter = clamp(army.morale - 5);
+        const previousCommanderId = army.commanderId;
+        const previousCommanderName = army.commanderName;
+        army.commanderId = replacement.person_id;
+        army.commanderName = replacement.name;
+        army.morale = moraleAfter;
+        runtime.militaryLoyalty = loyaltyAfter;
+        runtime.pendingBattleSettlement = false;
+        state.characters[person.person_id] = runtime;
+        events.push(emitEvent(state, {
+          type: 'politics',
+          title: '撤换败将·' + person.name + ' → ' + replacement.name,
+          summary: '君主撤换战败统将' + person.name + '，改由' + replacement.name + '接掌' + army.name + '。旧将军令忠诚由 ' + Math.round(before) + ' 降至 ' + Math.round(loyaltyAfter) + '；新旧指挥交接使所部士气 ' + Math.round(moraleBefore) + ' → ' + Math.round(moraleAfter) + '。',
+          actorId,
+          actorName,
+          factionKey: fk,
+          targetId: army.armyId,
+          targetLabel: army.name,
+          before: {
+            commanderId: previousCommanderId,
+            commanderName: previousCommanderName,
+            militaryLoyalty: before,
+            morale: moraleBefore,
+          },
+          after: {
+            action: order.action,
+            commanderId: replacement.person_id,
+            commanderName: replacement.name,
+            dismissedCommanderId: person.person_id,
+            militaryLoyalty: loyaltyAfter,
+            loyaltyDelta: loyaltyAfter - before,
+            morale: moraleAfter,
+          },
+          evidence: '仅允许君主撤换尚未善后的本方战败统将；接任人选必须在世、同属本方且未统领其他军团或州兵',
+          source,
+        }));
+        return;
+      }
       const cashBefore = faction.resources.cash;
       let loyaltyAfter = before;
       let moraleBefore: number | undefined;
