@@ -34,7 +34,10 @@ export function runPolitics(state: GameState, ctx: DerivedContext, events: GameE
       }
     }
     const avg = hun.tribes.reduce((s, t) => s + t.loyalty, 0) / hun.tribes.length;
-    hun.cohesion = clamp(BALANCE.politics.hun.baseCohesion + (avg - 55) * 0.7);
+    const cohesionFromLoyalty = BALANCE.politics.hun.baseCohesion + (avg - 55) * 0.7;
+    // 联盟协调度可被王庭议事直接改变；部落忠诚是重要输入，但不能每旬将政治决策完全覆盖。
+    const currentCohesion = hun.cohesion ?? cohesionFromLoyalty;
+    hun.cohesion = clamp(currentCohesion * 0.8 + cohesionFromLoyalty * 0.2);
     const refusal = hun.tribes.some((t) => t.stance === 'refusing');
     if (refusal !== state.flags.tribalRefusal) {
       state.flags.tribalRefusal = refusal;
