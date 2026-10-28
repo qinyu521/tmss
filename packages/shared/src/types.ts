@@ -593,6 +593,8 @@ export type SchemeKind = 'fire' | 'cut_supply' | 'sow_discord' | 'ambush' | 'fei
 export type CourtAgenda = 'war_council' | 'succession' | 'tribal_alliance' | 'clan_relations';
 /** 决策倾向：强硬、折中、怀柔；议题不同，实际政治代价不同。 */
 export type CourtDecision = 'assertive' | 'balanced' | 'conciliatory';
+/** 君主如何处理争论双方的意见。 */
+export type CourtResolution = 'adopt_speaker' | 'adopt_opposition' | 'compromise';
 
 export type Order =
   | {
@@ -638,6 +640,8 @@ export type Order =
       speakerPersonId?: string;
       /** 反对臣：能力越强，主议效果越容易被制衡 */
       oppositionPersonId?: string;
+      /** 君主裁定：采纳主议臣、采纳反对臣或折中；缺省保留旧版直接指定 decision 的行为 */
+      resolution?: CourtResolution;
     }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
