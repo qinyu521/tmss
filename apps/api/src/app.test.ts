@@ -169,6 +169,12 @@ describe('API 集成', () => {
     });
     expect(created.statusCode).toBe(200);
     const gid = created.json().gameId as string;
+    const roster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=YONG&pageSize=8&gameId=${gid}`,
+    });
+    const officials = roster.json().items.filter((person: any) => person.alive !== false);
+    expect(officials.length).toBeGreaterThanOrEqual(2);
     const order = await app.inject({
       method: 'POST',
       url: `/api/games/${gid}/orders`,
@@ -178,6 +184,8 @@ describe('API 集成', () => {
           kind: 'hold_court',
           agenda: 'succession',
           decision: 'balanced',
+          speakerPersonId: officials[0].person_id,
+          oppositionPersonId: officials[1].person_id,
         }],
       },
     });
@@ -191,6 +199,9 @@ describe('API 集成', () => {
     const court = body.report.events.find((event: any) => event.type === 'politics' && event.title.includes('皇嗣与储位'));
     expect(court).toBeTruthy();
     expect(court.after.courtStability).toBeGreaterThan(0);
+    expect(court.after.speakerPersonId).toBe(officials[0].person_id);
+    expect(court.after.oppositionPersonId).toBe(officials[1].person_id);
+    expect(court.summary).toContain(officials[0].name);
     expect(body.view.special.courtStability).toBeGreaterThan(0);
   });
 
