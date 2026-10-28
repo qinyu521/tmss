@@ -12,6 +12,7 @@ import {
   courtOpinion,
   courtRecommendedDecision,
   createGame,
+  migrateState,
   resolveBattle,
   runTurn,
   validateOrder,
@@ -272,6 +273,8 @@ describe('朝廷廷议', () => {
       (person) => person.faction_key === 'YONG' && person.person_id !== speaker!.person_id,
     )!;
     const state = newGame('YONG');
+    const speakerStandingBefore = state.characters[speaker!.person_id].courtStanding ?? 50;
+    const oppositionStandingBefore = state.characters[opposition.person_id].courtStanding ?? 50;
     const beforeMorale = state.armies.filter((army) => army.faction === 'YONG').reduce((sum, army) => sum + army.morale, 0);
     const order = {
       orderId: 'court-adopt-speaker',
@@ -291,6 +294,23 @@ describe('朝廷廷议', () => {
     expect((events[0].after as Record<string, unknown>).resolution).toBe('adopt_speaker');
     expect(events[0].summary).toContain('采纳主议臣意见');
     expect(afterMorale).toBeGreaterThan(beforeMorale);
+    expect(state.characters[speaker!.person_id].courtStanding).toBeGreaterThan(speakerStandingBefore);
+    expect(state.characters[opposition.person_id].courtStanding).toBeLessThan(oppositionStandingBefore);
+  });
+
+  it('v2 旧存档迁移会补齐声望，但保留人物生死状态', () => {
+    const state = newGame('YONG');
+    state.schemaVersion = 2;
+    const person = ctx.seed.characters.find((candidate) => candidate.faction_key === 'YONG')!;
+    state.characters[person.person_id].courtStanding = undefined;
+    state.characters[person.person_id].alive = false;
+    state.characters[person.person_id].deathCause = '测试旧档死因';
+
+    const migrated = migrateState(state, ctx.seed.characters);
+    expect(migrated.schemaVersion).toBe(3);
+    expect(migrated.characters[person.person_id].courtStanding).toBe(50);
+    expect(migrated.characters[person.person_id].alive).toBe(false);
+    expect(migrated.characters[person.person_id].deathCause).toBe('测试旧档死因');
   });
 
   it('匈奴廷议在强化联盟协调度时，会真实付出部落忠诚代价', () => {
