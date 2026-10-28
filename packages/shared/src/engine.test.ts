@@ -597,7 +597,7 @@ describe('朝廷廷议', () => {
 
 describe('政治裁决的派系站队后果', () => {
   it('明确支持关系会为败将一系增加声望，竞争关系不会被误当作盟友', () => {
-    const state = newGame('YONG', 'ruler', 'political-bloc-standing');
+    const state = newGame('CHU', 'ruler', 'political-bloc-standing');
     const commander = state.armies.find((army) => army.faction === 'CHU')!;
     const commanderId = commander.commanderId;
     const sameFaction = seed.characters.filter((person) => person.faction_key === 'CHU' && person.person_id !== commanderId);
@@ -649,7 +649,8 @@ describe('政治裁决的派系站队后果', () => {
     expect(state.characters[ally.person_id].courtStanding).toBe(51);
     expect(state.characters[opponent.person_id].courtStanding).toBe(36);
     expect(events[0].summary).toContain('派系站队');
-    expect(events[0].summary).toContain('明确'); // fixture relation is reflected via the named supporters' standing.
+    expect(events[0].summary).toContain(ally.name);
+    expect(events[0].summary).toContain('声望 50→51');
   });
 });
 
