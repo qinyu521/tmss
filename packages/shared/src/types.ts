@@ -583,6 +583,7 @@ export type OrderKind =
   | 'negotiate_house'
   | 'hold_court'
   | 'reward_commander'
+  | 'settle_defeated_commander'
   | 'appoint'
   | 'rest_army'
   | 'scout'
