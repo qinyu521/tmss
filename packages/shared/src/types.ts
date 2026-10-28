@@ -646,6 +646,7 @@ export type Order =
     }
   | { orderId: string; kind: 'reward_commander'; personId: string; amount: number }
   | { orderId: string; kind: 'settle_defeated_commander'; personId: string; action: 'relieve' | 'discipline' }
+  | { orderId: string; kind: 'settle_defeated_commander'; personId: string; action: 'relieve' | 'discipline' }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }
