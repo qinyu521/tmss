@@ -9,6 +9,7 @@ import {
   applyUnitNames,
   buildContext,
   buildPlayerView,
+  courtOpinion,
   createGame,
   resolveBattle,
   runTurn,
@@ -220,6 +221,8 @@ describe('朝廷廷议', () => {
     expect(debated.special.YONG.courtStability).toBeGreaterThan(plain.special.YONG.courtStability ?? 0);
     expect(debatedEvents[0].summary).toContain(speaker.name);
     expect(debatedEvents[0].summary).toContain(opposition.name);
+    expect(debatedEvents[0].summary).toContain(courtOpinion(speaker, 'succession'));
+    expect(debatedEvents[0].summary).toContain(courtOpinion(opposition, 'succession'));
     expect((debatedEvents[0].after as Record<string, unknown>).debateEdge).toBeGreaterThan(0);
   });
 
