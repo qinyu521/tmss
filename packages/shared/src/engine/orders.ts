@@ -138,6 +138,62 @@ function recordPoliticalGrudge(
   return grudges[targetPersonId];
 }
 
+function applyPoliticalBlocReaction(
+  state: GameState,
+  ctx: DerivedContext,
+  commanderId: string,
+  opponentId: string,
+  action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial',
+): string {
+  const factionKey = ctx.charactersById[commanderId]?.faction_key;
+  if (!factionKey || ctx.charactersById[opponentId]?.faction_key !== factionKey) return '';
+  const hostile = /竞争|制衡|敌对|不和|争夺/;
+  const collect = (anchorId: string): { personId: string; weight: number }[] => {
+    const candidates = new Map<string, number>();
+    for (const edge of ctx.seed.relationships) {
+      const otherId = edge.source_person_id === anchorId
+        ? edge.target_person_id
+        : edge.target_person_id === anchorId
+          ? edge.source_person_id
+          : '';
+      if (!otherId || otherId === commanderId || otherId === opponentId) continue;
+      const person = ctx.charactersById[otherId];
+      if (!person || person.faction_key !== factionKey || !isCharacterAlive(state, otherId)) continue;
+      if (hostile.test(`${edge.relation} ${edge.notes}`)) continue;
+      const weight = edge.strength === '强' ? 3 : edge.strength === '中' ? 2 : 1;
+      candidates.set(otherId, Math.max(candidates.get(otherId) ?? 0, weight));
+    }
+    return [...candidates.entries()]
+      .map(([personId, weight]) => ({ personId, weight }))
+      .sort((a, b) => b.weight - a.weight || a.personId.localeCompare(b.personId))
+      .slice(0, 3);
+  };
+  const commanderSupport = collect(commanderId);
+  const opponentSupport = collect(opponentId);
+  const commanderIds = new Set(commanderSupport.map((item) => item.personId));
+  const opponentIds = new Set(opponentSupport.map((item) => item.personId));
+  // 双方都连接的人物视为观望派，不在一次裁决中被重复奖惩。
+  const uniqueCommanderSupport = commanderSupport.filter((item) => !opponentIds.has(item.personId));
+  const uniqueOpponentSupport = opponentSupport.filter((item) => !commanderIds.has(item.personId));
+  const backsCommander = action === 'relieve';
+  const swing = action === 'trial' ? 2 : 1;
+  const changes: string[] = [];
+  const apply = (members: { personId: string; weight: number }[], delta: number, side: string) => {
+    for (const member of members) {
+      const before = state.characters[member.personId]?.courtStanding ?? 50;
+      const after = adjustCourtStanding(state, ctx, member.personId, delta) ?? before;
+      if (after !== before) {
+        const name = ctx.charactersById[member.personId]?.name ?? member.personId;
+        changes.push(`${name}（${side}）声望 ${Math.round(before)}→${Math.round(after)}`);
+      }
+    }
+  };
+  apply(uniqueCommanderSupport, backsCommander ? 1 : -swing, '败将一系');
+  apply(uniqueOpponentSupport, backsCommander ? -1 : swing, '弹劾者一系');
+  if (changes.length === 0) return '未发现可区分的显式站队人物，未产生额外声望转移。';
+  return `派系站队：${changes.join('；')}。`;
+}
+
 function resolveBattleCasePolitics(
   state: GameState,
   ctx: DerivedContext,
@@ -194,6 +250,7 @@ function resolveBattleCasePolitics(
         ? `因弹劾被驳，${ctx.charactersById[opponentId].name}对败将积怨（仇怨 ${grudgeScore}/20）；与其相关的后续廷议更难取信。`
         : `${person.name}对${ctx.charactersById[opponentId].name}积怨至 ${grudgeScore}/20；与仇家相关的后续廷议将降低说服力。`;
     }
+    outcome += applyPoliticalBlocReaction(state, ctx, commanderId, opponentId, action);
   } else if (caseType === 'transfer_request') {
     const delta = action === 'replace' ? 2 : action === 'relieve' ? 1 : action === 'demote' ? -5 : action === 'trial' ? -10 : -4;
     adjustCourtStanding(state, ctx, commanderId, delta);
