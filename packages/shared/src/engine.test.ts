@@ -644,6 +644,58 @@ describe('将领倒戈与挽回', () => {
     }
   });
 
+  it('君主可在预警期限内撤换统将，以士气和声望代价阻止倒戈', () => {
+    const state = newGame('CHU', 'ruler', 'defection-preemptive-replacement');
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const region = state.regions[army.nodeId];
+    const oldCommanderId = army.commanderId;
+    const rivalRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    state.diplomacy['HUN|CHU'] = -100;
+    state.characters[oldCommanderId].militaryLoyalty = 10;
+    const replacement = seed.characters.find((person) =>
+      person.faction_key === 'CHU' &&
+      person.person_id !== oldCommanderId &&
+      !state.armies.some((item) => item.commanderId === person.person_id) &&
+      !Object.values(state.regions).some((item) => item.garrisonCommanderId === person.person_id)
+    )!;
+    const restore = attachDefectionTie(oldCommanderId, rivalRuler.person_id);
+    try {
+      const warningEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, warningEvents);
+      expect(state.characters[oldCommanderId].defectionWarningTurn).toBe(state.date.turn);
+      const moraleBefore = army.morale;
+      const standingBefore = state.characters[oldCommanderId].courtStanding ?? 50;
+      const order = {
+        orderId: 'replace-warned-defector',
+        kind: 'replace_warned_commander' as const,
+        armyId: army.armyId,
+        replacementPersonId: replacement.person_id,
+      };
+      expect(validateOrder(state, ctx, order).ok).toBe(true);
+      const events: GameEvent[] = [];
+      applyOrder(state, ctx, order, events);
+      expect(army.commanderId).toBe(replacement.person_id);
+      expect(army.commanderName).toBe(replacement.name);
+      expect(army.morale).toBe(Math.max(0, moraleBefore - 5));
+      expect(state.characters[oldCommanderId].militaryLoyalty).toBe(5);
+      expect(state.characters[oldCommanderId].courtStanding).toBe(Math.max(0, standingBefore - 3));
+      expect(state.characters[oldCommanderId].defectionWarningTurn).toBeUndefined();
+      expect(state.characters[oldCommanderId].defectionTargetFaction).toBeUndefined();
+      expect(events.some((event) => event.title.includes('预防倒戈·撤换统将'))).toBe(true);
+
+      state.date.turn += 1;
+      const nextEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, nextEvents);
+      expect(army.faction).toBe('CHU');
+      expect(region.faction).toBe('CHU');
+      expect(nextEvents.some((event) => event.title.includes('将领倒戈'))).toBe(false);
+
+      expect(validateOrder(state, ctx, order).issues[0].code).toBe('NO_DEFLECTION_WARNING');
+    } finally {
+      restore();
+    }
+  });
+
   it('君主在预警期限内赏赐并恢复忠诚，可以阻止倒戈', () => {
     const state = newGame('CHU', 'ruler', 'defection-prevented');
     const army = state.armies.find((item) => item.faction === 'CHU')!;
