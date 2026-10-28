@@ -3,6 +3,7 @@ import { loadSeed, validateSeed } from './seed-validation';
 
 const seed = loadSeed(process.cwd());
 const result = validateSeed(seed);
+const archetypeByName = new Map(seed.historical_archetypes.map((a: any) => [a.historical_name, a]));
 
 describe('权威种子数据校验', () => {
   it('无硬性错误', () => {
@@ -39,11 +40,68 @@ describe('权威种子数据校验', () => {
     expect(seed.map_edges.every((e: any) => e.origin !== 'derived')).toBe(true);
   });
 
-  it('原型跨阵营冲突只报告、不修改数据', () => {
-    expect(Array.isArray(result.conflicts)).toBe(true);
-    expect(result.conflicts.every((c) => c.startsWith('原型规则冲突：'))).toBe(true);
-    // 冲突存在时必须由报告记录，且种子未被修改
-    expect(seed.characters.filter((c: any) => c.faction_key === 'HUN')).toHaveLength(112);
+  it('当前人物映射符合历史原型主归属与中立岗位规则', () => {
+    expect(result.conflicts).toEqual([]);
+    expect(result.stats.archetype_faction_conflicts).toBe(0);
+  });
+
+  it('明确核心原型保持用户指定的归属方向', () => {
+    const expected: Record<string, string> = {
+      '李靖': 'YONG',
+      '诸葛亮': 'YONG',
+      '赵奢': 'YONG',
+      '曹操': 'YONG',
+      '司马懿': 'YONG',
+      '祖逖': 'YONG',
+      '房玄龄': 'YONG',
+      '杜如晦': 'YONG',
+      '赵普': 'YONG',
+      '包拯': 'YONG',
+      '朱元璋': 'YONG',
+      '徐达': 'YONG',
+      '戚继光': 'YONG',
+      '韩信': 'CHU',
+      '周瑜': 'CHU',
+      '鲁肃': 'CHU',
+      '陆逊': 'CHU',
+      '孟珙': 'CHU',
+      '左宗棠': 'CHU',
+      '木华黎': 'HUN',
+      '速不台': 'HUN',
+      '王猛': 'HUN',
+      '慕容垂': 'HUN',
+      '耶律阿保机': 'HUN',
+      '耶律楚材': 'HUN',
+      '拓跋珪': 'HUN',
+      '完颜宗弼': 'HUN',
+      '伯颜': 'HUN',
+      '脱脱': 'HUN',
+      '秦始皇': 'COMMON',
+      '隋文帝': 'COMMON',
+      '孙武': 'COMMON',
+      '羊祜': 'COMMON',
+      '杜预': 'COMMON',
+      '郭威': 'COMMON',
+      '柴荣': 'COMMON',
+      '钱镠': 'COMMON',
+      '王建（前蜀）': 'COMMON',
+    };
+
+    for (const [name, factionKey] of Object.entries(expected)) {
+      const archetype = archetypeByName.get(name) as any;
+      expect(archetype, `缺少历史原型：${name}`).toBeTruthy();
+      expect(archetype.primary_faction_key, `原型归属错误：${name}`).toBe(factionKey);
+    }
+  });
+
+  it('中立原型只用于在野、地方官、世家或军阀类岗位', () => {
+    const byId = new Map(seed.historical_archetypes.map((a: any) => [a.archetype_id, a]));
+    const allowed = /(在野|州府.*(?:主官|副官)|家主|嫡系继承人|首席谋士|总掌柜|郡县|地方官|县令|郡守|太守|门客|幕僚|军阀|藩镇)/;
+    const misuse = seed.characters.filter((c: any) => {
+      const archetype = byId.get(c.archetype_id) as any;
+      return archetype?.primary_faction_key === 'COMMON' && !allowed.test(c.current_position_standard ?? '');
+    });
+    expect(misuse.map((c: any) => c.person_id)).toEqual([]);
   });
 
   it('姓名没有机械化批量使用「承」字', () => {

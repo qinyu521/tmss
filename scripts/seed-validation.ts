@@ -32,10 +32,32 @@ const EXPECTED_UNIT_NAMES: Record<string, string[]> = {
   CHU: ['无当飞军', '锦帆贼', '白马义从', '神臂弓手', '先登死士', '魏武卒', '陷阵营', '北府兵', '白袍军'],
   YONG: ['背嵬军', '虎豹骑', '白毦兵', '玄甲军', '虎贲军', '西凉铁骑', '戚家军', '羽林骑'],
 };
-const CORE_ARCHETYPE_RULES: Record<string, string[]> = {
-  YONG: ['李靖', '诸葛亮', '赵奢', '李勣', '曹操', '司马懿', '祖逖', '房玄龄', '杜如晦', '赵普', '包拯'],
-  CHU: ['韩信', '陆逊', '周瑜', '鲁肃', '谢安', '杜预', '羊祜', '孟珙', '朱元璋', '左宗棠'],
-  HUN: ['木华黎', '速不台', '王猛', '慕容垂', '耶律阿保机', '耶律楚材', '拓跋珪', '完颜宗弼'],
+/**
+ * 经用户最新规则确认的核心原型归属。
+ * 注意：杜预、羊祜等晋代原型在本版明确标为 COMMON 候选，允许用于在野、
+ * 州府地方官与世家人物；不能再用旧规则强制要求所有相关角色都属于大楚。
+ * 朱元璋、朱棣、张居正、徐达、戚继光等明代原型归大雍；
+ * 汉、宋原型通常归大楚，赵普、包拯等用户先前明确指定的大雍核心原型保留为例外。
+ */
+const CORE_ARCHETYPE_OVERRIDES: Record<string, string[]> = {
+  YONG: [
+    '李靖', '诸葛亮', '赵奢', '李勣', '曹操', '司马懿', '祖逖',
+    '房玄龄', '杜如晦', '赵普', '包拯',
+    '朱元璋', '朱棣', '张居正', '徐达', '戚继光', '魏忠贤',
+  ],
+  CHU: [
+    '韩信', '陆逊', '周瑜', '鲁肃', '谢安', '孟珙', '左宗棠',
+    '刘邦', '汉文帝', '汉武帝', '刘秀', '刘备', '孙权',
+    '萧何', '张良', '陈平', '贾谊', '桑弘羊',
+    '赵匡胤', '王安石', '岳飞', '韩世忠', '秦桧', '蔡京', '童贯', '高俅',
+  ],
+  HUN: [
+    '木华黎', '速不台', '王猛', '慕容垂', '耶律阿保机', '耶律楚材',
+    '拓跋珪', '完颜宗弼', '伯颜', '脱脱', '刘渊', '石勒', '苻坚',
+    '完颜阿骨打', '成吉思汗', '忽必烈', '努尔哈赤', '皇太极',
+    '和珅', '多尔衮', '鳌拜', '耶律德光', '萧绰', '李克用',
+    '李存勖', '石敬瑭', '刘知远', '安禄山', '史思明',
+  ],
 };
 
 export function loadSeed(root = process.cwd()): any {
@@ -189,23 +211,46 @@ export function validateSeed(seed: any): ValidationResult {
     }
   }
 
-  // 原型归属规则审计（冲突只报告，不静默覆盖原始数据）
-  for (const [factionKey, names] of Object.entries(CORE_ARCHETYPE_RULES)) {
+  // 原型归属审计：以种子中每个历史原型的 primary_faction_key 为主规则，
+  // 并叠加用户明确指定的核心例外；COMMON 仅允许用于在野/地方官/世家等候选岗位。
+  const archetypeById = new Map<string, any>(
+    seed.historical_archetypes.map((a: any) => [a.archetype_id, a]),
+  );
+  const archetypeByName = new Map<string, any>(
+    seed.historical_archetypes.map((a: any) => [a.historical_name, a]),
+  );
+  const neutralRolePattern = /(在野|州府.*(?:主官|副官)|家主|嫡系继承人|首席谋士|总掌柜|郡县|地方官|县令|郡守|太守|门客|幕僚|军阀|藩镇)/;
+
+  for (const c of seed.characters) {
+    const archetype = archetypeById.get(c.archetype_id);
+    if (!archetype) continue; // 引用缺失已在上方作为硬性错误报告
+    const expectedFaction = archetype.primary_faction_key;
+    if (['HUN', 'YONG', 'CHU'].includes(expectedFaction) && c.faction_key !== expectedFaction) {
+      conflicts.push(
+        `原型规则冲突：${archetype.historical_name} 主归属为 ${expectedFaction}，但人物 ${c.person_id}(${c.name}) 属于 ${c.faction_key}，职位 ${c.current_position_standard}`,
+      );
+    } else if (expectedFaction === 'COMMON' && !neutralRolePattern.test(c.current_position_standard ?? '')) {
+      conflicts.push(
+        `原型规则冲突：${archetype.historical_name} 属于中立候选原型，但人物 ${c.person_id}(${c.name}) 的岗位「${c.current_position_standard}」不是在野/地方官/世家类岗位`,
+      );
+    }
+  }
+
+  for (const [factionKey, names] of Object.entries(CORE_ARCHETYPE_OVERRIDES)) {
     for (const name of names) {
-      const chars = seed.characters.filter((c: any) => c.historical_archetype === name);
-      if (chars.length === 0) {
-        warnings.push(`核心原型 ${name} 在 characters 中未被引用`);
+      const archetype = archetypeByName.get(name);
+      if (!archetype) {
+        warnings.push(`核心原型规则中的人物「${name}」未出现在 historical_archetypes 表中`);
         continue;
       }
-      for (const c of chars) {
-        if (c.faction_key !== factionKey) {
-          conflicts.push(
-            `原型规则冲突：${name} 期望归属 ${factionKey}，但人物 ${c.person_id}(${c.name}) 属于 ${c.faction_key}，职位 ${c.current_position_standard}`,
-          );
-        }
+      if (archetype.primary_faction_key !== factionKey) {
+        conflicts.push(
+          `原型规则冲突：核心原型「${name}」应归属 ${factionKey}，但 historical_archetypes.primary_faction_key 为 ${archetype.primary_faction_key}`,
+        );
       }
     }
   }
+  stats.archetype_faction_conflicts = conflicts.length;
 
   // 名称多样性：检测机械化单字堆叠
   const familyCharCount = new Map<string, number>();
@@ -251,7 +296,7 @@ export function writeReport(result: ValidationResult, root = process.cwd()): str
   lines.push('');
   lines.push(result.warnings.length ? [...new Set(result.warnings)].map((e) => `- ${e}`).join('\n') : '- 无');
   lines.push('');
-  lines.push('## 原型归属冲突（仅报告，未修改原始数据）');
+  lines.push('## 原型归属审计（按当前分配规则校验）');
   lines.push('');
   lines.push(result.conflicts.length ? result.conflicts.map((e) => `- ${e}`).join('\n') : '- 无');
   lines.push('');

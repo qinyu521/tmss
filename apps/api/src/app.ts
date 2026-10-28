@@ -56,17 +56,29 @@ import { loadLlmConfig, polishChronicle, type LlmFetcher } from './llm.js';
 const factionEnum = z.enum(['HUN', 'YONG', 'CHU']);
 const roleEnum = z.enum(['ruler', 'governor', 'general', 'strategist']);
 
-/** 用户既定核心原型归属：用于前端提示，不修改种子数据。 */
-const CORE_ARCHETYPE_RULES: Record<string, string[]> = {
-  YONG: ['李靖', '诸葛亮', '赵奢', '李勣', '曹操', '司马懿', '祖逖', '房玄龄', '杜如晦', '赵普', '包拯'],
-  CHU: ['韩信', '陆逊', '周瑜', '鲁肃', '谢安', '杜预', '羊祜', '孟珙', '朱元璋', '左宗棠'],
-  HUN: ['木华黎', '速不台', '王猛', '慕容垂', '耶律阿保机', '耶律楚材', '拓跋珪', '完颜宗弼'],
-};
+/** 按权威原型表核验用户已确认的归属规则；避免 UI 与种子校验器各自维护不同名单。 */
+function coreConflictOf(
+  character: any,
+  archetypes: any[],
+): { conflict: boolean; expectedFaction?: string; reason?: string } {
+  const archetype = archetypes.find((a) => a.historical_name === character.historical_archetype);
+  if (!archetype) {
+    return { conflict: true, expectedFaction: 'MISSING', reason: '人物引用的历史原型不存在' };
+  }
 
-function coreConflictOf(character: any): { conflict: boolean; expectedFaction?: string } {
-  for (const [faction, names] of Object.entries(CORE_ARCHETYPE_RULES)) {
-    if (names.includes(character.historical_archetype) && character.faction_key !== faction) {
-      return { conflict: true, expectedFaction: faction };
+  const expectedFaction = archetype.primary_faction_key;
+  if (['HUN', 'YONG', 'CHU'].includes(expectedFaction) && character.faction_key !== expectedFaction) {
+    return { conflict: true, expectedFaction, reason: '人物阵营与原型主归属不一致' };
+  }
+
+  if (expectedFaction === 'COMMON') {
+    const neutralRolePattern = /(在野|州府.*(?:主官|副官)|家主|嫡系继承人|首席谋士|总掌柜|郡县|地方官|县令|郡守|太守|门客|幕僚|军阀|藩镇)/;
+    if (!neutralRolePattern.test(character.current_position_standard ?? '')) {
+      return {
+        conflict: true,
+        expectedFaction: 'COMMON',
+        reason: '中立候选原型被用于非在野/地方官/世家/军阀岗位',
+      };
     }
   }
   return { conflict: false };
@@ -332,7 +344,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     return {
       character,
       runtime,
-      coreConflict: coreConflictOf(character),
+      coreConflict: coreConflictOf(character, seed.historical_archetypes),
       appointment: appointment ? JSON.parse(appointment) : null,
       archetype: archetype ? JSON.parse(archetype) : null,
       audit: audit ?? null,
@@ -365,19 +377,28 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
 
   app.get('/api/audit', async () => {
     const audit = (seed.prototype_affinity_audit ?? []) as any[];
-    const mismatches = audit.filter((a) => a.match_status !== '主归属一致');
-    return {
-      total: audit.length,
-      consistent: audit.length - mismatches.length,
-      mismatches,
-      coreConflicts: seed.characters.filter((c) => coreConflictOf(c).conflict).map((c) => ({
+    const validStatuses = new Set([
+      '主归属一致',
+      '中立原型用于在野/地方/世家岗位，符合归属规则',
+    ]);
+    const mismatches = audit.filter((a) => !validStatuses.has(a.match_status));
+    const coreConflicts = seed.characters
+      .map((c) => ({ character: c, result: coreConflictOf(c, seed.historical_archetypes) }))
+      .filter((entry) => entry.result.conflict)
+      .map(({ character: c, result }) => ({
         person_id: c.person_id,
         name: c.name,
         faction_key: c.faction_key,
         historical_archetype: c.historical_archetype,
-        expectedFaction: coreConflictOf(c).expectedFaction,
-      })),
-      note: '审计来自种子数据原型对照表；用户既定核心归属的差异单独列出（coreConflicts），不篡改原始数据。',
+        expectedFaction: result.expectedFaction,
+        reason: result.reason,
+      }));
+    return {
+      total: audit.length,
+      consistent: audit.length - mismatches.length,
+      mismatches,
+      coreConflicts,
+      note: '审计按历史原型主归属与中立候选岗位规则核验；合法中立角色不计为冲突。',
     };
   });
 

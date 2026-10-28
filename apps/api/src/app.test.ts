@@ -39,6 +39,16 @@ describe('API 集成', () => {
     expect(body.seedCounts.military_units).toBe(22);
   });
 
+  it('原型审计不把合法中立人才误报为冲突', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/audit' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(336);
+    expect(body.consistent).toBe(336);
+    expect(body.mismatches).toEqual([]);
+    expect(body.coreConflicts).toEqual([]);
+  });
+
   it('地图返回 72 节点与 31 条原始边', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/map' });
     expect(res.statusCode).toBe(200);
