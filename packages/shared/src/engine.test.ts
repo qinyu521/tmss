@@ -15,6 +15,7 @@ import {
   appointmentRelationshipEffect,
   successionNetworkInfluence,
   successionCommandRisk,
+  battleLoyaltyDelta,
   runPolitics,
   createGame,
   generateNpcOrders,
@@ -656,8 +657,14 @@ describe('回合结算', () => {
     expect(afterTroops).toBeLessThanOrEqual(beforeTroops);
   });
 
-  it('战斗使用固定随机种子，重复结算得到同一结果', () => {
+  it('战斗使用固定随机种子，并按战果改变军令忠诚且不泄露敌将忠诚', () => {
     const base = newGame('HUN', 'ruler', 'battle-seed');
+    const attackerBefore = base.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
+    const defenderBefore = base.armies.find((army) => army.faction === 'YONG' && army.nodeId === 'YONG-REG03');
+    const attackerCommanderId = attackerBefore.commanderId;
+    const defenderCommanderId = defenderBefore?.commanderId ?? base.regions['YONG-REG03'].garrisonCommanderId;
+    const attackerLoyaltyBefore = base.characters[attackerCommanderId].militaryLoyalty ?? 50;
+    const defenderLoyaltyBefore = base.characters[defenderCommanderId].militaryLoyalty ?? 50;
     base.pendingOrders = [
       { orderId: 'b1', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' },
     ];
@@ -670,6 +677,24 @@ describe('回合结算', () => {
     expect((battleA!.after as any).attackerWon).toBe((battleB!.after as any).attackerWon);
     expect((battleA!.payload as any).seed).toBe((battleB!.payload as any).seed);
     expect((battleA!.after as any).totalLosses).toBe((battleB!.after as any).totalLosses);
+    expect(battleLoyaltyDelta(false, 0.4)).toBeLessThan(0);
+    expect(battleLoyaltyDelta(true, 0.04)).toBeGreaterThan(0);
+
+    const attackerWon = (battleA!.after as any).attackerWon as boolean;
+    const attackerLoyaltyAfter = a.state.characters[attackerCommanderId].militaryLoyalty!;
+    const defenderLoyaltyAfter = a.state.characters[defenderCommanderId].militaryLoyalty!;
+    if (attackerWon) {
+      expect(attackerLoyaltyAfter).toBeGreaterThan(attackerLoyaltyBefore);
+      expect(defenderLoyaltyAfter).toBeLessThan(defenderLoyaltyBefore);
+    } else {
+      expect(attackerLoyaltyAfter).toBeLessThan(attackerLoyaltyBefore);
+      expect(defenderLoyaltyAfter).toBeGreaterThan(defenderLoyaltyBefore);
+    }
+    const visibleChanges = (battleA!.after as any).commanderLoyaltyChanges as { personId: string; delta: number }[];
+    expect(visibleChanges.some((change) => change.personId === attackerCommanderId)).toBe(true);
+    expect(visibleChanges.some((change) => change.personId === defenderCommanderId)).toBe(false);
+    expect(battleA!.summary).toContain('己方统将军令忠诚变化');
+    expect(visibleChanges).toEqual((battleB!.after as any).commanderLoyaltyChanges);
   });
 
   it('攻入敌方州府后，战斗结果与占领、行军状态更新保持一致', () => {
