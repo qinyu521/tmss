@@ -216,6 +216,47 @@ describe('API 集成', () => {
     expect(body.view.special.courtStability).toBeGreaterThan(0);
   });
 
+  it('API 允许君主赏赐将领并持久化本局军令忠诚', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'YONG', playerRole: 'ruler', seed: 20261029 },
+    });
+    expect(created.statusCode).toBe(200);
+    const gid = created.json().gameId as string;
+    const army = created.json().view.armies.find((item: any) => item.own);
+    expect(army).toBeTruthy();
+    const personId = army.commanderId as string;
+    const beforeRoster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=YONG&pageSize=100&gameId=${gid}`,
+    });
+    const commander = beforeRoster.json().items.find((person: any) => person.person_id === personId);
+    expect(commander).toBeTruthy();
+    const before = commander.militaryLoyalty as number;
+
+    const order = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: { orders: [{ orderId: 'reward-api', kind: 'reward_commander', personId, amount: 5_000 }] },
+    });
+    expect(order.statusCode).toBe(200);
+    expect(order.json().accepted).toHaveLength(1);
+
+    const turn = await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
+    expect(turn.statusCode).toBe(200);
+    const event = turn.json().report.events.find((item: any) => item.title === `君主赏赐将领·${commander.name}`);
+    expect(event).toBeTruthy();
+    expect(event.after.militaryLoyalty).toBe(Math.min(100, before + 5));
+
+    const afterRoster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=YONG&pageSize=100&gameId=${gid}`,
+    });
+    const updated = afterRoster.json().items.find((person: any) => person.person_id === personId);
+    expect(updated.militaryLoyalty).toBe(Math.min(100, before + 5));
+  });
+
   it('分兵/州兵/计谋可通过 API 下达并结算', async () => {
     const created = await app.inject({
       method: 'POST',
