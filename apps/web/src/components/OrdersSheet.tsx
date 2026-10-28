@@ -596,7 +596,7 @@ export default function OrdersSheet() {
                     <option value="">请选择主议臣</option>
                     {courtOfficials.map((person) => (
                       <option key={person.person_id} value={person.person_id}>
-                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkill(person, activeCourtAgenda))}
+                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkill(person, activeCourtAgenda))} · 声望 {Math.round(person.courtStanding ?? 50)}
                       </option>
                     ))}
                   </select>
