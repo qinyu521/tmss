@@ -50,3 +50,26 @@ jobs:
 
       - name: Production build
         run: npm run build
+
+      - name: Validate Docker Compose and loopback-only port binding
+        run: |
+          docker compose config --quiet
+          docker compose config --format json | node -e "
+            let input = '';
+            process.stdin.setEncoding('utf8');
+            process.stdin.on('data', (chunk) => input += chunk);
+            process.stdin.on('end', () => {
+              const config = JSON.parse(input);
+              const ports = config.services?.tianming?.ports ?? [];
+              const safe = ports.some((port) =>
+                port.host_ip === '127.0.0.1' &&
+                String(port.published) === '8787' &&
+                String(port.target) === '8787'
+              );
+              if (!safe) {
+                console.error('安全错误：Compose 必须只将宿主机 127.0.0.1:8787 映射到容器 8787。');
+                process.exit(1);
+              }
+              console.log('Compose YAML valid; host port is loopback-only.');
+            });
+          "

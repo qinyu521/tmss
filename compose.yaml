@@ -1,17 +1,20 @@
 services:
   tianming:
     build: .
-    image: tianming-shishu:0.5.0
+    image: tianming-shishu:local
     container_name: tianming
     restart: unless-stopped
     ports:
-      - "8787:8787"
+      # Bind only to host loopback; use Cloudflare Tunnel + Access for remote access.
+      - "127.0.0.1:8787:8787"
     environment:
       PORT: 8787
       HOST: 0.0.0.0
       TIANMING_DB: data/runtime/tianming.db
       SERVE_WEB: "1"
       SINGLE_PLAYER_MODE: "1"
+      # TRUST_PROXY=1 only when exactly one trusted reverse proxy is the sole path to this origin.
+      TRUST_PROXY: "${TRUST_PROXY:-0}"
       CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:5173}"
       LLM_PROVIDER: "${LLM_PROVIDER:-}"
       LLM_API_KEY: "${LLM_API_KEY:-}"

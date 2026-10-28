@@ -89,18 +89,18 @@ scripts                  种子校验、导入、头像/图标生成、冒烟测
 - 种子：100 个历史原型、336 名原创角色（三国各 112）、24 州府、18 军区、18 世家、12 军阀、24 爵位、183 关系、72 地图节点、31 原始边、22 特殊兵种、18 条兵力分配。
 - 三国初始兵力精确为 **40 万 / 80 万 / 30 万**，18 条分配记录合计一致。
 - 原始边已使 24 州府完全连通，**本版未新增任何派生边**（`data/derived/map_extra.json`）。
-- 校验发现 12 条原型归属与用户既定规则的冲突，已写入 `docs/DATA_VALIDATION_REPORT.md`，**未改写原始数据**。
+- v0.6.1 校验器修正后，100 个历史原型与 336 个原创人物的主归属冲突为 **0**；仍有 3 条外戚家族 ID 规范化警告，见 `docs/DATA_VALIDATION_REPORT.md`。
 - 历史人物只作为能力/制度/战略原型；游戏人物使用独立姓名、ID、关系与命运。
 
 ## 部署
 
-- 一体化：`docker compose up -d --build`，访问 `http://服务器:8787`，数据库挂载到 `./data/runtime`。
+- 一体化：`docker compose up -d --build`，本机访问 `http://127.0.0.1:8787`，数据库挂载到 `./data/runtime`。Compose 默认只绑定宿主机回环，不会直接开放公网 8787；VPS 远程访问请先配置单人策略的 Cloudflare Access + Tunnel。
 - 前端独立：Cloudflare Pages 构建 `npm run build -w @tianming/web`，输出 `apps/web/dist`，设置 `VITE_API_BASE`。
-- API：VPS + Docker + Caddy/Nginx HTTPS 或 Cloudflare Tunnel；CORS、限速、健康检查、备份见 `docs/DEPLOYMENT.md`。
+- API：个人 VPS 优先使用 Cloudflare Tunnel + Access；Caddy/Nginx 必须配置认证后才可公开使用。仅 HTTPS/CORS 不会阻止未授权 API 调用，详见 `docs/DEPLOYMENT.md`。
 
 ## 当前限制
 
-- 单机/个人模式，无登录鉴权；不要直接暴露公网而不加网关。
+- 单机/个人模式，无应用内登录鉴权或按用户隔离存档；Compose 只绑定 `127.0.0.1:8787`。公开访问必须由只允许实例所有者的 Cloudflare Access 或等效认证网关保护；`SINGLE_PLAYER_MODE=0` 会因未实现多人认证而拒绝启动。
 - 未接入外部 LLM（Provider 接口预留，默认模板史官）；音效预留未实现。
 - 战斗为战略级单次结算，不是实时战术战斗；水战仅以兵种/地形修正体现。
 - 存档 schema v1，暂无跨大版本迁移（读档会清除存档点之后的事件）。

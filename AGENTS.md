@@ -64,6 +64,9 @@ npm run build
 - 目标环境：1 vCPU / 2 GB RAM 的单机或极小规模部署。回合制、按需结算，禁止高频后台 tick。
 - 地图使用实例化/低多边形/标签按距离显隐；避免大量独立高面数模型。
 - 不允许把世界模拟放进 Cloudflare Workers 请求处理逻辑。Workers 只做静态资源/网关。
+- 当前版本只有单机/个人模式，没有登录认证或按用户隔离存档；禁止将 API 直接暴露公网。Docker Compose 宿主端口必须绑定 `127.0.0.1`；远程访问用单人 Allow policy 的 Cloudflare Access/Tunnel 或等效认证网关。
+- 不得声称 `SINGLE_PLAYER_MODE=0` 是可用多人模式。启动必须 fail closed；真实多人模式完成前必须实现身份认证、每条游戏/存档/事件/删除接口的所有权校验、数据库用户隔离和安全回归测试。
+- `CORS_ORIGIN` 不是认证。默认不信任转发头；只有源站无法绕过且代理链明确时才设置 `TRUST_PROXY=1`。
 - 本地 LLM 不部署在 VPS；外部 LLM 为可选 Provider，默认关闭，无密钥时游戏必须完整可玩。
 - 不提交真实密钥；配置写入 `.env`（模板为 `.env.example`）。
 
