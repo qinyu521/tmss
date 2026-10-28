@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+.env
+data/runtime/
+data/runtime/*.db
+data/runtime/*.db-*
+.DS_Store
+playwright-report/
+test-results/
+browser-shots/

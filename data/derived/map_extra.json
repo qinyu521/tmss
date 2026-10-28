@@ -1,0 +1,10 @@
+{
+  "note": "31 条原始边已使 24 个州府完全连通（校验脚本可验证），因此本版本未新增派生边。若后续扩充地图，派生边必须写入本文件并附 derived_reason，不得修改 data/source。",
+  "edges": [],
+  "validatedAt": "2026-10-28",
+  "connectivity": {
+    "regions": 24,
+    "sourceEdges": 31,
+    "connectedRegions": 24
+  }
+}

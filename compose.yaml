@@ -1,0 +1,34 @@
+services:
+  tianming:
+    build: .
+    image: tianming-shishu:0.5.0
+    container_name: tianming
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: 8787
+      HOST: 0.0.0.0
+      TIANMING_DB: data/runtime/tianming.db
+      SERVE_WEB: "1"
+      SINGLE_PLAYER_MODE: "1"
+      CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:5173}"
+      LLM_PROVIDER: "${LLM_PROVIDER:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-}"
+    volumes:
+      - ./data/runtime:/app/data/runtime
+    # 1 核 2 GB 机器可按需启用限制（Compose v2 支持）
+    # mem_limit: 1g
+    # cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

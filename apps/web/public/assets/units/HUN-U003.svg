@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="蒙古怯薛军">
+  <defs><linearGradient id="gHUN-U003" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#2b1210"/><stop offset="1" stop-color="#a8322c" stop-opacity="0.55"/>
+  </linearGradient></defs>
+  <rect width="96" height="96" rx="18" fill="url(#gHUN-U003)" stroke="#d9a55c" stroke-opacity="0.45" stroke-width="1.5"/>
+  
+      <path d="M22 66 Q26 50 42 48 L62 48 Q76 48 80 60 L84 74 H74 L70 62 H34 L30 74 H22 Z" fill="#e8e0cf"/>
+      <path d="M80 56 L90 46 L92 52 L86 62 Z" fill="#e8e0cf"/>
+      <path d="M38 72 L38 82 M70 72 L70 82 M28 82 H74" stroke="#e8e0cf" stroke-width="3"/>
+      <circle cx="54" cy="38" r="8" fill="#e8e0cf"/>
+      <path d="M48 46 Q54 44 60 46 L64 58 Q54 62 44 58 Z" fill="#cfc6b2" stroke="#2b1210" stroke-width="1.5"/>
+      <path d="M36 34 L18 56" stroke="#e8e0cf" stroke-width="3"/>
+      
+      <path d="M58 34 L62 22 L66 34 Z" fill="#d9a55c" opacity="0.9"/>
+  <g color="#d9a55c" transform="translate(-10,-8) scale(0.32)" opacity="0.35"><path d="M66 22 L74 34 L66 46 L58 34 Z" fill="none" stroke="currentColor" stroke-width="2.2"/>
+      <path d="M66 26 V42" stroke="currentColor" stroke-width="2"/>
+      
+      </g>
+  <circle cx="16" cy="86" r="2" fill="#d9a55c" opacity="0.7"/><circle cx="23" cy="86" r="2" fill="#d9a55c" opacity="0.7"/><circle cx="30" cy="86" r="2" fill="#d9a55c" opacity="0.7"/><circle cx="37" cy="86" r="2" fill="#d9a55c" opacity="0.7"/>
+</svg>
