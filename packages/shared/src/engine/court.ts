@@ -78,7 +78,7 @@ export function politicalGrudgeCourtPenalty(
   politicalTargetIds: readonly string[],
 ): number {
   if (!grudges || politicalTargetIds.length === 0) return 0;
-  const total = new Set(politicalTargetIds.filter(Boolean)).reduce(
+  const total = Array.from(new Set(politicalTargetIds.filter(Boolean))).reduce(
     (sum, targetId) => sum + Math.max(0, Number.isFinite(grudges[targetId]) ? grudges[targetId] : 0),
     0,
   );
