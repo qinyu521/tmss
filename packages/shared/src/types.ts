@@ -682,6 +682,12 @@ export interface CharacterRuntime {
   courtStanding?: number;
   /** 本局军令忠诚度（0-100）；赏赐可以提升，旧档按种子忠诚度迁移 */
   militaryLoyalty?: number;
+  /** 人物实际效忠势力；未设置时沿用种子势力，叛变后用于后续军团、任命与赏赐判定 */
+  allegianceFaction?: FactionKey;
+  /** 将领倒戈风险首次预警的回合；需留出至少一整回合供君主挽回 */
+  defectionWarningTurn?: number;
+  /** 预警时明确依附的敌对势力；关系变化或停战后会重新评估 */
+  defectionTargetFaction?: FactionKey;
   /** 战后降职/公开审判造成的统率惩罚，参与后续战斗计算；恢复任命可逐步清除 */
   commandPenalty?: number;
   /** 最近一场战斗发生的回合；处置命令只允许在下一回合使用 */
