@@ -161,6 +161,8 @@ describe('回合结算', () => {
       (region) => region.faction === 'YONG' && region.regionId !== army.nodeId,
     )!;
     const startNode = army.nodeId;
+    const supplyBefore = army.supply;
+    const fatigueBefore = army.fatigue;
     army.path = [destination.regionId];
     army.hopCosts = [10];
     army.targetRegionId = destination.regionId;
@@ -176,6 +178,8 @@ describe('回合结算', () => {
     expect(marched.hopCosts).toEqual([3]);
     expect(marched.marchDaysLeft).toBe(3);
     expect(marched.status).toBe('marching');
+    expect(marched.supply).toBeLessThan(supplyBefore);
+    expect(marched.fatigue).toBeGreaterThan(fatigueBefore);
   });
 
   it('推进 7 天后日期、回合与事件均更新', () => {
