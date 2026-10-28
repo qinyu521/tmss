@@ -595,6 +595,64 @@ describe('朝廷廷议', () => {
   });
 });
 
+describe('政治裁决的派系站队后果', () => {
+  it('明确支持关系会为败将一系增加声望，竞争关系不会被误当作盟友', () => {
+    const state = newGame('YONG', 'ruler', 'political-bloc-standing');
+    const commander = state.armies.find((army) => army.faction === 'CHU')!;
+    const commanderId = commander.commanderId;
+    const sameFaction = seed.characters.filter((person) => person.faction_key === 'CHU' && person.person_id !== commanderId);
+    const ally = sameFaction[0]!;
+    const opponent = sameFaction.find((person) => person.person_id !== ally.person_id)!;
+    const customSeed = clone(seed);
+    customSeed.relationships = [
+      {
+        faction: '大楚',
+        source_person_id: commanderId,
+        source_name: ctx.charactersById[commanderId]!.name,
+        relation: '副手协同',
+        target_person_id: ally.person_id,
+        target_name: ally.name,
+        strength: '强',
+        notes: '明确支持关系',
+      },
+      {
+        faction: '大楚',
+        source_person_id: commanderId,
+        source_name: ctx.charactersById[commanderId]!.name,
+        relation: '竞争制衡',
+        target_person_id: opponent.person_id,
+        target_name: opponent.name,
+        strength: '强',
+        notes: '明确竞争关系',
+      },
+    ];
+    const politicalCtx = buildContext(customSeed);
+    Object.assign(state.characters[commanderId], {
+      pendingBattleCase: 'impeachment',
+      battlePoliticalOpponentId: opponent.person_id,
+      lastBattleOutcome: 'defeat',
+      pendingBattleSettlement: true,
+      militaryLoyalty: 55,
+      courtStanding: 70,
+    });
+    state.characters[ally.person_id].courtStanding = 50;
+    state.characters[opponent.person_id].courtStanding = 40;
+    const events: GameEvent[] = [];
+    const order = {
+      orderId: 'political-bloc-relief',
+      kind: 'settle_defeated_commander' as const,
+      personId: commanderId,
+      action: 'relieve' as const,
+    };
+    expect(validateOrder(state, politicalCtx, order).ok).toBe(true);
+    applyOrder(state, politicalCtx, order, events);
+    expect(state.characters[ally.person_id].courtStanding).toBe(51);
+    expect(state.characters[opponent.person_id].courtStanding).toBe(36);
+    expect(events[0].summary).toContain('派系站队');
+    expect(events[0].summary).toContain('明确'); // fixture relation is reflected via the named supporters' standing.
+  });
+});
+
 describe('NPC 战后案件与政治站队', () => {
   it('NPC 会根据声望与同僚关系网络自动选择站队或问责，并真实结算处置', () => {
     const state = newGame('YONG', 'ruler', 'npc-battle-case-ruling');
