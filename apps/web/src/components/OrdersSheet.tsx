@@ -23,7 +23,7 @@ import { Modal, Portrait, UnitIcon } from './ui';
 const GROUPS = {
   military: ['move_army', 'dispatch_garrison', 'rest_army', 'scout'],
   civil: ['recruit', 'levy_grain', 'levy_tax', 'trade'],
-  politics: ['hold_court', 'appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
+  politics: ['hold_court', 'reward_commander', 'appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
   scheme: ['scheme'],
 } as const;
 
@@ -86,6 +86,8 @@ export default function OrdersSheet() {
   const [courtResolution, setCourtResolution] = useState<CourtResolution>('compromise');
   const [courtSpeakerId, setCourtSpeakerId] = useState('');
   const [courtOppositionId, setCourtOppositionId] = useState('');
+  const [rewardCommanderId, setRewardCommanderId] = useState('');
+  const [rewardAmount, setRewardAmount] = useState(10_000);
   const [scheme, setScheme] = useState<SchemeKind>('fire');
   const [schemeTarget, setSchemeTarget] = useState('');
   const [strategistId, setStrategistId] = useState('');
@@ -137,11 +139,14 @@ export default function OrdersSheet() {
         // 切换新局/势力时重新选择本局仍在世的主议臣与反对臣，避免旧局人物残留。
         setCourtSpeakerId(available[0]?.person_id ?? '');
         setCourtOppositionId(available.find((person) => person.person_id !== available[0]?.person_id)?.person_id ?? '');
+        const firstArmyCommander = view.armies.find((army) => army.own)?.commanderId;
+        setRewardCommanderId(firstArmyCommander && available.some((person) => person.person_id === firstArmyCommander) ? firstArmyCommander : '');
       })
       .catch(() => {
         setCommanders([]);
         setCourtSpeakerId('');
         setCourtOppositionId('');
+        setRewardCommanderId('');
       });
   }, [view?.factionKey, view?.gameId]);
 
@@ -200,6 +205,8 @@ export default function OrdersSheet() {
     ? courtAgenda
     : courtAgendas[0].key;
   const courtOfficials = commanders.filter((person) => person.alive !== false);
+  const rewardCandidates = courtOfficials.filter((person) => ownArmies.some((army) => army.commanderId === person.person_id));
+  const selectedRewardCommander = rewardCandidates.find((person) => person.person_id === rewardCommanderId);
   const courtSpeaker = courtOfficials.find((person) => person.person_id === courtSpeakerId);
   const courtOpponent = courtOfficials.find((person) => person.person_id === courtOppositionId);
   const speakerCourtScore = courtSpeaker ? courtSkill(courtSpeaker, activeCourtAgenda) : 50;
@@ -280,6 +287,10 @@ export default function OrdersSheet() {
         };
       case 'negotiate_house':
         return houseId ? { orderId, kind: 'negotiate_house', houseId, amount: 1 } : null;
+      case 'reward_commander':
+        return rewardCommanderId && rewardCandidates.some((person) => person.person_id === rewardCommanderId)
+          ? { orderId, kind: 'reward_commander', personId: rewardCommanderId, amount: rewardAmount }
+          : null;
       case 'appoint':
         return personId && appointRegion ? { orderId, kind: 'appoint', personId, regionId: appointRegion } : null;
       case 'scheme': {
@@ -679,6 +690,35 @@ export default function OrdersSheet() {
               </>
             )}
 
+            {action === 'reward_commander' && (
+              <>
+                <div className="form-row">
+                  <label>受赏将领</label>
+                  <select value={rewardCommanderId} onChange={(e) => setRewardCommanderId(e.target.value)}>
+                    <option value="">请选择本军团统将</option>
+                    {rewardCandidates.map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · 军令忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>赏赐银两</label>
+                  <select value={rewardAmount} onChange={(e) => setRewardAmount(Number(e.target.value))}>
+                    <option value={5000}>5000 两 · 忠诚 +5</option>
+                    <option value={10000}>10000 两 · 忠诚 +10</option>
+                    <option value={20000}>20000 两 · 忠诚 +20</option>
+                  </select>
+                </div>
+                <div className="form-note">
+                  {selectedRewardCommander
+                    ? `当前军令忠诚 ${Math.round(selectedRewardCommander.militaryLoyalty ?? selectedRewardCommander.loyalty)}，赏后最多升至 100。将领忠诚会影响大雍夺嫡危机中的拒命风险。`
+                    : '只能赏赐目前统领本国军团的在世将领。'}
+                </div>
+              </>
+            )}
+
             {action === 'appoint' && (
               <>
                 <div className="form-row">
@@ -824,6 +864,7 @@ function describeOrder(o: Order): string {
   if (o.kind === 'appease_tribe') return `${o.tribeId} · ${o.amount} 两`;
   if (o.kind === 'balance_princes') return '平衡皇子派系';
   if (o.kind === 'hold_court') return `廷议：${o.agenda} · ${o.decision}`;
+  if (o.kind === 'reward_commander') return `赏赐 ${o.personId} · ${o.amount.toLocaleString()} 两`;
   if (o.kind === 'negotiate_house') return o.houseId;
   if (o.kind === 'appoint') return `${o.personId} → ${o.regionId}`;
   if (o.kind === 'rest_army') return o.armyId;
