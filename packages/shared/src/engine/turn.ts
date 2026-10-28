@@ -25,7 +25,7 @@ import { courtCost } from './court.js';
 import { runLifecycle } from './lifecycle.js';
 import { buildChronicle } from './chronicle.js';
 import { clamp, factionNameOf } from './state.js';
-import { battleLoyaltyDelta } from './relationships.js';
+import { battleLoyaltyDelta, findDefectionAllegiance } from './relationships.js';
 
 export interface TurnResult {
   state: GameState;
@@ -118,6 +118,9 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   // 3) 行军与战斗
   processMovement(state, ctx, events);
 
+  // 3.5) 低忠诚将领的倒戈危机：先预警一旬，仍未挽回才会携军献城。
+  resolveCommanderDefectionThreats(state, ctx, events);
+
   // 4) 经济账本
   const economy = runEconomy(state, ctx, events);
 
@@ -189,6 +192,206 @@ function npcAffordable(state: GameState, order: Order): boolean {
     default:
       return true;
   }
+}
+
+
+/**
+ * A strong cross-faction tie plus critically low command loyalty creates a
+ * visible, deterministic warning. The ruler gets one full turn to restore
+ * loyalty; if ignored, the commander may defect with their isolated army and
+ * hand over its current prefecture. We cap this at one defection per faction
+ * per turn and never turn a random roll into a province loss.
+ */
+export function resolveCommanderDefectionThreats(
+  state: GameState,
+  ctx: DerivedContext,
+  events: GameEvent[],
+): void {
+  const turn = state.date.turn;
+  const activeCommanderIds = new Set(state.armies.map((army) => army.commanderId));
+
+  // If an army was dissolved or its commander was replaced, its warning is stale.
+  for (const runtime of Object.values(state.characters)) {
+    if (runtime.defectionWarningTurn === undefined || activeCommanderIds.has(runtime.personId)) continue;
+    runtime.defectionWarningTurn = undefined;
+    runtime.defectionTargetFaction = undefined;
+  }
+
+  const ready: {
+    army: Army;
+    targetFaction: FactionKey;
+    targetPersonId: string;
+    targetPersonName: string;
+    strength: number;
+    loyalty: number;
+    warningTurn: number;
+  }[] = [];
+
+  for (const army of [...state.armies].sort((a, b) => a.faction.localeCompare(b.faction) || a.armyId.localeCompare(b.armyId))) {
+    const runtime = state.characters[army.commanderId];
+    const commander = ctx.charactersById[army.commanderId];
+    if (!runtime || !commander || runtime.allegianceFaction) continue;
+    if (commander.faction_key !== army.faction) continue;
+
+    const region = state.regions[army.nodeId];
+    const hasExclusiveControl = Boolean(region && region.faction === army.faction) &&
+      !state.armies.some((other) =>
+        other.armyId !== army.armyId &&
+        other.faction === army.faction &&
+        other.nodeId === army.nodeId,
+      );
+    const loyalty = runtime.militaryLoyalty ?? commander.loyalty ?? 50;
+    const target = loyalty <= 15 && hasExclusiveControl
+      ? findDefectionAllegiance(
+          ctx.seed.relationships,
+          ctx.charactersById,
+          commander.person_id,
+          army.faction,
+          (personId) => state.characters[personId]?.allegianceFaction ?? ctx.charactersById[personId]?.faction_key,
+          (personId, factionKey) =>
+            state.characters[personId]?.alive !== false &&
+            isAtWar(state.diplomacy, army.faction, factionKey),
+        )
+      : null;
+
+    if (!target) {
+      runtime.defectionWarningTurn = undefined;
+      runtime.defectionTargetFaction = undefined;
+      continue;
+    }
+
+    if (
+      runtime.defectionWarningTurn === undefined ||
+      runtime.defectionTargetFaction !== target.targetFaction
+    ) {
+      runtime.defectionWarningTurn = turn;
+      runtime.defectionTargetFaction = target.targetFaction;
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: `倒戈风险预警·${commander.name}`,
+        summary: `${commander.name}军令忠诚仅 ${Math.round(loyalty)，且与交战势力${state.factions[target.targetFaction].name}的${target.targetPersonName}存在明确强关系。其所部暂未叛离，但若下一旬前仍未恢复忠诚，可能携军倒戈并献出${region?.name ?? '驻地'}。君主可先行赏赐；战后待处置将领也可撤换。`,
+        actorId: commander.person_id,
+        actorName: commander.name,
+        factionKey: army.faction,
+        targetId: army.armyId,
+        targetLabel: army.name,
+        before: { militaryLoyalty: loyalty, targetFaction: army.faction, regionFaction: region?.faction },
+        after: { warningTurn: turn, defectionTargetFaction: target.targetFaction, targetPersonId: target.targetPersonId },
+        evidence: '确定性预警条件：将领军令忠诚 ≤15、与交战势力在世人物存在明确强关系、军团独占本方驻地；未触发随机判定',
+        source: 'engine',
+        visibleToPlayer: state.factionKey === army.faction,
+      }));
+      continue;
+    }
+
+    if (runtime.defectionWarningTurn < turn) {
+      ready.push({
+        army,
+        targetFaction: target.targetFaction,
+        targetPersonId: target.targetPersonId,
+        targetPersonName: target.targetPersonName,
+        strength: target.strength,
+        loyalty,
+        warningTurn: runtime.defectionWarningTurn,
+      });
+    }
+  }
+
+  const resolvedFactions = new Set<FactionKey>();
+  ready.sort((a, b) =>
+    a.warningTurn - b.warningTurn ||
+    a.loyalty - b.loyalty ||
+    b.strength - a.strength ||
+    a.army.armyId.localeCompare(b.army.armyId),
+  );
+  for (const candidate of ready) {
+    const { army, targetFaction, targetPersonId, targetPersonName, loyalty } = candidate;
+    const oldFaction = army.faction;
+    if (resolvedFactions.has(oldFaction)) continue;
+    // Re-check after earlier defections: this location must still be a solely held prefecture.
+    const region = state.regions[army.nodeId];
+    if (!region || region.faction !== oldFaction ||
+      state.armies.some((other) => other.armyId !== army.armyId && other.faction === oldFaction && other.nodeId === army.nodeId)) {
+      continue;
+    }
+    const ruler = ctx.seed.characters.find((person) =>
+      person.faction_key === targetFaction && person.identity_type === '君主',
+    );
+    const runtime = state.characters[army.commanderId];
+    if (!runtime) continue;
+    const before = {
+      armyFaction: oldFaction,
+      regionFaction: region.faction,
+      troops: army.troops,
+      regionGarrison: region.garrison,
+      regionLoyalty: region.loyalty,
+      regionOrder: region.order,
+      militaryLoyalty: loyalty,
+    };
+
+    // The garrison and prefecture change hands with the defecting field army.
+    army.faction = targetFaction;
+    army.name = `${army.name}·归附军`;
+    army.morale = clamp(army.morale - 10);
+    army.stance = 'defend';
+    army.status = 'idle';
+    army.path = [];
+    army.hopCosts = [];
+    army.targetRegionId = null;
+    army.marchDaysLeft = 0;
+    army.marchDaysTotal = 0;
+    army.currentHopDaysTotal = 0;
+    runtime.allegianceFaction = targetFaction;
+    runtime.defectionWarningTurn = undefined;
+    runtime.defectionTargetFaction = undefined;
+    region.faction = targetFaction;
+    region.governorId = ruler?.person_id ?? army.commanderId;
+    region.governorName = ruler?.name ?? army.commanderName;
+    region.garrisonCommanderId = army.commanderId;
+    region.garrisonCommanderName = army.commanderName;
+    region.garrisoned = true;
+    region.order = clamp(region.order - 15);
+    region.loyalty = clamp(region.loyalty - 12);
+    region.threat = clamp(region.threat + 12);
+    state.factions[oldFaction].stability = clamp(state.factions[oldFaction].stability - 5);
+    state.factions[targetFaction].stability = clamp(state.factions[targetFaction].stability - 2);
+    for (const key of FACTION_KEYS) {
+      state.factions[key].control = Object.values(state.regions)
+        .filter((ownedRegion) => ownedRegion.faction === key)
+        .map((ownedRegion) => ownedRegion.regionId);
+    }
+    resolvedFactions.add(oldFaction);
+
+    events.push(emitEvent(state, {
+      type: 'politics',
+      title: `将领倒戈·${region.name}归附${state.factions[targetFaction].name}`,
+      summary: `${commanderNameFromArmy(army, commander.name)}在忠诚长期跌至 ${Math.round(loyalty)}、且与${state.factions[targetFaction].name}的${targetPersonName}有强关系后，越过朝廷预警期限，率 ${Math.round(army.troops).toLocaleString()} 人倒戈。军团与${region.name}州府一并归附；地方秩序 ${Math.round(before.regionOrder)}→${Math.round(region.order)}、民心 ${Math.round(before.regionLoyalty)}→${Math.round(region.loyalty)}，旧势力稳定 -5，新势力稳定 -2。`,
+      actorId: army.commanderId,
+      actorName: army.commanderName,
+      factionKey: oldFaction,
+      targetId: region.regionId,
+      targetLabel: region.name,
+      before,
+      after: {
+        armyFaction: targetFaction,
+        regionFaction: targetFaction,
+        troops: army.troops,
+        militaryLoyalty: runtime.militaryLoyalty ?? commander.loyalty,
+        regionOrder: region.order,
+        regionLoyalty: region.loyalty,
+        oldFactionStability: state.factions[oldFaction].stability,
+        targetFactionStability: state.factions[targetFaction].stability,
+        defectionTargetPersonId: targetPersonId,
+      },
+      evidence: '同一倒戈条件需连续跨越预警回合；将领军团与其独占驻地同步改变势力，避免在原势力腹地生成无法交战的敌军团',
+      source: 'engine',
+      visibleToPlayer: state.factionKey === oldFaction || state.factionKey === targetFaction,
+    }));
+  }
+}
+
+function commanderNameFromArmy(army: Army, fallback: string): string {
+  return army.commanderName || fallback;
 }
 
 function processMovement(state: GameState, ctx: DerivedContext, events: GameEvent[]): void {
