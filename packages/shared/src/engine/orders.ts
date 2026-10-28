@@ -262,7 +262,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
           ctx.seed.relationships,
           state.special.YONG.princes ?? [],
           army.commanderId,
-          commander?.loyalty ?? 50,
+          state.characters[army.commanderId]?.militaryLoyalty ?? commander?.loyalty ?? 50,
           state.flags.successionCrisis,
         );
         if (risk) {
@@ -476,6 +476,24 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         preview: `廷议「${COURT_AGENDA_LABEL[order.agenda]}」：${argument}；${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」；双方议题能力 ${debate.speakerScore}/${debate.oppositionScore}，争辩修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。` : '未指定辩论人选时采用廷臣集议默认效果。'} 君主选择「${resolutionLabel}」，最终政策为「${COURT_DECISION_LABEL[decision]}」，执行成本 ${cost.toLocaleString()} 两。`,
       };
     }
+    case 'reward_commander': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '赏赐将领需君主权限。');
+      const person = ctx.charactersById[order.personId];
+      if (!person || person.faction_key !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
+      if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，不能受赏。');
+      const commandsArmy = state.armies.some((army) => army.faction === state.factionKey && army.commanderId === person.person_id);
+      const commandsGarrison = Object.values(state.regions).some((region) => region.faction === state.factionKey && region.garrisonCommanderId === person.person_id);
+      if (!commandsArmy && !commandsGarrison) return issues('NOT_COMMANDER', '只能赏赐当前统领军团或州兵的将领。');
+      if (![5_000, 10_000, 20_000].includes(order.amount)) return issues('BAD_AMOUNT', '赏赐金额只能选择 5000、10000 或 20000 两。');
+      if (faction.resources.cash < order.amount) return issues('NO_CASH', `赏赐需银 ${order.amount.toLocaleString()} 两。`);
+      const current = state.characters[person.person_id]?.militaryLoyalty ?? person.loyalty;
+      const gain = Math.min(100, current + order.amount / 1_000) - current;
+      return {
+        ok: true,
+        issues: [],
+        preview: `赏赐${person.name}白银 ${order.amount.toLocaleString()} 两，军令忠诚度 ${Math.round(current)} → ${Math.round(current + gain)}（+ ${Math.round(gain)}）。`,
+      };
+    }
     case 'appoint': {
       if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '任命官职需君主权限。');
       const person = ctx.charactersById[order.personId];
@@ -603,7 +621,7 @@ export function applyOrder(
           ctx.seed.relationships,
           state.special.YONG.princes ?? [],
           army.commanderId,
-          commander?.loyalty ?? 50,
+          state.characters[army.commanderId]?.militaryLoyalty ?? commander?.loyalty ?? 50,
           state.flags.successionCrisis,
         );
         if (risk) {
@@ -1145,6 +1163,37 @@ export function applyOrder(
           visibleToPlayer: fk === state.factionKey || source === 'player_order',
         }),
       );
+      return;
+    }
+    case 'reward_commander': {
+      const person = ctx.charactersById[order.personId];
+      if (!person) return;
+      const runtime = state.characters[person.person_id] ?? {
+        personId: person.person_id,
+        alive: true,
+        ageBand: person.age_band,
+        courtStanding: 50,
+        militaryLoyalty: person.loyalty,
+      };
+      const before = clamp(runtime.militaryLoyalty ?? person.loyalty);
+      const after = clamp(before + order.amount / 1_000);
+      runtime.militaryLoyalty = after;
+      state.characters[person.person_id] = runtime;
+      faction.resources.cash -= order.amount;
+      events.push(emitEvent(state, {
+        type: 'order_accepted',
+        title: `君主赏赐将领·${person.name}`,
+        summary: `赐银 ${order.amount.toLocaleString()} 两，${person.name}军令忠诚度由 ${Math.round(before)} 升至 ${Math.round(after)}。忠诚度会影响夺嫡危机期间的拒命风险。`,
+        actorId,
+        actorName,
+        factionKey: fk,
+        targetId: person.person_id,
+        targetLabel: person.name,
+        before: { militaryLoyalty: before, cash: faction.resources.cash + order.amount },
+        after: { militaryLoyalty: after, loyaltyGain: after - before, cash: faction.resources.cash },
+        evidence: '军令忠诚属于本局人物运行时数据；赏赐金额 1000 两换取 1 点忠诚，忠诚上限 100',
+        source,
+      }));
       return;
     }
     case 'appoint': {
