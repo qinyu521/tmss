@@ -12,6 +12,7 @@ import {
   courtOpinion,
   courtRecommendedDecision,
   createGame,
+  generateNpcOrders,
   migrateState,
   resolveBattle,
   runTurn,
@@ -262,6 +263,33 @@ describe('朝廷廷议', () => {
     expect(events[0].type).toBe('politics');
     expect(events[0].title).toContain('皇嗣与储位');
     expect(events[0].summary).toContain('朝局稳定');
+  });
+
+  it('非玩家大雍会按国情与人物属性自主召开廷议', () => {
+    const state = newGame('CHU', 'ruler', 'npc-court-test');
+    state.factions.YONG.resources.cash = 250_000;
+    const generated = generateNpcOrders(state, ctx);
+    const court = generated.find(
+      (order) => order.kind === 'hold_court' && order.orderId.startsWith('npc-YONG-'),
+    );
+    expect(court).toBeTruthy();
+    expect(court!.kind).toBe('hold_court');
+    if (court?.kind !== 'hold_court') return;
+    expect(court.agenda).toBe('war_council');
+    expect(court.resolution).toBe('adopt_speaker');
+    expect(court.speakerPersonId).toBeTruthy();
+    expect(court.oppositionPersonId).toBeTruthy();
+    expect(court.speakerPersonId).not.toBe(court.oppositionPersonId);
+    expect(court.decision).toMatch(/assertive|balanced|conciliatory/);
+
+    const turnResult = runTurn(state, ctx);
+    const event = turnResult.report.events.find(
+      (item) => item.type === 'politics' && item.title.startsWith('朝廷廷议·') && item.factionKey === 'YONG',
+    );
+    expect(event).toBeTruthy();
+    expect(event!.source).toBe('npc_ai');
+    expect(event!.visibleToPlayer).toBe(false);
+    expect(event!.summary).toContain('主议臣');
   });
 
   it('君主采纳主议臣意见时，会按其属性倾向选择最终政策', () => {
