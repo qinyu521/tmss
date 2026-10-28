@@ -2,7 +2,8 @@ import type { GameEvent, GameState } from '../types.js';
 import type { DerivedContext } from '../dataset.js';
 import { BALANCE } from '../balance.js';
 import { emitEvent } from './events.js';
-import { clamp } from './state.js';
+import { clamp, isCharacterAlive } from './state.js';
+import { successionNetworkInfluence } from './relationships.js';
 
 /** 三国国情机制：匈奴部落协调、大雍皇子争储、大楚世家掣肘。 */
 export function runPolitics(state: GameState, ctx: DerivedContext, events: GameEvent[]): void {
@@ -64,7 +65,20 @@ export function runPolitics(state: GameState, ctx: DerivedContext, events: GameE
   const yong = state.special.YONG;
   if (yong.princes && yong.princes.length > 0) {
     for (const p of yong.princes) {
-      p.influence = clamp(p.influence + (p.ambition - 45) / 22 - (p.trust - 55) / 60 + BALANCE.politics.yong.princeInfluenceDrift);
+      const networkInfluence = state.flags.successionCrisis
+        ? successionNetworkInfluence(
+            ctx.seed.relationships,
+            p.personId,
+            (personId) => ctx.charactersById[personId]?.faction_key === 'YONG' && isCharacterAlive(state, personId),
+          )
+        : 0;
+      p.influence = clamp(
+        p.influence +
+          (p.ambition - 45) / 22 -
+          (p.trust - 55) / 60 +
+          BALANCE.politics.yong.princeInfluenceDrift +
+          networkInfluence,
+      );
       p.trust = clamp(p.trust + (p.isCrownPrince ? 0.8 : -0.2) - (state.flags.successionCrisis ? 1.5 : 0));
     }
     const sorted = [...yong.princes].sort((a, b) => b.influence - a.influence);
