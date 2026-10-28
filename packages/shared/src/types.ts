@@ -582,6 +582,7 @@ export type OrderKind =
   | 'balance_princes'
   | 'negotiate_house'
   | 'hold_court'
+  | 'reward_commander'
   | 'appoint'
   | 'rest_army'
   | 'scout'
