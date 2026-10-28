@@ -475,6 +475,8 @@ export interface Army {
   targetRegionId: string | null;
   marchDaysTotal: number;
   marchDaysLeft: number;
+  /** 当前路段的原始行军天数；用于计算本路段内的地图显示进度 */
+  currentHopDaysTotal?: number;
   lastBattleTurn: number | null;
   originRegionId: string;
   /** 分遣队（由主力或州兵拆分） */
