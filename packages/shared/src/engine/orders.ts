@@ -409,7 +409,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       return {
         ok: true,
         issues: [],
-        preview: `从${region.name}调出州兵 ${order.amount.toLocaleString()} 人${cmd ? `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）` : ''}，经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，约 ${path.totalDays} 日。`,
+        preview: `从${region.name}调出州兵 ${order.amount.toLocaleString()} 人${cmd ? `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）` : ''}，经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，约 ${estimatedDays} 日。`,
       };
     }
     case 'scheme': {
