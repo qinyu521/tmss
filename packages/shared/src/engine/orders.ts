@@ -28,6 +28,10 @@ import { UNIT_PROFILES } from '../unitProfiles.js';
 import { courtCost, courtDecisionForResolution, courtOpinion, courtRelationshipAffinity, courtSkill, politicalGrudgeCourtPenalty } from './court.js';
 import { appointmentRelationshipEffect, successionCommandRisk } from './relationships.js';
 
+function currentFactionOfCharacter(state: GameState, ctx: DerivedContext, personId: string): FactionKey | undefined {
+  return state.characters[personId]?.allegianceFaction ?? ctx.charactersById[personId]?.faction_key;
+}
+
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
 
 const TRADE_LIMITS: Record<string, number> = { grain: 20_000, salt: 500, iron: 500, horses: 200 };
@@ -63,7 +67,11 @@ function courtDebateEdge(
   const opposition = oppositionPersonId ? ctx.charactersById[oppositionPersonId] : undefined;
   const speakerStanding = speakerPersonId ? (state.characters[speakerPersonId]?.courtStanding ?? 50) : 50;
   const oppositionStanding = oppositionPersonId ? (state.characters[oppositionPersonId]?.courtStanding ?? 50) : 50;
-  const factionKey = speaker?.faction_key ?? opposition?.faction_key ?? state.factionKey;
+  const factionKey = (speakerPersonId ? currentFactionOfCharacter(state, ctx, speakerPersonId) : undefined)
+    ?? (oppositionPersonId ? currentFactionOfCharacter(state, ctx, oppositionPersonId) : undefined)
+    ?? speaker?.faction_key
+    ?? opposition?.faction_key
+    ?? state.factionKey;
   const politicalTargetIds = agenda === 'succession'
     ? (state.special.YONG.princes ?? []).map((prince) => prince.personId)
     : agenda === 'tribal_alliance'
@@ -104,7 +112,7 @@ function commanderPoliticalExecutionDrag(
 ): { targetId: string; targetName: string; grudge: number; loyalty: number } | null {
   const commander = ctx.charactersById[commanderId];
   const runtime = state.characters[commanderId];
-  if (!commander || commander.faction_key !== factionKey || !runtime) return null;
+  if (!commander || currentFactionOfCharacter(state, ctx, commanderId) !== factionKey || !runtime) return null;
   const loyalty = runtime.militaryLoyalty ?? commander.loyalty ?? 50;
   if (loyalty > 35) return null;
 
@@ -113,7 +121,7 @@ function commanderPoliticalExecutionDrag(
       const target = ctx.charactersById[targetId];
       return grudge >= 10 &&
         targetId !== commanderId &&
-        target?.faction_key === factionKey &&
+        currentFactionOfCharacter(state, ctx, targetId) === factionKey &&
         isCharacterAlive(state, targetId);
     })
     .sort(([idA, scoreA], [idB, scoreB]) => scoreB - scoreA || idA.localeCompare(idB))[0];
@@ -178,8 +186,8 @@ function applyPoliticalBlocReaction(
   events: GameEvent[],
   rulingSource: GameEvent['source'],
 ): string {
-  const factionKey = ctx.charactersById[commanderId]?.faction_key;
-  if (!factionKey || ctx.charactersById[opponentId]?.faction_key !== factionKey) return '';
+  const factionKey = currentFactionOfCharacter(state, ctx, commanderId);
+  if (!factionKey || currentFactionOfCharacter(state, ctx, opponentId) !== factionKey) return '';
   const hostile = /竞争|制衡|敌对|不和|争夺/;
   const collect = (anchorId: string): { personId: string; weight: number }[] => {
     const candidates = new Map<string, number>();
@@ -191,7 +199,7 @@ function applyPoliticalBlocReaction(
           : '';
       if (!otherId || otherId === commanderId || otherId === opponentId) continue;
       const person = ctx.charactersById[otherId];
-      if (!person || person.faction_key !== factionKey || !isCharacterAlive(state, otherId)) continue;
+      if (!person || currentFactionOfCharacter(state, ctx, otherId) !== factionKey || !isCharacterAlive(state, otherId)) continue;
       if (hostile.test(`${edge.relation} ${edge.notes}`)) continue;
       const weight = edge.strength === '强' ? 3 : edge.strength === '中' ? 2 : 1;
       candidates.set(otherId, Math.max(candidates.get(otherId) ?? 0, weight));
@@ -267,6 +275,7 @@ function resolveBattleCasePolitics(
   const runtime = state.characters[commanderId];
   const person = ctx.charactersById[commanderId];
   const caseType = runtime?.pendingBattleCase;
+  const personFaction = currentFactionOfCharacter(state, ctx, commanderId) ?? person?.faction_key;
   const opponentId = runtime?.battlePoliticalOpponentId;
   if (!runtime || !person || !caseType) return '';
 
@@ -279,19 +288,19 @@ function resolveBattleCasePolitics(
     adjustCourtStanding(state, ctx, opponentId, opponentStandingDelta);
     const mild = action === 'demote';
     const publicTrial = action === 'trial';
-    if (person.faction_key === 'YONG') {
+    if (personFaction === 'YONG') {
       const prince = (state.special.YONG.princes ?? []).find((item) => item.personId === opponentId);
       if (prince) {
         prince.influence = clamp(prince.influence + (backsCommander ? -2 : mild ? 1 : publicTrial ? 4 : 2));
         state.special.YONG.courtStability = clamp((state.special.YONG.courtStability ?? 50) + (backsCommander ? -2 : mild ? 0 : publicTrial ? -4 : 1));
       }
-    } else if (person.faction_key === 'HUN') {
+    } else if (personFaction === 'HUN') {
       const tribe = (state.special.HUN.tribes ?? []).find((item) => item.chiefId === opponentId);
       if (tribe) {
         tribe.loyalty = clamp(tribe.loyalty + (backsCommander ? -4 : mild ? 2 : publicTrial ? 6 : 3));
         state.special.HUN.cohesion = clamp((state.special.HUN.cohesion ?? 50) + (backsCommander ? -2 : mild ? 1 : publicTrial ? 3 : 1));
       }
-    } else if (person.faction_key === 'CHU') {
+    } else if (personFaction === 'CHU') {
       const house = (state.special.CHU.houses ?? []).find((item) => item.patriarchId === opponentId);
       if (house) {
         house.support = clamp(house.support + (backsCommander ? -4 : mild ? 2 : publicTrial ? 7 : 3));
@@ -318,11 +327,11 @@ function resolveBattleCasePolitics(
   } else if (caseType === 'transfer_request') {
     const delta = action === 'replace' ? 2 : action === 'relieve' ? 1 : action === 'demote' ? -5 : action === 'trial' ? -10 : -4;
     adjustCourtStanding(state, ctx, commanderId, delta);
-    if (action === 'trial' && person.faction_key === 'YONG') {
+    if (action === 'trial' && personFaction === 'YONG') {
       state.special.YONG.courtStability = clamp((state.special.YONG.courtStability ?? 50) - 3);
-    } else if (action === 'trial' && person.faction_key === 'HUN') {
+    } else if (action === 'trial' && personFaction === 'HUN') {
       state.special.HUN.cohesion = clamp((state.special.HUN.cohesion ?? 50) - 3);
-    } else if (action === 'trial' && person.faction_key === 'CHU') {
+    } else if (action === 'trial' && personFaction === 'CHU') {
       state.special.CHU.centralAuthority = clamp((state.special.CHU.centralAuthority ?? 50) + 3);
     }
     outcome = action === 'replace'
@@ -412,7 +421,7 @@ function commanderTaken(state: GameState, commanderId: string, excludeOrderId: s
 
 function freeCommander(state: GameState, ctx: DerivedContext, faction: FactionKey, excludeIds: string[] = []): CharacterSeed | undefined {
   const candidates = ctx.seed.characters
-    .filter((c) => c.faction_key === faction)
+    .filter((c) => currentFactionOfCharacter(state, ctx, c.person_id) === faction)
     // 已故人物不可统兵
     .filter((c) => isCharacterAlive(state, c.person_id))
     .filter((c) => /将|军|帅|守|兵|禁军|武/.test(`${c.identity_type} ${c.current_position_standard}`))
@@ -551,7 +560,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         if (!order.commanderId) return issues('COMMANDER_REQUIRED', '分兵需要指定一名统兵官（不能由原统兵官同时统领两军）。');
         if (order.commanderId === army.commanderId) return issues('COMMANDER_DUPLICATE', '分遣队必须另选统兵官。');
         const cmd = commanderOf(ctx, order.commanderId);
-        if (!cmd || cmd.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
+        if (!cmd || currentFactionOfCharacter(state, ctx, cmd.person_id) !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
         if (!isCharacterAlive(state, cmd.person_id)) return issues('COMMANDER_DEAD', '该将领已故，无法统兵。');
         if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
         commanderNote = `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）`;
@@ -588,7 +597,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       if (!region || region.faction !== state.factionKey) return issues('REGION_INVALID', '征兵州府必须在本国控制下。');
       if (order.formNewArmy && order.commanderId) {
         const cmd = commanderOf(ctx, order.commanderId);
-        if (!cmd || cmd.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
+        if (!cmd || currentFactionOfCharacter(state, ctx, cmd.person_id) !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
         if (!isCharacterAlive(state, cmd.person_id)) return issues('COMMANDER_DEAD', '该将领已故，无法统兵。');
         if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
       }
@@ -688,7 +697,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       }
       for (const personId of [order.speakerPersonId, order.oppositionPersonId].filter((id): id is string => Boolean(id))) {
         const person = ctx.charactersById[personId];
-        if (!person || person.faction_key !== state.factionKey) return issues('COURT_PERSON_INVALID', '主议臣与反对臣必须来自本势力。');
+        if (!person || currentFactionOfCharacter(state, ctx, person.person_id) !== state.factionKey) return issues('COURT_PERSON_INVALID', '主议臣与反对臣必须来自本势力。');
         if (!isCharacterAlive(state, person.person_id)) return issues('COURT_PERSON_DEAD', `${person.name}已故，无法参与廷议。`);
       }
       if (order.speakerPersonId && order.speakerPersonId === order.oppositionPersonId) {
@@ -723,7 +732,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
     case 'reward_commander': {
       if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '赏赐将领需君主权限。');
       const person = ctx.charactersById[order.personId];
-      if (!person || person.faction_key !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
+      if (!person || currentFactionOfCharacter(state, ctx, person.person_id) !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
       if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，不能受赏。');
       const commandsArmy = state.armies.some((army) => army.faction === state.factionKey && army.commanderId === person.person_id);
       const commandsGarrison = Object.values(state.regions).some((region) => region.faction === state.factionKey && region.garrisonCommanderId === person.person_id);
@@ -741,7 +750,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
     case 'settle_defeated_commander': {
       if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '战后处置败将需君主权限。');
       const person = ctx.charactersById[order.personId];
-      if (!person || person.faction_key !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
+      if (!person || currentFactionOfCharacter(state, ctx, person.person_id) !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
       if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，不能接受战后处置。');
       const runtime = state.characters[person.person_id];
       if (
@@ -757,7 +766,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         const replacement = ctx.charactersById[order.replacementPersonId];
         if (
           !replacement ||
-          replacement.faction_key !== state.factionKey ||
+          currentFactionOfCharacter(state, ctx, replacement.person_id) !== state.factionKey ||
           replacement.person_id === person.person_id
         ) {
           return issues('INVALID_REPLACEMENT', '接任人选必须是另一名本方人物。');
@@ -809,7 +818,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
     case 'appoint': {
       if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '任命官职需君主权限。');
       const person = ctx.charactersById[order.personId];
-      if (!person || person.faction_key !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
+      if (!person || currentFactionOfCharacter(state, ctx, person.person_id) !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
       if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，无法任命。');
       const region = state.regions[order.regionId];
       if (!region || region.faction !== state.factionKey) return issues('NOT_FOUND', '目标州府不在你的控制之下。');
@@ -857,7 +866,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       let commanderId = order.commanderId;
       if (commanderId) {
         const cmd = commanderOf(ctx, commanderId);
-        if (!cmd || cmd.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
+        if (!cmd || currentFactionOfCharacter(state, ctx, cmd.person_id) !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
         if (!isCharacterAlive(state, cmd.person_id)) return issues('COMMANDER_DEAD', '该将领已故，无法统兵。');
         if (commanderTaken(state, commanderId, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
       } else {
@@ -878,7 +887,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       if (!cost) return issues('BAD_SCHEME', '未知计谋。');
       if (faction.resources.cash < cost) return issues('NO_CASH', `施展「${SCHEME_LABELS[order.scheme]}」需银 ${cost} 两。`);
       const strategist = commanderOf(ctx, order.strategistId ?? state.playerPersonId);
-      if (!strategist || strategist.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '施计者必须属于本国。');
+      if (!strategist || currentFactionOfCharacter(state, ctx, strategist.person_id) !== state.factionKey) return issues('COMMANDER_INVALID', '施计者必须属于本国。');
       const targetArmy = order.targetArmyId ? state.armies.find((a) => a.armyId === order.targetArmyId) : undefined;
       if (order.targetArmyId && !targetArmy) return issues('ARMY_NOT_FOUND', '目标部队不存在或已不在视野内。');
       const region = order.targetRegionId
