@@ -119,7 +119,7 @@ const orderSchema = z.discriminatedUnion('kind', [
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('negotiate_house'), houseId: z.string().min(1), amount: z.number().finite() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('hold_court'), agenda: z.enum(['war_council', 'succession', 'tribal_alliance', 'clan_relations']), decision: z.enum(['assertive', 'balanced', 'conciliatory']), speakerPersonId: z.string().min(1).optional(), oppositionPersonId: z.string().min(1).optional(), resolution: z.enum(['adopt_speaker', 'adopt_opposition', 'compromise']).optional() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('reward_commander'), personId: z.string().min(1), amount: z.number().finite() }),
-  z.object({ orderId: z.string().min(1).max(80), kind: z.literal('settle_defeated_commander'), personId: z.string().min(1), action: z.enum(['relieve', 'discipline', 'replace']), replacementPersonId: z.string().min(1).optional() }),
+  z.object({ orderId: z.string().min(1).max(80), kind: z.literal('settle_defeated_commander'), personId: z.string().min(1), action: z.enum(['relieve', 'discipline', 'replace', 'demote', 'trial']), replacementPersonId: z.string().min(1).optional() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('appoint'), personId: z.string().min(1), regionId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('rest_army'), armyId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('scout'), regionId: z.string().min(1) }),
