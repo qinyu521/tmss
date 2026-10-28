@@ -68,6 +68,23 @@ export function courtRelationshipAffinity(
   return Math.min(14, best);
 }
 
+/**
+ * Long-running political grudges make an adviser less persuasive when the agenda
+ * directly concerns someone they resent. The penalty is deterministic, saved in
+ * character runtime state, and capped so one feud cannot silence an adviser.
+ */
+export function politicalGrudgeCourtPenalty(
+  grudges: Readonly<Record<string, number>> | undefined,
+  politicalTargetIds: readonly string[],
+): number {
+  if (!grudges || politicalTargetIds.length === 0) return 0;
+  const total = new Set(politicalTargetIds.filter(Boolean)).reduce(
+    (sum, targetId) => sum + Math.max(0, Number.isFinite(grudges[targetId]) ? grudges[targetId] : 0),
+    0,
+  );
+  return Math.min(10, Math.round((total / 3) * 100) / 100);
+}
+
 /** The policy each adviser prefers; the ruler may adopt either side or choose a compromise. */
 export function courtRecommendedDecision(person: CourtAdvisorProfile, agenda: CourtAgenda): CourtDecision {
   const position = `${person.identity_type} ${person.current_position_standard}`;
