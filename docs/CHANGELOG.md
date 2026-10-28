@@ -11,8 +11,8 @@
 - 增加部署安全配置单元测试。
 
 ### 验证状态
-- 等待本分支 CI 实际运行：`npm run validate:seed`、`npm test`、`npm run typecheck`、`npm run build`。
-- 该阶段尚未在真实 1 vCPU / 2 GB VPS 上测试网络绑定、Tunnel/Access 登录和重启恢复；不能据此宣称公网部署已完成验收。
+- GitHub Actions 实际验证：`npm run validate:seed` 硬性错误 0 / 警告 3 / 原型冲突 0；`npm test` 7 个测试文件、70/70 通过；`npm run typecheck` 与 `npm run build` 通过；`docker compose config --quiet` 通过，并验证宿主端口只绑定 `127.0.0.1:8787`。
+- 该阶段尚未在真实 1 vCPU / 2 GB VPS 上测试网络绑定、Tunnel/Access 登录和重启恢复；不能据此宣称公网部署已完成验收。对应 CI：https://github.com/qinyu521/tmss/actions/runs/40669226759
 
 
 ## 0.6.1 · 2026-10-28（人物原型归属审计修复分支）
