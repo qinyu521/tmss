@@ -240,7 +240,7 @@ export class MapScene {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.bindPointer();
-    this.animate();
+    this.animate(0);
   }
 
   setMap(map: MapData): void {
