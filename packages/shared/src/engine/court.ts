@@ -12,14 +12,16 @@ export interface CourtAdvisorProfile {
   governance: number;
   commerce: number;
   loyalty: number;
+  courtStanding?: number;
 }
 
 export function courtSkill(person: CourtAdvisorProfile | undefined, agenda: CourtAgenda): number {
   if (!person) return 50;
-  if (agenda === 'war_council') return person.strategy * 0.6 + person.command * 0.4;
-  if (agenda === 'succession') return person.intrigue * 0.45 + person.loyalty * 0.3 + person.governance * 0.25;
-  if (agenda === 'tribal_alliance') return person.loyalty * 0.5 + person.command * 0.2 + person.intrigue * 0.3;
-  return person.governance * 0.45 + person.commerce * 0.35 + person.intrigue * 0.2;
+  const standingModifier = ((person.courtStanding ?? 50) - 50) * 0.12;
+  if (agenda === 'war_council') return person.strategy * 0.6 + person.command * 0.4 + standingModifier;
+  if (agenda === 'succession') return person.intrigue * 0.45 + person.loyalty * 0.3 + person.governance * 0.25 + standingModifier;
+  if (agenda === 'tribal_alliance') return person.loyalty * 0.5 + person.command * 0.2 + person.intrigue * 0.3 + standingModifier;
+  return person.governance * 0.45 + person.commerce * 0.35 + person.intrigue * 0.2 + standingModifier;
 }
 
 /** The policy each adviser prefers; the ruler may adopt either side or choose a compromise. */
