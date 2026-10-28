@@ -512,6 +512,7 @@ describe('朝廷廷议', () => {
     state.schemaVersion = 2;
     const person = ctx.seed.characters.find((candidate) => candidate.faction_key === 'YONG')!;
     state.characters[person.person_id].courtStanding = undefined;
+    state.characters[person.person_id].militaryLoyalty = undefined;
     state.characters[person.person_id].alive = false;
     state.characters[person.person_id].deathCause = '测试旧档死因';
 
