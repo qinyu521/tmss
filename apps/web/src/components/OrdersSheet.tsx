@@ -23,7 +23,7 @@ import { Modal, Portrait, UnitIcon } from './ui';
 const GROUPS = {
   military: ['move_army', 'dispatch_garrison', 'rest_army', 'scout'],
   civil: ['recruit', 'levy_grain', 'levy_tax', 'trade'],
-  politics: ['hold_court', 'reward_commander', 'settle_defeated_commander', 'appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
+  politics: ['hold_court', 'reward_commander', 'replace_warned_commander', 'settle_defeated_commander', 'appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
   scheme: ['scheme'],
 } as const;
 
@@ -88,6 +88,8 @@ export default function OrdersSheet() {
   const [courtOppositionId, setCourtOppositionId] = useState('');
   const [rewardCommanderId, setRewardCommanderId] = useState('');
   const [rewardAmount, setRewardAmount] = useState(10_000);
+  const [defectionArmyId, setDefectionArmyId] = useState('');
+  const [defectionReplacementId, setDefectionReplacementId] = useState('');
   const [settlementCommanderId, setSettlementCommanderId] = useState('');
   const [settlementAction, setSettlementAction] = useState<'relieve' | 'discipline' | 'replace' | 'demote' | 'trial'>('relieve');
   const [settlementReplacementId, setSettlementReplacementId] = useState('');
@@ -144,6 +146,14 @@ export default function OrdersSheet() {
         setCourtOppositionId(available.find((person) => person.person_id !== available[0]?.person_id)?.person_id ?? '');
         const firstArmyCommander = view.armies.find((army) => army.own)?.commanderId;
         setRewardCommanderId(firstArmyCommander && available.some((person) => person.person_id === firstArmyCommander) ? firstArmyCommander : '');
+        const warnedCommander = available.find((person) => person.defectionWarningTurn !== undefined && person.defectionTargetFaction);
+        const warnedArmy = warnedCommander ? view.armies.find((army) => army.own && army.commanderId === warnedCommander.person_id) : undefined;
+        setDefectionArmyId(warnedArmy?.armyId ?? '');
+        const freeReplacement = available.find((person) =>
+          !view.armies.some((army) => army.commanderId === person.person_id) &&
+          !view.regions.some((region) => region.owned && region.garrisonCommanderName === person.name)
+        );
+        setDefectionReplacementId(freeReplacement?.person_id ?? '');
         setSettlementCommanderId(available.find((person) => person.pendingBattleSettlement && person.lastBattleOutcome === 'defeat')?.person_id ?? '');
         const replacement = available.find((person) =>
           !view.armies.some((army) => army.own && army.commanderId === person.person_id) &&
@@ -156,6 +166,8 @@ export default function OrdersSheet() {
         setCourtSpeakerId('');
         setCourtOppositionId('');
         setRewardCommanderId('');
+        setDefectionArmyId('');
+        setDefectionReplacementId('');
         setSettlementCommanderId('');
       });
   }, [view?.factionKey, view?.gameId]);
@@ -217,6 +229,23 @@ export default function OrdersSheet() {
   const courtOfficials = commanders.filter((person) => person.alive !== false);
   const rewardCandidates = courtOfficials.filter((person) => ownArmies.some((army) => army.commanderId === person.person_id));
   const selectedRewardCommander = rewardCandidates.find((person) => person.person_id === rewardCommanderId);
+  const warnedCommanderCandidates = courtOfficials.filter((person) =>
+    person.defectionWarningTurn !== undefined &&
+    Boolean(person.defectionTargetFaction) &&
+    view?.armies.some((army) => army.own && army.commanderId === person.person_id)
+  );
+  const warnedArmyCandidates = view?.armies.filter((army) =>
+    army.own && warnedCommanderCandidates.some((person) => person.person_id === army.commanderId)
+  ) ?? [];
+  const selectedWarnedArmy = warnedArmyCandidates.find((army) => army.armyId === defectionArmyId) ?? warnedArmyCandidates[0];
+  const selectedWarnedCommander = selectedWarnedArmy
+    ? warnedCommanderCandidates.find((person) => person.person_id === selectedWarnedArmy.commanderId)
+    : undefined;
+  const warnedReplacementCandidates = courtOfficials.filter((person) =>
+    person.person_id !== selectedWarnedCommander?.person_id &&
+    !view?.armies.some((army) => army.commanderId === person.person_id) &&
+    !view?.regions.some((region) => region.owned && region.garrisonCommanderName === person.name)
+  );
   const defeatedCommanderCandidates = courtOfficials.filter((person) => person.pendingBattleSettlement === true && person.lastBattleOutcome === 'defeat');
   const selectedDefeatedCommander = defeatedCommanderCandidates.find((person) => person.person_id === settlementCommanderId);
   const battlePoliticalOpponent = selectedDefeatedCommander?.battlePoliticalOpponentId
@@ -310,6 +339,12 @@ export default function OrdersSheet() {
       case 'reward_commander':
         return rewardCommanderId && rewardCandidates.some((person) => person.person_id === rewardCommanderId)
           ? { orderId, kind: 'reward_commander', personId: rewardCommanderId, amount: rewardAmount }
+          : null;
+      case 'replace_warned_commander':
+        return selectedWarnedArmy && selectedWarnedCommander &&
+          warnedArmyCandidates.some((army) => army.armyId === selectedWarnedArmy.armyId) &&
+          warnedReplacementCandidates.some((person) => person.person_id === defectionReplacementId)
+          ? { orderId, kind: 'replace_warned_commander', armyId: selectedWarnedArmy.armyId, replacementPersonId: defectionReplacementId }
           : null;
       case 'settle_defeated_commander':
         return settlementCommanderId && defeatedCommanderCandidates.some((person) => person.person_id === settlementCommanderId) &&
@@ -740,6 +775,41 @@ export default function OrdersSheet() {
                   {selectedRewardCommander
                     ? `当前军令忠诚 ${Math.round(selectedRewardCommander.militaryLoyalty ?? selectedRewardCommander.loyalty)}，赏后最多升至 100。将领忠诚会影响大雍夺嫡危机中的拒命风险。`
                     : '只能赏赐目前统领本国军团的在世将领。'}
+                </div>
+              </>
+            )}
+
+            {action === 'replace_warned_commander' && (
+              <>
+                <div className="form-row">
+                  <label>倒戈预警军团</label>
+                  <select value={selectedWarnedArmy?.armyId ?? ''} onChange={(e) => setDefectionArmyId(e.target.value)}>
+                    <option value="">选择收到倒戈预警的军团</option>
+                    {warnedArmyCandidates.map((army) => {
+                      const commander = warnedCommanderCandidates.find((person) => person.person_id === army.commanderId);
+                      return (
+                        <option key={army.armyId} value={army.armyId}>
+                          {army.name} · {commander?.name ?? army.commanderName} · 忠诚 {Math.round(commander?.militaryLoyalty ?? commander?.loyalty ?? 0)} · 可能归附 {commander?.defectionTargetFaction}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>接任统将</label>
+                  <select value={defectionReplacementId} onChange={(e) => setDefectionReplacementId(e.target.value)}>
+                    <option value="">选择未掌兵的本方将领</option>
+                    {warnedReplacementCandidates.map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · 统率 {person.command} · 忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-note">
+                  {selectedWarnedCommander
+                    ? `当前预警期限为第 ${(selectedWarnedCommander.defectionWarningTurn ?? 0) + 1} 回合。撤换不耗银，但部队士气 -5、旧将忠诚 -5、在朝声望 -3；新将立即接掌军团并清除倒戈预警。`
+                    : '这里只能选择已有有效倒戈预警的本方军团。撤换适合国库紧张、无法通过赏赐挽回军心的情况。'}
                 </div>
               </>
             )}
