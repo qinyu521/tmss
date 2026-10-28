@@ -118,6 +118,7 @@ const orderSchema = z.discriminatedUnion('kind', [
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('balance_princes'), amount: z.number().finite() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('negotiate_house'), houseId: z.string().min(1), amount: z.number().finite() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('hold_court'), agenda: z.enum(['war_council', 'succession', 'tribal_alliance', 'clan_relations']), decision: z.enum(['assertive', 'balanced', 'conciliatory']), speakerPersonId: z.string().min(1).optional(), oppositionPersonId: z.string().min(1).optional(), resolution: z.enum(['adopt_speaker', 'adopt_opposition', 'compromise']).optional() }),
+  z.object({ orderId: z.string().min(1).max(80), kind: z.literal('reward_commander'), personId: z.string().min(1), amount: z.number().finite() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('appoint'), personId: z.string().min(1), regionId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('rest_army'), armyId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('scout'), regionId: z.string().min(1) }),
@@ -308,7 +309,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       items: rows.map((r) => {
         const item = summariseCharacter(JSON.parse(r.payload));
         const rt = runtimeMap?.[item.person_id];
-        return rt ? { ...item, alive: rt.alive, deathCause: rt.deathCause, courtStanding: rt.courtStanding ?? 50 } : item;
+        return rt ? { ...item, alive: rt.alive, deathCause: rt.deathCause, courtStanding: rt.courtStanding ?? 50, militaryLoyalty: rt.militaryLoyalty ?? item.loyalty } : item;
       }),
     };
   });
