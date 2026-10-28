@@ -1151,6 +1151,28 @@ describe('回合结算', () => {
     expect(baselineEvents.some((event) => event.title.includes('军令消极执行'))).toBe(false);
   });
 
+  it('对敌国人物的积怨不会被误算为本国内斗并拖慢行军', () => {
+    const state = newGame('CHU', 'ruler', 'enemy-grudge-no-march-drag');
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const destination = Object.values(state.regions).find(
+      (region) => region.faction === 'CHU' && region.regionId !== army.nodeId,
+    )!;
+    const enemy = seed.characters.find((person) => person.faction_key === 'HUN')!;
+    state.characters[army.commanderId].militaryLoyalty = 30;
+    state.characters[army.commanderId].politicalGrudges = { [enemy.person_id]: 18 };
+
+    const events: GameEvent[] = [];
+    applyOrder(state, ctx, {
+      orderId: 'enemy-grudge-no-drag',
+      kind: 'move_army',
+      armyId: army.armyId,
+      targetRegionId: destination.regionId,
+    }, events);
+
+    expect(army.status).toBe('marching');
+    expect(events.some((event) => event.title.includes('军令消极执行'))).toBe(false);
+  });
+
   it('地图显示进度按当前路段计算，而不是把全程进度套到剩余路线', () => {
     const state = newGame('YONG');
     const army = state.armies.find((a) => a.faction === 'YONG')!;
