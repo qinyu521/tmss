@@ -17,7 +17,7 @@ import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
 import { buildContext, buildInitialArmies, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -251,7 +251,7 @@ export function createGame(
     characters: Object.fromEntries(
       seed.characters.map((c) => [
         c.person_id,
-        { personId: c.person_id, alive: true, ageBand: c.age_band, courtStanding: 50 },
+        { personId: c.person_id, alive: true, ageBand: c.age_band, courtStanding: 50, militaryLoyalty: c.loyalty },
       ]),
     ),
     statistics: { battles: 0, casualties: 0, turnsPlayed: 0, occupiedRegions: 0 },
@@ -302,9 +302,32 @@ function migrateV2toV3(state: GameState, roster?: CharacterSeed[]): void {
   for (const runtime of Object.values(state.characters)) runtime.courtStanding ??= 50;
 }
 
+/** v3 → v4：把人物的军令忠诚变为本局运行时数据，旧档从种子忠诚度起算。 */
+function migrateV3toV4(state: GameState, roster?: CharacterSeed[]): void {
+  if (!state.characters) state.characters = {};
+  for (const person of roster ?? []) {
+    if (!state.characters[person.person_id]) {
+      state.characters[person.person_id] = {
+        personId: person.person_id,
+        alive: true,
+        ageBand: person.age_band,
+        courtStanding: 50,
+        militaryLoyalty: person.loyalty,
+      };
+    } else {
+      state.characters[person.person_id].militaryLoyalty ??= person.loyalty;
+    }
+  }
+  for (const runtime of Object.values(state.characters)) {
+    runtime.courtStanding ??= 50;
+    runtime.militaryLoyalty ??= 50;
+  }
+}
+
 const MIGRATIONS: Migration[] = [
   { from: 1, to: 2, apply: migrateV1toV2 },
   { from: 2, to: 3, apply: migrateV2toV3 },
+  { from: 3, to: 4, apply: migrateV3toV4 },
 ];
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
