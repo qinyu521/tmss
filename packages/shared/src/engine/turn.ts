@@ -200,6 +200,8 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
         // 本旬只走完当前路段的一部分：保存剩余天数，并立即结算已行军天数的补给与疲劳。
         // 若等抵达州府才结算，长途行军途中将不会消耗补给，也不会累积疲劳。
         const traveledDays = remainingDays;
+        // 为旧存档补齐当前路段基准：旧版本没有 currentHopDaysTotal，无法准确显示路段进度。
+        army.currentHopDaysTotal ??= hop;
         army.hopCosts[0] = hop - traveledDays;
         army.marchDaysLeft = army.hopCosts.reduce((sum, days) => sum + days, 0);
         army.supply = clamp(army.supply - traveledDays * BALANCE.army.marchSupplyDrainPerDay);
