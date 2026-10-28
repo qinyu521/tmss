@@ -229,6 +229,14 @@ function resolvePoliticalGrudgeResponses(
     if (!actor || !actorRuntime.alive || !actorRuntime.politicalGrudges) continue;
     const grudges = { ...actorRuntime.politicalGrudges };
     const nextResponses = { ...(actorRuntime.politicalGrudgeNextResponseTurn ?? {}) };
+    // 与尚未包含冷却字段的存档兼容：先安排到下一旬，不在加载后的同一旬立刻反击。
+    for (const [targetId, score] of Object.entries(grudges)) {
+      if (score >= 10 && !Number.isFinite(nextResponses[targetId])) {
+        nextResponses[targetId] = turn + 1;
+      }
+    }
+    actorRuntime.politicalGrudgeNextResponseTurn = nextResponses;
+    state.characters[actorId] = actorRuntime;
     const candidates = Object.entries(grudges)
       .filter(([targetId, score]) => {
         const target = ctx.charactersById[targetId];
