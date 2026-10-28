@@ -138,3 +138,15 @@ export function successionCommandRisk(
     crownPrinceAffinity: crownAffinity,
   };
 }
+
+/**
+ * A battle changes a commander's standing inside the army:
+ * - victory restores confidence (larger gain when own losses were modest);
+ * - defeat dents command loyalty in proportion to the losses suffered.
+ * The caller applies the result to the save's mutable runtime state.
+ */
+export function battleLoyaltyDelta(won: boolean, casualtyRate: number): number {
+  const rate = Math.max(0, Math.min(1, Number.isFinite(casualtyRate) ? casualtyRate : 0));
+  if (won) return rate <= 0.08 ? 2 : 1;
+  return -Math.min(12, 4 + Math.floor(rate * 18));
+}
