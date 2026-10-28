@@ -110,6 +110,8 @@ export interface CharacterSummary {
   /** 携带 gameId 查询时返回：该局生死与死因 */
   alive?: boolean;
   deathCause?: string;
+  /** 本局廷议声望（0-100）；未加载运行时数据时为空 */
+  courtStanding?: number;
 }
 
 export interface GameListItem {
