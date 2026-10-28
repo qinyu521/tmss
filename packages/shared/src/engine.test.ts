@@ -11,6 +11,7 @@ import {
   buildPlayerView,
   courtOpinion,
   courtRecommendedDecision,
+  courtRelationshipAffinity,
   createGame,
   generateNpcOrders,
   migrateState,
@@ -263,6 +264,22 @@ describe('朝廷廷议', () => {
     expect(events[0].type).toBe('politics');
     expect(events[0].title).toContain('皇嗣与储位');
     expect(events[0].summary).toContain('朝局稳定');
+  });
+
+  it('廷议会把种子中的真实人物关系计入对应政治议题，而非凭姓名猜关系', () => {
+    const relationship = {
+      faction: '大雍',
+      source_person_id: 'YONG-A',
+      source_name: '甲',
+      relation: '父子/继承关系',
+      target_person_id: 'YONG-PRINCE',
+      target_name: '储君',
+      strength: '强',
+      notes: '测试用显式关系边',
+    };
+    expect(courtRelationshipAffinity([relationship], 'YONG-A', 'succession', ['YONG-PRINCE'])).toBe(10);
+    expect(courtRelationshipAffinity([relationship], 'YONG-A', 'war_council', ['YONG-PRINCE'])).toBe(8);
+    expect(courtRelationshipAffinity([relationship], 'YONG-A', 'succession', ['OTHER-PRINCE'])).toBe(0);
   });
 
   it('非玩家大雍会按国情与人物属性自主召开廷议', () => {
