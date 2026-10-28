@@ -612,6 +612,57 @@ describe('将领倒戈与挽回', () => {
     return () => { ctx.seed.relationships = previous; };
   };
 
+  it('收到倒戈预警的统将会拒绝攻击拟归附势力，但赏赐恢复忠诚后可以继续执行', () => {
+    const state = newGame('CHU', 'ruler', 'warned-defector-refuses-attack');
+    state.diplomacy['HUN|CHU'] = -100;
+    state.factions.CHU.resources.cash = 50_000;
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const commanderId = army.commanderId;
+    const destination = Object.values(state.regions).find((region) => region.faction === 'HUN')!;
+    const rivalRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    const runtime = state.characters[commanderId];
+    runtime.militaryLoyalty = 10;
+    runtime.defectionWarningTurn = state.date.turn;
+    runtime.defectionTargetFaction = 'HUN';
+    const restore = attachDefectionTie(commanderId, rivalRuler.person_id);
+    try {
+      const order = {
+        orderId: 'warned-commander-attack-hun',
+        kind: 'move_army' as const,
+        armyId: army.armyId,
+        targetRegionId: destination.regionId,
+      };
+      const validation = validateOrder(state, ctx, order);
+      expect(validation.ok).toBe(true);
+      expect(validation.preview).toContain('拒绝攻击');
+      const nodeBefore = army.nodeId;
+      const refusalEvents: GameEvent[] = [];
+      applyOrder(state, ctx, order, refusalEvents);
+      expect(army.nodeId).toBe(nodeBefore);
+      expect(army.status).toBe('idle');
+      expect(refusalEvents.some((event) => event.title.includes('拒绝攻击') && event.after?.refusal === true)).toBe(true);
+
+      applyOrder(state, ctx, {
+        orderId: 'reward-warned-commander-before-retry',
+        kind: 'reward_commander',
+        personId: commanderId,
+        amount: 10_000,
+      }, []);
+      expect(state.characters[commanderId].militaryLoyalty).toBe(20);
+      const retry = {
+        ...order,
+        orderId: 'warned-commander-attack-after-reward',
+      };
+      expect(validateOrder(state, ctx, retry).ok).toBe(true);
+      const retryEvents: GameEvent[] = [];
+      applyOrder(state, ctx, retry, retryEvents);
+      expect(army.status).toBe('marching');
+      expect(retryEvents.some((event) => event.title.includes('拒绝攻击'))).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
   it('低忠诚将领先收到一旬预警；若无人挽回，会携军献城并改变势力归属', () => {
     const state = newGame('CHU', 'ruler', 'defection-resolution');
     const army = state.armies.find((item) => item.faction === 'CHU')!;
