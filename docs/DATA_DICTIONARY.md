@@ -22,7 +22,7 @@
 | noble_titles | 24 | rank_id | 爵位与持有者 |
 | relationships | 183 | 组合 | 人物关系（配偶/亲属/僚属等） |
 | map_nodes | 72 | node_id | 州府主城、关隘、港口、粮仓、矿场等 |
-| map_edges | 31 | edge_id | 原始道路连接、类型与移动成本 |
+| map_edges | 31 | edge_id | 原始道路连接、基础移动成本、道路类型与通行容量（高/中/低/争议） |
 | military_units | 22 | unit_id | 特殊兵种名称、定位、强弱与限制 |
 | national_force_allocations | 18 | allocation_id | 每国 6 个军区的初始兵力 |
 | prototype_affinity_audit | 336 | person_id | 原型归属审计 |
@@ -40,13 +40,13 @@
 4. 兵力：每国 6 条分配，合计与 `factions.initial_force_total` 一致。
 5. 州府图连通（24/24）。
 6. 原始种子中不得出现 `origin=derived` 的边。
-7. 原型规则冲突只报告：当前报告 12 条（杜预/羊祜/朱元璋等原型被匈奴或大雍人物引用），未修改原始数据。
+7. 原型主归属冲突由 `historical_archetypes.primary_faction_key` 和用户确认的核心例外共同校验；当前为 0 条主归属冲突。另有 3 条外戚标签尚未规范化为家族实体 ID，见 `docs/DATA_VALIDATION_REPORT.md`。
 
 ## 4. 派生数据（不覆盖原始 JSON）
 
 | 位置 | 内容 | 依据 |
 | --- | --- | --- |
-| `data/derived/map_extra.json` | 派生地图边（本版 0 条） | 31 条原始边已使 24 州府完全连通；若扩充需写 `derived_reason` |
+| `data/derived/map_extra.json` | 派生地图边（本版 0 条） | 31 条原始边已使 24 州府完全连通；若扩充需写 `derived_reason`。道路通行容量现参与大军寻路，但不修改权威种子 |
 | `data/derived/map_art.json` | 河流、湖泊、山脉、森林、海岸线、首都标记 | 原创架空地理，仅视觉表现，不改变道路与控制 |
 | `packages/shared/src/unitProfiles.ts` | 22 兵种攻防/远程/机动/补给/地形/克制/上限/招募 | 名称与描述来自种子，数值为原创平衡 |
 | `packages/shared/src/dataset.ts` | 州府人口/产出/地形推导 | 由 `regional_profile`、`key_locations` 关键词 + 势力修正；公式固定可审查 |
