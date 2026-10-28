@@ -383,7 +383,7 @@ export function resolveCommanderDefectionThreats(
         armyFaction: targetFaction,
         regionFaction: targetFaction,
         troops: army.troops,
-        militaryLoyalty: runtime.militaryLoyalty ?? commander.loyalty,
+        militaryLoyalty: runtime.militaryLoyalty ?? before.militaryLoyalty,
         regionOrder: region.order,
         regionLoyalty: region.loyalty,
         oldFactionStability: state.factions[oldFaction].stability,
