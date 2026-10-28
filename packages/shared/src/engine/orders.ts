@@ -54,18 +54,51 @@ function courtCost(agenda: CourtAgenda, decision: CourtDecision): number {
 }
 
 function courtDebateEdge(
+  state: GameState,
   ctx: DerivedContext,
   agenda: CourtAgenda,
   speakerPersonId?: string,
   oppositionPersonId?: string,
-): { edge: number; speaker?: CharacterSeed; opposition?: CharacterSeed; speakerScore: number; oppositionScore: number } {
+): {
+  edge: number;
+  speaker?: CharacterSeed;
+  opposition?: CharacterSeed;
+  speakerScore: number;
+  oppositionScore: number;
+  speakerStanding: number;
+  oppositionStanding: number;
+} {
   const speaker = speakerPersonId ? ctx.charactersById[speakerPersonId] : undefined;
   const opposition = oppositionPersonId ? ctx.charactersById[oppositionPersonId] : undefined;
-  const speakerScore = courtSkill(speaker, agenda);
-  const oppositionScore = courtSkill(opposition, agenda);
-  // 双方能力差每 15 点改变 1 点议案效果，上下限为 3，避免人物属性压过君主裁决本身。
+  const speakerStanding = speakerPersonId ? (state.characters[speakerPersonId]?.courtStanding ?? 50) : 50;
+  const oppositionStanding = oppositionPersonId ? (state.characters[oppositionPersonId]?.courtStanding ?? 50) : 50;
+  const speakerScore = courtSkill(speaker ? { ...speaker, courtStanding: speakerStanding } : undefined, agenda);
+  const oppositionScore = courtSkill(opposition ? { ...opposition, courtStanding: oppositionStanding } : undefined, agenda);
+  // 双方能力与声望差每 15 点改变 1 点议案效果，上下限为 3，避免人物属性压过君主裁决本身。
   const edge = speaker && opposition ? Math.max(-3, Math.min(3, Math.round((speakerScore - oppositionScore) / 15))) : 0;
-  return { edge, speaker, opposition, speakerScore: Math.round(speakerScore), oppositionScore: Math.round(oppositionScore) };
+  return {
+    edge,
+    speaker,
+    opposition,
+    speakerScore: Math.round(speakerScore),
+    oppositionScore: Math.round(oppositionScore),
+    speakerStanding,
+    oppositionStanding,
+  };
+}
+
+function adjustCourtStanding(state: GameState, ctx: DerivedContext, personId: string | undefined, delta: number): number | undefined {
+  if (!personId || !ctx.charactersById[personId]) return undefined;
+  const person = ctx.charactersById[personId];
+  const runtime = state.characters[personId] ?? {
+    personId,
+    alive: true,
+    ageBand: person.age_band,
+    courtStanding: 50,
+  };
+  runtime.courtStanding = clamp((runtime.courtStanding ?? 50) + delta);
+  state.characters[personId] = runtime;
+  return runtime.courtStanding;
 }
 
 function courtAgendaAllowed(faction: FactionKey, agenda: CourtAgenda): boolean {
@@ -400,7 +433,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       if (order.speakerPersonId && order.speakerPersonId === order.oppositionPersonId) {
         return issues('COURT_PAIR_DUPLICATE', '主议臣与反对臣不能由同一人担任。');
       }
-      const debate = courtDebateEdge(ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
+      const debate = courtDebateEdge(state, ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
       const decision = courtDecisionForResolution(order.agenda, order.resolution, debate.speaker, debate.opposition, order.decision);
       const cost = courtCost(order.agenda, decision);
       if (faction.resources.cash < cost) return issues('NO_CASH', `廷议与执行需银 ${cost.toLocaleString()} 两，现有 ${Math.round(faction.resources.cash).toLocaleString()}。`);
@@ -880,7 +913,7 @@ export function applyOrder(
       return;
     }
     case 'hold_court': {
-      const debate = courtDebateEdge(ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
+      const debate = courtDebateEdge(state, ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
       const decision = courtDecisionForResolution(order.agenda, order.resolution, debate.speaker, debate.opposition, order.decision);
       const cost = courtCost(order.agenda, decision);
       faction.resources.cash -= cost;
@@ -1016,7 +1049,26 @@ export function applyOrder(
           : order.resolution === 'compromise'
             ? '折中调和双方意见'
             : '君主直接裁定政策方向';
-      const decisionRecord = { resolutionLabel, finalPolicy: COURT_DECISION_LABEL[decision] };
+      let speakerStandingAfter: number | undefined;
+      let oppositionStandingAfter: number | undefined;
+      if (order.resolution === 'adopt_speaker') {
+        speakerStandingAfter = adjustCourtStanding(state, ctx, debate.speaker?.person_id, 5);
+        oppositionStandingAfter = adjustCourtStanding(state, ctx, debate.opposition?.person_id, -4);
+      } else if (order.resolution === 'adopt_opposition') {
+        speakerStandingAfter = adjustCourtStanding(state, ctx, debate.speaker?.person_id, -4);
+        oppositionStandingAfter = adjustCourtStanding(state, ctx, debate.opposition?.person_id, 5);
+      } else if (order.resolution === 'compromise') {
+        speakerStandingAfter = adjustCourtStanding(state, ctx, debate.speaker?.person_id, 1);
+        oppositionStandingAfter = adjustCourtStanding(state, ctx, debate.opposition?.person_id, 1);
+      }
+      const decisionRecord = {
+        resolutionLabel,
+        finalPolicy: COURT_DECISION_LABEL[decision],
+        speakerStandingBefore: debate.speakerStanding,
+        oppositionStandingBefore: debate.oppositionStanding,
+        speakerStandingAfter: speakerStandingAfter ?? debate.speakerStanding,
+        oppositionStandingAfter: oppositionStandingAfter ?? debate.oppositionStanding,
+      };
       after = { ...after, ...decisionRecord };
       const debateRecord = {
         speakerPersonId: debate.speaker?.person_id ?? null,
@@ -1025,6 +1077,10 @@ export function applyOrder(
         oppositionPersonId: debate.opposition?.person_id ?? null,
         oppositionName: debate.opposition?.name ?? '未指定反对臣',
         oppositionScore: debate.oppositionScore,
+        speakerStandingBefore: debate.speakerStanding,
+        oppositionStandingBefore: debate.oppositionStanding,
+        speakerStandingAfter: state.characters[debate.speaker?.person_id ?? '']?.courtStanding ?? debate.speakerStanding,
+        oppositionStandingAfter: state.characters[debate.opposition?.person_id ?? '']?.courtStanding ?? debate.oppositionStanding,
         debateEdge: debate.edge,
       };
       after = { ...after, ...debateRecord };
