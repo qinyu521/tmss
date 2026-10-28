@@ -26,7 +26,7 @@ import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
 import { courtCost, courtDecisionForResolution, courtOpinion, courtRelationshipAffinity, courtSkill } from './court.js';
-import { appointmentRelationshipEffect } from './relationships.js';
+import { appointmentRelationshipEffect, successionCommandRisk } from './relationships.js';
 
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
 
@@ -255,6 +255,22 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       const commandable = armiesCommandable(state);
       if (!commandable.some((a) => a.armyId === army.armyId)) {
         return issues('AUTH_SCOPE', `你的身份只能调动授权范围内的部队（${ROLE_LABEL[role]}）。`);
+      }
+      if (army.faction === 'YONG' && state.flags.successionCrisis) {
+        const commander = ctx.charactersById[army.commanderId];
+        const risk = successionCommandRisk(
+          ctx.seed.relationships,
+          state.special.YONG.princes ?? [],
+          army.commanderId,
+          commander?.loyalty ?? 50,
+          state.flags.successionCrisis,
+        );
+        if (risk) {
+          return issues(
+            'COMMANDER_POLITICAL_SPLIT',
+            `${army.commanderName}与${risk.rivalPrinceName}存在强关系网络，且其对朝廷忠诚不足；夺嫡危机中拒绝执行调兵令。请先稳定朝局或更换统将。`,
+          );
+        }
       }
       if (state.factionKey === 'HUN') {
         const tribe = state.special.HUN.tribes?.find((t) => t.regionId === army.nodeId);
@@ -581,6 +597,33 @@ export function applyOrder(
     case 'move_army': {
       const army = state.armies.find((a) => a.armyId === order.armyId);
       if (!army) return;
+      if (army.faction === 'YONG' && state.flags.successionCrisis) {
+        const commander = ctx.charactersById[army.commanderId];
+        const risk = successionCommandRisk(
+          ctx.seed.relationships,
+          state.special.YONG.princes ?? [],
+          army.commanderId,
+          commander?.loyalty ?? 50,
+          state.flags.successionCrisis,
+        );
+        if (risk) {
+          events.push(emitEvent(state, {
+            type: 'politics',
+            title: `大雍·${army.commanderName}拒绝奉诏`,
+            summary: `夺嫡危机中，${army.commanderName}因与${risk.rivalPrinceName}的关系网络及自身低忠诚拒绝调兵；其部暂留原地。朝廷需先稳定局势或更换统将。`,
+            actorId: army.commanderId,
+            actorName: army.commanderName,
+            factionKey: 'YONG',
+            targetId: army.armyId,
+            targetLabel: army.name,
+            after: { refusal: true, rivalPrinceId: risk.rivalPrinceId, rivalAffinity: risk.rivalAffinity, crownPrinceAffinity: risk.crownPrinceAffinity },
+            evidence: '夺嫡危机 + 统将低忠诚 + 对竞争皇子的显式关系权重高于储君关系',
+            source,
+            visibleToPlayer: state.factionKey === 'YONG',
+          }));
+          return;
+        }
+      }
       const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
       if (!path.ok) return;
       const amount = order.amount ?? army.troops;
