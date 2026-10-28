@@ -344,6 +344,11 @@ export function resolveCommanderDefectionThreats(
     runtime.allegianceFaction = targetFaction;
     runtime.defectionWarningTurn = undefined;
     runtime.defectionTargetFaction = undefined;
+    runtime.pendingBattleSettlement = false;
+    runtime.pendingBattleCase = undefined;
+    runtime.battlePoliticalOpponentId = undefined;
+    runtime.politicalGrudges = {};
+    runtime.politicalGrudgeNextResponseTurn = {};
     region.faction = targetFaction;
     region.governorId = ruler?.person_id ?? army.commanderId;
     region.governorName = ruler?.name ?? army.commanderName;
@@ -588,7 +593,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
             return Boolean(
               otherId &&
               otherId !== personId &&
-              other?.faction_key === factionKey &&
+              (state.characters[otherId]?.allegianceFaction ?? other?.faction_key) === factionKey &&
               state.characters[otherId]?.alive !== false &&
               /竞争|制衡|敌对|不和|争夺/.test(edge.relation + ' ' + edge.notes)
             );
