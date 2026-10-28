@@ -26,6 +26,7 @@ import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
 import { courtCost, courtDecisionForResolution, courtOpinion, courtRelationshipAffinity, courtSkill } from './court.js';
+import { appointmentRelationshipEffect } from './relationships.js';
 
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
 
@@ -1109,22 +1110,38 @@ export function applyOrder(
       if (!person || !region) return;
       faction.resources.cash -= 8_000;
       const old = region.governorName;
+      const oldGovernorId = region.governorId;
+      const orderBefore = region.order;
+      const loyaltyBefore = region.loyalty;
+      const relationshipEffect = appointmentRelationshipEffect(
+        ctx.seed.relationships,
+        person.person_id,
+        oldGovernorId,
+        region.garrisonCommanderId,
+      );
       region.governorId = person.person_id;
       region.governorName = person.name;
-      region.loyalty = clamp(region.loyalty + 4);
+      region.order = clamp(region.order + relationshipEffect.orderDelta);
+      region.loyalty = clamp(region.loyalty + 4 + relationshipEffect.loyaltyDelta);
       events.push(
         emitEvent(state, {
           type: 'order_accepted',
           title: `任命 ${person.name} 为${region.name}主官`,
-          summary: `原任 ${old} 调离；新任官员能力（治理 ${person.governance}）将影响该州执行效率。`,
+          summary: `原任 ${old} 调离；新任官员治理 ${person.governance}。交接评估：${relationshipEffect.explanation}`,
           actorId,
           actorName,
           factionKey: fk,
           targetId: person.person_id,
           targetLabel: person.name,
-          before: { governor: old },
-          after: { governor: person.name },
-          evidence: '任命需君主权限并耗银 8000',
+          before: { governor: old, order: orderBefore, loyalty: loyaltyBefore },
+          after: {
+            governor: person.name,
+            order: region.order,
+            loyalty: region.loyalty,
+            relationshipOrderDelta: relationshipEffect.orderDelta,
+            relationshipLoyaltyDelta: relationshipEffect.loyaltyDelta,
+          },
+          evidence: '任命需君主权限并耗银 8000；交接修正只由种子显式人物关系触发',
           source,
         }),
       );
