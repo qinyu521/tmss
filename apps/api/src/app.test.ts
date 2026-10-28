@@ -183,7 +183,8 @@ describe('API 集成', () => {
           orderId: 'court-api',
           kind: 'hold_court',
           agenda: 'succession',
-          decision: 'balanced',
+          decision: 'assertive',
+          resolution: 'compromise',
           speakerPersonId: officials[0].person_id,
           oppositionPersonId: officials[1].person_id,
         }],
@@ -201,6 +202,8 @@ describe('API 集成', () => {
     expect(court.after.courtStability).toBeGreaterThan(0);
     expect(court.after.speakerPersonId).toBe(officials[0].person_id);
     expect(court.after.oppositionPersonId).toBe(officials[1].person_id);
+    expect(court.after.resolution).toBe('compromise');
+    expect(court.after.decision).toBe('balanced');
     expect(court.summary).toContain(officials[0].name);
     expect(body.view.special.courtStability).toBeGreaterThan(0);
   });
