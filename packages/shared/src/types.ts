@@ -748,6 +748,21 @@ export interface ChronicleEntry {
   generatedBy: 'template' | 'llm';
 }
 
+/** 单回合中已经发生的军队路段移动，仅供客户端按真实结算结果播放；不参与胜负计算。 */
+export interface MovementPlaybackStep {
+  armyId: string;
+  fromRegionId: string;
+  toRegionId: string;
+  /** 此路段在动画开始时已走过的比例（0-1） */
+  startProgress: number;
+  /** 此路段在动画结束时走过的比例（0-1） */
+  endProgress: number;
+  /** 本次回合实际消耗在此路段上的模拟日数 */
+  days: number;
+  /** 进攻失败后的撤退移动 */
+  retreat?: boolean;
+}
+
 export interface TurnReport {
   turn: number;
   dateLabel: string;
@@ -755,4 +770,6 @@ export interface TurnReport {
   chronicle: ChronicleEntry[];
   summary: string;
   rejectedOrders: { orderId: string; issues: OrderIssue[] }[];
+  /** 逐路段播放队列；规则引擎仍在结算时一次性决定最终状态 */
+  movementPlayback?: MovementPlaybackStep[];
 }
