@@ -595,6 +595,70 @@ describe('朝廷廷议', () => {
   });
 });
 
+describe('战后政治仇怨的自主反应', () => {
+  it('达到阈值的仇怨会在后续回合触发反击、消耗积怨并受冷却限制', () => {
+    const state = newGame('YONG', 'ruler', 'grudge-backlash-test');
+    const army = state.armies.find((item) => item.faction === 'YONG')!;
+    const actorId = army.commanderId;
+    const target = state.special.YONG.princes!.find((prince) => prince.personId !== actorId)!;
+    const targetId = target.personId;
+    state.characters[actorId].politicalGrudges = { [targetId]: 12 };
+    state.characters[actorId].politicalGrudgeNextResponseTurn = { [targetId]: state.date.turn };
+
+    const baseline = clone(state);
+    delete baseline.characters[actorId].politicalGrudges;
+    delete baseline.characters[actorId].politicalGrudgeNextResponseTurn;
+    const baselineEvents: GameEvent[] = [];
+    runPolitics(baseline, ctx, baselineEvents);
+
+    const beforeScore = state.characters[actorId].politicalGrudges![targetId];
+    const events: GameEvent[] = [];
+    runPolitics(state, ctx, events);
+    const event = events.find((item) => item.title.includes('旧怨翻涌'));
+    expect(event).toBeTruthy();
+    expect(event!.source).toBe('npc_ai');
+    expect(event!.visibleToPlayer).toBe(true);
+    expect(state.special.YONG.princes!.find((prince) => prince.personId === targetId)!.influence).toBeCloseTo(
+      baseline.special.YONG.princes!.find((prince) => prince.personId === targetId)!.influence - 2,
+    );
+    expect(state.special.YONG.courtStability).toBeCloseTo((baseline.special.YONG.courtStability ?? 50) - 1);
+    expect(state.characters[actorId].politicalGrudges![targetId]).toBe(beforeScore - 3);
+    expect(state.characters[actorId].politicalGrudgeNextResponseTurn![targetId]).toBe(state.date.turn + 4);
+
+    const nextEvents: GameEvent[] = [];
+    runPolitics(state, ctx, nextEvents);
+    expect(nextEvents.some((item) => item.title.includes('旧怨翻涌'))).toBe(false);
+  });
+
+  it('刚刚作出的战后裁决不会在同一回合立即触发仇怨反击', () => {
+    const state = newGame('YONG', 'ruler', 'grudge-first-response-delay');
+    const commanderId = state.armies.find((army) => army.faction === 'YONG')!.commanderId;
+    const target = state.special.YONG.princes!.find((prince) => prince.personId !== commanderId)!;
+    const runtime = state.characters[commanderId];
+    Object.assign(runtime, {
+      lastBattleOutcome: 'defeat',
+      pendingBattleSettlement: true,
+      pendingBattleCase: 'impeachment',
+      battlePoliticalOpponentId: target.personId,
+      militaryLoyalty: 70,
+      courtStanding: 50,
+    });
+    const order = {
+      orderId: 'grudge-delayed-trial',
+      kind: 'settle_defeated_commander' as const,
+      personId: commanderId,
+      action: 'trial' as const,
+    };
+    const orderEvents: GameEvent[] = [];
+    expect(validateOrder(state, ctx, order).ok).toBe(true);
+    applyOrder(state, ctx, order, orderEvents);
+    expect(state.characters[commanderId].politicalGrudgeNextResponseTurn![target.personId]).toBe(state.date.turn + 1);
+    const politicsEvents: GameEvent[] = [];
+    runPolitics(state, ctx, politicsEvents);
+    expect(politicsEvents.some((item) => item.title.includes('旧怨翻涌'))).toBe(false);
+  });
+});
+
 describe('回合结算', () => {
   it('跨旬未走完的路段会保存剩余天数，不会每旬重走完整路段', () => {
     const state = newGame('YONG');
