@@ -175,6 +175,8 @@ function npcAffordable(state: GameState, order: Order): boolean {
   switch (order.kind) {
     case 'trade':
       return res.cash >= BALANCE.prices[order.resource] * order.amount * BALANCE.tradePremium;
+    case 'reward_commander':
+      return res.cash >= order.amount;
     case 'recruit':
       return res.cash >= order.amount * BALANCE.recruit.cashPerMan && res.manpower >= order.amount;
     case 'appease_tribe':
