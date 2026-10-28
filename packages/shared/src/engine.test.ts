@@ -322,12 +322,14 @@ describe('朝廷廷议', () => {
       (person) => person.faction_key === 'YONG' && person.person_id !== state.playerPersonId,
     )!;
     const previousLoyalty = commander.loyalty;
+    const previousRuntimeLoyalty = state.characters[commander.person_id].militaryLoyalty;
     const previousRelationships = ctx.seed.relationships;
     const rival = state.special.YONG.princes!.find((prince) => !prince.isCrownPrince)!;
     const heir = state.special.YONG.princes!.find((prince) => prince.isCrownPrince)!;
     rival.influence = 65;
     heir.influence = 58;
     commander.loyalty = 25;
+    state.characters[commander.person_id].militaryLoyalty = 25;
     army.commanderId = commander.person_id;
     army.commanderName = commander.name;
     ctx.seed.relationships = [...previousRelationships, {
@@ -349,8 +351,31 @@ describe('朝廷廷议', () => {
       });
       expect(validation.ok).toBe(false);
       expect(validation.issues[0].code).toBe('COMMANDER_POLITICAL_SPLIT');
+
+      const cashBefore = state.factions.YONG.resources.cash;
+      const reward = {
+        orderId: 'reward-disloyal-commander',
+        kind: 'reward_commander' as const,
+        personId: commander.person_id,
+        amount: 20_000,
+      };
+      expect(validateOrder(state, ctx, reward).ok).toBe(true);
+      const rewardEvents: GameEvent[] = [];
+      applyOrder(state, ctx, reward, rewardEvents);
+      expect(state.factions.YONG.resources.cash).toBe(cashBefore - 20_000);
+      expect(state.characters[commander.person_id].militaryLoyalty).toBe(45);
+      expect(rewardEvents[0].summary).toContain('军令忠诚度由 25 升至 45');
+
+      const afterReward = validateOrder(state, ctx, {
+        orderId: 'crisis-refusal-after-reward',
+        kind: 'move_army',
+        armyId: army.armyId,
+        targetRegionId: target.regionId,
+      });
+      expect(afterReward.ok).toBe(true);
     } finally {
       commander.loyalty = previousLoyalty;
+      state.characters[commander.person_id].militaryLoyalty = previousRuntimeLoyalty;
       ctx.seed.relationships = previousRelationships;
     }
   });
@@ -491,8 +516,9 @@ describe('朝廷廷议', () => {
     state.characters[person.person_id].deathCause = '测试旧档死因';
 
     const migrated = migrateState(state, ctx.seed.characters);
-    expect(migrated.schemaVersion).toBe(3);
+    expect(migrated.schemaVersion).toBe(4);
     expect(migrated.characters[person.person_id].courtStanding).toBe(50);
+    expect(migrated.characters[person.person_id].militaryLoyalty).toBe(person.loyalty);
     expect(migrated.characters[person.person_id].alive).toBe(false);
     expect(migrated.characters[person.person_id].deathCause).toBe('测试旧档死因');
   });
@@ -878,7 +904,7 @@ describe('存档快照', () => {
     expect(restored.date.label).toBe(result.state.date.label);
     expect(restored.armies.length).toBe(result.state.armies.length);
     expect(restored.factions.YONG.resources).toEqual(result.state.factions.YONG.resources);
-    expect(restored.schemaVersion).toBe(3);
+    expect(restored.schemaVersion).toBe(4);
   });
 });
 
