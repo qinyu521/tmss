@@ -42,14 +42,22 @@ describe('初始世界', () => {
     }
   });
 
-  it('22 个特殊兵种的部署数量不超过各自上限', () => {
+  it('特殊兵种按成建制规模配置，且总量不超过各自上限', () => {
+    const expected = { HUN: 400_000, YONG: 800_000, CHU: 300_000 };
     for (const key of ['HUN', 'YONG', 'CHU'] as const) {
       const state = newGame(key);
       const counts: Record<string, number> = {};
+      let totalElite = 0;
       for (const army of state.armies) {
-        for (const u of army.units) counts[u.unitId] = (counts[u.unitId] ?? 0) + u.count;
+        for (const u of army.units) {
+          counts[u.unitId] = (counts[u.unitId] ?? 0) + u.count;
+          totalElite += u.count;
+          // 避免出现几百人的“特种兵”；微小的上限余量不拆成独立小队。
+          expect(u.count).toBeGreaterThanOrEqual(1_500);
+        }
         expect(army.troops).toBe(army.levies + army.units.reduce((s, u) => s + u.count, 0));
       }
+      expect(totalElite).toBeGreaterThan(expected[key] * 0.06);
       for (const [unitId, count] of Object.entries(counts)) {
         const profile = UNIT_PROFILES[unitId];
         expect(profile).toBeTruthy();
