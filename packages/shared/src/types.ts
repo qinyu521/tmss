@@ -688,6 +688,8 @@ export interface CharacterRuntime {
   pendingBattleCase?: 'transfer_request' | 'impeachment';
   /** 发起弹劾/政治施压的人物，仅记录种子关系明确连接者 */
   battlePoliticalOpponentId?: string;
+  /** 战后裁决积累的人物仇怨；键为被记恨者 ID、值为 0-20；未记录时按无仇怨处理 */
+  politicalGrudges?: Record<string, number>;
   deathTurn?: number;
   deathCause?: string;
   /** 成长提示（仅人物视图展示，不发事件刷屏） */
