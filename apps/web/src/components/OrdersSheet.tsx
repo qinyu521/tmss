@@ -219,6 +219,9 @@ export default function OrdersSheet() {
   const selectedRewardCommander = rewardCandidates.find((person) => person.person_id === rewardCommanderId);
   const defeatedCommanderCandidates = courtOfficials.filter((person) => person.pendingBattleSettlement === true && person.lastBattleOutcome === 'defeat');
   const selectedDefeatedCommander = defeatedCommanderCandidates.find((person) => person.person_id === settlementCommanderId);
+  const battlePoliticalOpponent = selectedDefeatedCommander?.battlePoliticalOpponentId
+    ? courtOfficials.find((person) => person.person_id === selectedDefeatedCommander.battlePoliticalOpponentId)
+    : undefined;
   const canReplaceSelectedCommander = Boolean(selectedDefeatedCommander && view?.armies.some((army) => army.own && army.commanderId === selectedDefeatedCommander.person_id));
   const settlementReplacementCandidates = courtOfficials.filter((person) =>
     !view?.armies.some((army) => army.own && army.commanderId === person.person_id) &&
@@ -749,7 +752,7 @@ export default function OrdersSheet() {
                     <option value="">选择待善后的败将</option>
                     {defeatedCommanderCandidates.map((person) => (
                       <option key={person.person_id} value={person.person_id}>
-                        {person.name} · 忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)} · 伤亡 {Math.round((person.lastBattleLossRate ?? 0) * 100)}%
+                        {person.name} · 忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)} · 伤亡 {Math.round((person.lastBattleLossRate ?? 0) * 100)}%{person.pendingBattleCase === 'impeachment' ? ' · 朝臣弹劾' : person.pendingBattleCase === 'transfer_request' ? ' · 请调前线' : ''}
                       </option>
                     ))}
                   </select>
@@ -773,6 +776,13 @@ export default function OrdersSheet() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                )}
+                {selectedDefeatedCommander?.pendingBattleCase && (
+                  <div className="form-note">
+                    {selectedDefeatedCommander.pendingBattleCase === 'impeachment'
+                      ? `案由：战损引发弹劾${battlePoliticalOpponent ? `，发起者为${battlePoliticalOpponent.name}` : '，朝中要求裁断'}。抚恤将保护败将，追责或撤换则响应问责。`
+                      : '案由：战败将领请求调离前线。抚恤留用会支持其继续统兵，追责会驳回请求，撤换则批准调离。'}
                   </div>
                 )}
                 <div className="form-note">
