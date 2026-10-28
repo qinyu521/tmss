@@ -1,12 +1,13 @@
-import type { FactionKey, GameState, Order } from '../types.js';
+import type { CourtAgenda, CourtDecision, CourtResolution, FactionKey, GameState, Order } from '../types.js';
 import { FACTION_KEYS } from '../types.js';
 import type { DerivedContext } from '../dataset.js';
 import { isAtWar } from '../dataset.js';
 import { hashString, mulberry32 } from '../dataset.js';
 import { BALANCE } from '../balance.js';
+import { courtCost, courtRecommendedDecision, courtSkill } from './court.js';
 import { buildAdjacency, findPath } from './movement.js';
 import { factionTroops } from './economy.js';
-import { clamp } from './state.js';
+import { clamp, isCharacterAlive } from './state.js';
 
 /**
  * NPC 决策：基于自身利益、资源、已知边境与性格的启发式。
@@ -83,8 +84,89 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
         orders.push({ orderId: oid(), kind: 'negotiate_house', houseId: lowest.houseId, amount: 1 });
       }
     }
+
+    // 6) 自动廷议：每势力每三旬轮到一次，由自身局势与在朝人物属性决定议题与主张。
+    const courtOrder = generateNpcCourtOrder(state, ctx, key, oid);
+    if (courtOrder) orders.push(courtOrder);
   }
   return orders;
+}
+
+function generateNpcCourtOrder(
+  state: GameState,
+  ctx: DerivedContext,
+  factionKey: FactionKey,
+  nextOrderId: () => string,
+): Order | null {
+  // 将三国的朝会错开，避免每旬所有势力同时开会；turn 以 1 起算。
+  if (state.date.turn % 3 !== FACTION_KEYS.indexOf(factionKey)) return null;
+
+  let agenda: CourtAgenda = 'war_council';
+  let situationPreference: CourtDecision | undefined;
+  if (factionKey === 'HUN') {
+    agenda = (state.special.HUN.cohesion ?? 58) < 64 ||
+      (state.special.HUN.tribes ?? []).some((tribe) => tribe.loyalty < 58)
+      ? 'tribal_alliance'
+      : 'war_council';
+    const lowest = [...(state.special.HUN.tribes ?? [])].sort((a, b) => a.loyalty - b.loyalty)[0];
+    if (lowest && lowest.loyalty < 40) situationPreference = 'conciliatory';
+    else if ((state.special.HUN.cohesion ?? 58) < 50) situationPreference = 'balanced';
+  } else if (factionKey === 'YONG') {
+    agenda = state.flags.successionCrisis || (state.special.YONG.courtStability ?? 62) < 62
+      ? 'succession'
+      : 'war_council';
+    if (state.flags.successionCrisis || (state.special.YONG.courtStability ?? 62) < 38) situationPreference = 'balanced';
+    else if ((state.special.YONG.courtStability ?? 62) > 78) situationPreference = 'assertive';
+  } else {
+    const houses = state.special.CHU.houses ?? [];
+    const averageSupport = houses.length
+      ? houses.reduce((sum, house) => sum + house.support, 0) / houses.length
+      : 50;
+    agenda = state.flags.houseBoycott || averageSupport < 62 ? 'clan_relations' : 'war_council';
+    if (state.flags.houseBoycott || averageSupport < 40) situationPreference = 'conciliatory';
+    else if (averageSupport > 76) situationPreference = 'assertive';
+  }
+
+  if (agenda === 'war_council') {
+    const armies = state.armies.filter((army) => army.faction === factionKey);
+    const averageSupply = armies.length ? armies.reduce((sum, army) => sum + army.supply, 0) / armies.length : 60;
+    const averageMorale = armies.length ? armies.reduce((sum, army) => sum + army.morale, 0) / armies.length : 60;
+    if (averageSupply < 35 || averageMorale < 42) situationPreference = 'conciliatory';
+    else if (averageMorale < 58) situationPreference = 'balanced';
+  }
+
+  const advisors = ctx.seed.characters
+    .filter((person) => person.faction_key === factionKey && isCharacterAlive(state, person.person_id))
+    .map((person) => ({
+      person,
+      decision: courtRecommendedDecision(person, agenda),
+      score: courtSkill({
+        ...person,
+        courtStanding: state.characters[person.person_id]?.courtStanding ?? 50,
+      }, agenda),
+    }))
+    .sort((a, b) => b.score - a.score);
+  if (advisors.length < 2) return null;
+
+  // 有明确国情压力时，优先寻找能提出所需政策的人；否则由议题能力最强者主议。
+  const speaker = situationPreference
+    ? advisors.find((advisor) => advisor.decision === situationPreference) ?? advisors[0]
+    : advisors[0];
+  const opposition = advisors.find(
+    (advisor) => advisor.person.person_id !== speaker.person.person_id && advisor.decision !== speaker.decision,
+  ) ?? advisors.find((advisor) => advisor.person.person_id !== speaker.person.person_id)!;
+  const resolution: CourtResolution = 'adopt_speaker';
+  // NPC 与玩家使用同一套决策解析与成本：order.decision 仍需携带最终政策供可支付性预检使用。
+  const decision = speaker.decision;
+  return {
+    orderId: nextOrderId(),
+    kind: 'hold_court',
+    agenda,
+    decision,
+    resolution,
+    speakerPersonId: speaker.person.person_id,
+    oppositionPersonId: opposition.person.person_id,
+  };
 }
 
 function pickEnemyBorderRegion(state: GameState, ctx: DerivedContext, factionKey: FactionKey): string | null {
