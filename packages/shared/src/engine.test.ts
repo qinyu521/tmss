@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveCommanderDefectionThreats } from './engine/turn.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -592,6 +593,119 @@ describe('朝廷廷议', () => {
     }];
     const settled = runTurn(durableState, ctx);
     expect(settled.state.special.CHU.centralAuthority).toBeGreaterThan(durableBefore);
+  });
+});
+
+describe('将领倒戈与挽回', () => {
+  const attachDefectionTie = (commanderId: string, targetId: string) => {
+    const previous = ctx.seed.relationships;
+    ctx.seed.relationships = [...previous, {
+      faction: '大楚—匈奴',
+      source_person_id: commanderId,
+      source_name: ctx.charactersById[commanderId]!.name,
+      relation: '旧主恩情',
+      target_person_id: targetId,
+      target_name: ctx.charactersById[targetId]!.name,
+      strength: '强',
+      notes: '昔日主从、效忠与知遇之恩',
+    }];
+    return () => { ctx.seed.relationships = previous; };
+  };
+
+  it('低忠诚将领先收到一旬预警；若无人挽回，会携军献城并改变势力归属', () => {
+    const state = newGame('CHU', 'ruler', 'defection-resolution');
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const region = state.regions[army.nodeId];
+    const commanderId = army.commanderId;
+    const rivalRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    state.diplomacy['HUN|CHU'] = -100;
+    state.characters[commanderId].militaryLoyalty = 10;
+    const restore = attachDefectionTie(commanderId, rivalRuler.person_id);
+    try {
+      const warningEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, warningEvents);
+      expect(state.characters[commanderId].defectionWarningTurn).toBe(state.date.turn);
+      expect(state.characters[commanderId].defectionTargetFaction).toBe('HUN');
+      expect(region.faction).toBe('CHU');
+      expect(warningEvents.some((event) => event.title.includes('倒戈风险预警'))).toBe(true);
+
+      state.date.turn += 1;
+      const defectionEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, defectionEvents);
+      expect(state.characters[commanderId].allegianceFaction).toBe('HUN');
+      expect(army.faction).toBe('HUN');
+      expect(region.faction).toBe('HUN');
+      expect(state.factions.CHU.control).not.toContain(region.regionId);
+      expect(state.factions.HUN.control).toContain(region.regionId);
+      expect(state.characters[commanderId].defectionWarningTurn).toBeUndefined();
+      expect(defectionEvents.some((event) => event.title.includes('将领倒戈') && event.targetId === region.regionId)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('君主在预警期限内赏赐并恢复忠诚，可以阻止倒戈', () => {
+    const state = newGame('CHU', 'ruler', 'defection-prevented');
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const commanderId = army.commanderId;
+    const rivalRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    state.diplomacy['HUN|CHU'] = -100;
+    state.characters[commanderId].militaryLoyalty = 10;
+    const restore = attachDefectionTie(commanderId, rivalRuler.person_id);
+    try {
+      const warningEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, warningEvents);
+      expect(state.characters[commanderId].defectionWarningTurn).toBeDefined();
+
+      const reward = {
+        orderId: 'save-commander-from-defection',
+        kind: 'reward_commander' as const,
+        personId: commanderId,
+        amount: 10_000,
+      };
+      expect(validateOrder(state, ctx, reward).ok).toBe(true);
+      applyOrder(state, ctx, reward, []);
+      expect(state.characters[commanderId].militaryLoyalty).toBe(20);
+      state.date.turn += 1;
+      const nextEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, nextEvents);
+      expect(army.faction).toBe('CHU');
+      expect(state.regions[army.nodeId].faction).toBe('CHU');
+      expect(state.characters[commanderId].allegianceFaction).toBeUndefined();
+      expect(state.characters[commanderId].defectionWarningTurn).toBeUndefined();
+      expect(nextEvents.some((event) => event.title.includes('将领倒戈'))).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('NPC 君主会在预警后用满足门槛的最低档赏赐挽回将领', () => {
+    const state = newGame('YONG', 'ruler', 'npc-defection-protection');
+    state.date.turn = 2;
+    state.diplomacy['HUN|CHU'] = -100;
+    state.factions.CHU.resources.cash = 100_000;
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const commanderId = army.commanderId;
+    const rivalRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    state.characters[commanderId].militaryLoyalty = 10;
+    state.characters[commanderId].defectionWarningTurn = 1;
+    state.characters[commanderId].defectionTargetFaction = 'HUN';
+    const restore = attachDefectionTie(commanderId, rivalRuler.person_id);
+    try {
+      const orders = generateNpcOrders(state, ctx);
+      const reward = orders.find(
+        (order) => order.kind === 'reward_commander' && order.personId === commanderId,
+      );
+      expect(reward?.kind).toBe('reward_commander');
+      if (reward?.kind !== 'reward_commander') return;
+      expect(reward.amount).toBe(10_000);
+      const events: GameEvent[] = [];
+      applyOrder(state, ctx, reward, events, 'npc_ai', 'CHU');
+      expect(state.characters[commanderId].militaryLoyalty).toBe(20);
+      expect(events[0].source).toBe('npc_ai');
+    } finally {
+      restore();
+    }
   });
 });
 
