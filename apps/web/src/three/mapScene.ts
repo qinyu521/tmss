@@ -1024,8 +1024,11 @@ export class MapScene {
           );
           routeLine.computeLineDistances();
           this.scene.add(routeLine);
-          // progress 是当前路段进度；path 每次抵达州府都会缩短，不能套用全程进度。
-          const routePoint = pointAlong(routePoints, army.progress);
+          // 进度只属于当前路段，因此标记只在首段道路的起终点间插值；路线线条仍显示完整剩余路径。
+          const routePoint = routePoints[0].clone().lerp(
+            routePoints[1],
+            THREE.MathUtils.clamp(army.progress, 0, 1),
+          );
           position.set(routePoint.x, routePoint.y + 4, routePoint.z);
         }
       }
@@ -1328,25 +1331,6 @@ function defaultUnitFor(faction: FactionKey): string {
 function formatTroops(n: number): string {
   if (n >= 10_000) return `${(n / 10_000).toFixed(n >= 100_000 ? 0 : 1)}万`;
   return n.toLocaleString();
-}
-
-function pointAlong(points: THREE.Vector3[], t: number): THREE.Vector3 {
-  if (points.length === 1) return points[0].clone();
-  const lengths: number[] = [];
-  let total = 0;
-  for (let i = 0; i < points.length - 1; i++) {
-    const len = points[i].distanceTo(points[i + 1]);
-    lengths.push(len);
-    total += len;
-  }
-  let remaining = THREE.MathUtils.clamp(t, 0, 1) * total;
-  for (let i = 0; i < lengths.length; i++) {
-    if (remaining <= lengths[i]) {
-      return points[i].clone().lerp(points[i + 1], remaining / (lengths[i] || 1));
-    }
-    remaining -= lengths[i];
-  }
-  return points[points.length - 1].clone();
 }
 
 /** 22 个兵种的低多边形剪影：按兵种模板改变马匹、武器、甲胄与旗帜。 */
