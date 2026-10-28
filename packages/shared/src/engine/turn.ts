@@ -197,7 +197,10 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
     while (remainingDays > 0 && army.path.length > 0) {
       const hop = Math.max(1, army.hopCosts[0] ?? 1);
       if (remainingDays < hop) {
-        army.marchDaysLeft = Math.max(0, army.marchDaysLeft - remainingDays);
+        // 记录本旬已经走过的天数，不能在下一旬把同一段路的完整成本重新计算。
+        // 否则部队会反复“走满一段路”，行军进度与地图标记都会失真。
+        army.hopCosts[0] = hop - remainingDays;
+        army.marchDaysLeft = army.hopCosts.reduce((sum, days) => sum + days, 0);
         remainingDays = 0;
         break;
       }
