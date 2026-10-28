@@ -4,9 +4,10 @@ import type { DerivedContext } from '../dataset.js';
 import { isAtWar } from '../dataset.js';
 import { hashString, mulberry32 } from '../dataset.js';
 import { BALANCE } from '../balance.js';
-import { buildAdjacency, findPath } from './movement.js';
+import { buildAdjacency, estimatePathDays, findPath } from './movement.js';
 import { factionTroops } from './economy.js';
 import { clamp } from './state.js';
+import { seasonOf } from './season.js';
 
 /**
  * NPC 决策：基于自身利益、资源、已知边境与性格的启发式。
@@ -55,7 +56,8 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     if (hostileRegion && idleArmies.length > 0 && rng() > 0.2) {
       const army = idleArmies[0];
       const path = findPath(state, ctx, key, army.nodeId, hostileRegion, { troops: army.troops });
-      if (path.ok && path.totalDays <= BALANCE.turnDays * 2) {
+      const estimatedDays = path.ok ? estimatePathDays(army, path, seasonOf(state.date.month)) : Infinity;
+      if (path.ok && estimatedDays <= BALANCE.turnDays * 2) {
         orders.push({ orderId: oid(), kind: 'move_army', armyId: army.armyId, targetRegionId: hostileRegion });
       }
     } else {
