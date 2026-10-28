@@ -603,6 +603,7 @@ describe('政治裁决的派系站队后果', () => {
     const sameFaction = seed.characters.filter((person) => person.faction_key === 'CHU' && person.person_id !== commanderId);
     const ally = sameFaction[0]!;
     const opponent = sameFaction.find((person) => person.person_id !== ally.person_id)!;
+    const opponentAlly = sameFaction.find((person) => person.person_id !== ally.person_id && person.person_id !== opponent.person_id)!;
     const customSeed = clone(seed);
     customSeed.relationships = [
       {
@@ -625,6 +626,16 @@ describe('政治裁决的派系站队后果', () => {
         strength: '强',
         notes: '明确竞争关系',
       },
+      {
+        faction: '大楚',
+        source_person_id: opponent.person_id,
+        source_name: opponent.name,
+        relation: '同僚协作',
+        target_person_id: opponentAlly.person_id,
+        target_name: opponentAlly.name,
+        strength: '强',
+        notes: '弹劾者一系支持关系',
+      },
     ];
     const politicalCtx = buildContext(customSeed);
     Object.assign(state.characters[commanderId], {
@@ -637,6 +648,7 @@ describe('政治裁决的派系站队后果', () => {
     });
     state.characters[ally.person_id].courtStanding = 50;
     state.characters[opponent.person_id].courtStanding = 40;
+    state.characters[opponentAlly.person_id].courtStanding = 50;
     const events: GameEvent[] = [];
     const order = {
       orderId: 'political-bloc-relief',
@@ -648,9 +660,15 @@ describe('政治裁决的派系站队后果', () => {
     applyOrder(state, politicalCtx, order, events);
     expect(state.characters[ally.person_id].courtStanding).toBe(51);
     expect(state.characters[opponent.person_id].courtStanding).toBe(36);
-    expect(events[0].summary).toContain('派系站队');
-    expect(events[0].summary).toContain(ally.name);
-    expect(events[0].summary).toContain('声望 50→51');
+    expect(state.characters[opponentAlly.person_id].courtStanding).toBe(49);
+    const plea = events.find((event) => event.title.includes('联名求情'));
+    const counterPetition = events.find((event) => event.title.includes('联名弹劾'));
+    const settlement = events.find((event) => event.title.includes('抚恤败军'));
+    expect(plea?.summary).toContain(ally.name);
+    expect(plea?.summary).toContain('声望+1');
+    expect(counterPetition?.summary).toContain(opponentAlly.name);
+    expect(counterPetition?.summary).toContain('未获采纳');
+    expect(settlement?.summary).toContain('派系站队');
   });
 });
 
@@ -684,9 +702,10 @@ describe('NPC 战后案件与政治站队', () => {
     applyOrder(state, ctx, ruling, events, 'npc_ai', 'CHU');
     expect(state.characters[commanderId].pendingBattleSettlement).toBe(false);
     expect(state.characters[commanderId].militaryLoyalty).toBe(63);
-    expect(events[0].source).toBe('npc_ai');
-    expect(events[0].actorId).toBe(ctx.seed.characters.find((person) => person.faction_key === 'CHU' && person.identity_type === '君主')!.person_id);
-    expect(events[0].summary).toContain('关系网络裁量');
+    const npcSettlementEvent = events.find((event) => event.title.includes('抚恤败军'));
+    expect(npcSettlementEvent?.source).toBe('npc_ai');
+    expect(npcSettlementEvent?.actorId).toBe(ctx.seed.characters.find((person) => person.faction_key === 'CHU' && person.identity_type === '君主')!.person_id);
+    expect(npcSettlementEvent?.summary).toContain('关系网络裁量');
 
     const hostileState = newGame('YONG', 'ruler', 'npc-battle-case-trial');
     const hostileArmy = hostileState.armies.find((item) => item.faction === 'CHU')!;
@@ -1099,10 +1118,10 @@ describe('回合结算', () => {
     expect(trialArmy.morale).toBe(55);
     expect(trialArmy.training).toBe(53);
     expect(trialState.characters[trialCommanderId].pendingBattleCase).toBeUndefined();
-    expect(trialEvents[0].title).toContain('公开审判');
-    expect(trialEvents[0].summary).toContain('公开审判');
+    const trialSettlementEvent = trialEvents.find((event) => event.title.includes('公开审判'));
+    expect(trialSettlementEvent?.summary).toContain('公开审判');
     expect(trialState.characters[trialCommanderId].politicalGrudges?.[rivalPrince.personId]).toBe(12);
-    expect(trialEvents[0].summary).toContain('后续廷议');
+    expect(trialSettlementEvent?.summary).toContain('后续廷议');
   });
 
   it('惨重战败会生成请调或弹劾事件，且案件只对败军所属势力可见', () => {
