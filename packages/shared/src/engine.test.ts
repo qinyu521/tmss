@@ -841,6 +841,58 @@ describe('回合结算', () => {
     expect(marched.fatigue).toBeGreaterThan(fatigueBefore);
   });
 
+  it('低忠诚统将对同势力人物积怨未消时会消极执行行军军令', () => {
+    const state = newGame('CHU', 'ruler', 'political-grudge-march');
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const destination = Object.values(state.regions).find(
+      (region) => region.faction === 'CHU' && region.regionId !== army.nodeId,
+    )!;
+    const commanderId = army.commanderId;
+    const politicalRival = seed.characters.find(
+      (person) => person.faction_key === 'CHU' && person.person_id !== commanderId,
+    )!;
+    state.characters[commanderId].militaryLoyalty = 30;
+    state.characters[commanderId].politicalGrudges = { [politicalRival.person_id]: 12 };
+    const order = {
+      orderId: 'political-grudge-march',
+      kind: 'move_army' as const,
+      armyId: army.armyId,
+      targetRegionId: destination.regionId,
+    };
+    const validation = validateOrder(state, ctx, order);
+    expect(validation.ok).toBe(true);
+    expect(validation.preview).toContain('消极执行');
+
+    const moraleBefore = army.morale;
+    const fatigueBefore = army.fatigue;
+    const events: GameEvent[] = [];
+    applyOrder(state, ctx, order, events);
+    const marched = state.armies.find((item) => item.armyId === army.armyId)!;
+    const dragEvent = events.find((event) => event.title.includes('军令消极执行'));
+    expect(dragEvent).toBeTruthy();
+    expect(dragEvent?.summary).toContain(politicalRival.name);
+    expect(dragEvent?.summary).toContain('仇怨 12');
+    expect(marched.status).toBe('marching');
+    expect(marched.morale).toBe(Math.max(0, moraleBefore - 3));
+    expect(marched.fatigue).toBe(Math.min(100, fatigueBefore + 5));
+    expect(dragEvent?.after?.delayedDays).toBeGreaterThanOrEqual(1);
+    expect(dragEvent?.visibleToPlayer).toBe(true);
+
+    const normalState = newGame('CHU', 'ruler', 'political-grudge-march-baseline');
+    const normalArmy = normalState.armies.find((item) => item.faction === 'CHU')!;
+    const baselineEvents: GameEvent[] = [];
+    applyOrder(normalState, ctx, {
+      ...order,
+      orderId: 'normal-march-baseline',
+      armyId: normalArmy.armyId,
+    }, baselineEvents);
+    const baselineMarch = normalState.armies.find((item) => item.armyId === normalArmy.armyId)!;
+    expect(marched.marchDaysTotal).toBe(
+      Math.max(baselineMarch.marchDaysTotal + 1, Math.ceil(baselineMarch.marchDaysTotal * 1.25)),
+    );
+    expect(baselineEvents.some((event) => event.title.includes('军令消极执行'))).toBe(false);
+  });
+
   it('地图显示进度按当前路段计算，而不是把全程进度套到剩余路线', () => {
     const state = newGame('YONG');
     const army = state.armies.find((a) => a.faction === 'YONG')!;
