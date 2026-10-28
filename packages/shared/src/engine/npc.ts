@@ -10,6 +10,10 @@ import { factionTroops } from './economy.js';
 import { clamp, isCharacterAlive } from './state.js';
 import { findDefectionAllegiance } from './relationships.js';
 
+function currentFactionOfCharacter(state: GameState, ctx: DerivedContext, personId: string): FactionKey | undefined {
+  return state.characters[personId]?.allegianceFaction ?? ctx.charactersById[personId]?.faction_key;
+}
+
 /**
  * NPC 决策：基于自身利益、资源、已知边境与性格的启发式。
  * 只生成合法意图；真正状态改由 applyOrder 与规则引擎执行。
@@ -176,7 +180,7 @@ function generateNpcBattleSettlement(
   const candidates = Object.values(state.characters)
     .filter((runtime) => {
       const person = ctx.charactersById[runtime.personId];
-      return person?.faction_key === factionKey &&
+      return currentFactionOfCharacter(state, ctx, runtime.personId) === factionKey &&
         runtime.alive &&
         runtime.lastBattleOutcome === 'defeat' &&
         runtime.pendingBattleSettlement === true &&
@@ -208,7 +212,7 @@ function generateNpcBattleSettlement(
           : '';
       if (!otherId || otherId === excludedId || otherId === personId) continue;
       const other = ctx.charactersById[otherId];
-      if (!other || other.faction_key !== factionKey || !isCharacterAlive(state, otherId)) continue;
+      if (!other || currentFactionOfCharacter(state, ctx, otherId) !== factionKey || !isCharacterAlive(state, otherId)) continue;
       const relationText = `${edge.relation} ${edge.notes}`;
       const weight = edge.strength === '强' ? 1.5 : edge.strength === '中' ? 1 : 0.5;
       if (/竞争|制衡|敌对|不和/.test(relationText)) {
@@ -226,10 +230,10 @@ function generateNpcBattleSettlement(
   };
   const commanderBacking = networkBacking(commander.person_id, opponentId);
   const commanderScore = standingOf(commander.person_id) + commanderBacking.score * 2;
-  const opponentBacking = opponent && opponent.faction_key === factionKey
+  const opponentBacking = opponent && currentFactionOfCharacter(state, ctx, opponent.person_id) === factionKey
     ? networkBacking(opponent.person_id, commander.person_id)
     : { score: 0, supporters: 0 };
-  const opponentScore = opponent && opponent.faction_key === factionKey
+  const opponentScore = opponent && currentFactionOfCharacter(state, ctx, opponent.person_id) === factionKey
     ? standingOf(opponent.person_id) + opponentBacking.score * 2
     : 50;
   const loyalty = runtime.militaryLoyalty ?? commander.loyalty;
@@ -238,7 +242,7 @@ function generateNpcBattleSettlement(
   let action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial' = 'discipline';
   let replacementPersonId: string | undefined;
 
-  if (runtime.pendingBattleCase === 'impeachment' && opponent && opponent.faction_key === factionKey) {
+  if (runtime.pendingBattleCase === 'impeachment' && opponent && currentFactionOfCharacter(state, ctx, opponent.person_id) === factionKey) {
     if (commanderScore >= opponentScore + 6 && resources.cash >= 12_000) {
       action = 'relieve';
     } else if (opponentScore >= commanderScore + 18 && lossRate >= 0.35) {
@@ -252,7 +256,7 @@ function generateNpcBattleSettlement(
     action = 'relieve';
   } else if (lossRate >= 0.45 && army) {
     const replacement = ctx.seed.characters
-      .filter((person) => person.faction_key === factionKey && person.person_id !== commander.person_id)
+      .filter((person) => currentFactionOfCharacter(state, ctx, person.person_id) === factionKey && person.person_id !== commander.person_id)
       .filter((person) => isCharacterAlive(state, person.person_id))
       .filter((person) => !state.armies.some((item) => item.faction === factionKey && item.commanderId === person.person_id))
       .filter((person) => !Object.values(state.regions).some((region) => region.faction === factionKey && region.garrisonCommanderId === person.person_id))
@@ -268,7 +272,7 @@ function generateNpcBattleSettlement(
   }
 
   const opponentName = opponent?.name ?? '未明弹劾者';
-  const rulingNote = runtime.pendingBattleCase === 'impeachment' && opponent && opponent.faction_key === factionKey
+  const rulingNote = runtime.pendingBattleCase === 'impeachment' && opponent && currentFactionOfCharacter(state, ctx, opponent.person_id) === factionKey
     ? `关系网络裁量：败将声望 ${Math.round(standingOf(commander.person_id))}、同僚支持 ${commanderBacking.supporters} 人；弹劾者${opponent.name}声望 ${Math.round(standingOf(opponent.person_id))}、同僚支持 ${opponentBacking.supporters} 人。裁决按双方声望、显式关系与伤亡程度自动作出。`
     : `战后善后裁量：败将声望 ${Math.round(standingOf(commander.person_id))}、同僚支持 ${commanderBacking.supporters} 人、伤亡 ${Math.round(lossRate * 100)}%、军令忠诚 ${Math.round(loyalty)}；按损失严重程度与国库状况选择处置。`;
   return {
@@ -333,7 +337,7 @@ function generateNpcCourtOrder(
         : state.armies.filter((army) => army.faction === factionKey).map((army) => army.commanderId);
 
   const advisors = ctx.seed.characters
-    .filter((person) => person.faction_key === factionKey && isCharacterAlive(state, person.person_id))
+    .filter((person) => currentFactionOfCharacter(state, ctx, person.person_id) === factionKey && isCharacterAlive(state, person.person_id))
     .map((person) => ({
       person,
       decision: courtRecommendedDecision(person, agenda),
