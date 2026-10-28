@@ -679,6 +679,8 @@ export interface CharacterRuntime {
   lastBattleOutcome?: 'victory' | 'defeat';
   /** 最近一场战斗的本方伤亡比例，0-1 */
   lastBattleLossRate?: number;
+  /** 战败后尚未处置；下一场战斗会覆盖该状态 */
+  pendingBattleSettlement?: boolean;
   deathTurn?: number;
   deathCause?: string;
   /** 成长提示（仅人物视图展示，不发事件刷屏） */
