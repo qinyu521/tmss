@@ -25,7 +25,7 @@ import { assignMarch, dayCostsFor, findPath, regionNameById } from './movement.j
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
-import { courtCost, courtDecisionForResolution, courtOpinion, courtSkill } from './court.js';
+import { courtCost, courtDecisionForResolution, courtOpinion, courtRelationshipAffinity, courtSkill } from './court.js';
 
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
 
