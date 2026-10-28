@@ -494,6 +494,35 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         preview: `赏赐${person.name}白银 ${order.amount.toLocaleString()} 两，军令忠诚度 ${Math.round(current)} → ${Math.round(current + gain)}（+ ${Math.round(gain)}）。`,
       };
     }
+    case 'settle_defeated_commander': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '战后处置败将需君主权限。');
+      const person = ctx.charactersById[order.personId];
+      if (!person || person.faction_key !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
+      if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，不能接受战后处置。');
+      const runtime = state.characters[person.person_id];
+      if (
+        runtime?.lastBattleOutcome !== 'defeat' ||
+        runtime.lastBattleTurn !== state.date.turn - 1
+      ) {
+        return issues('NO_RECENT_DEFEAT', '只能处置上一回合亲自统兵且战败的将领；不能追责旧战或凭空制造战败。');
+      }
+      const army = state.armies.find((item) => item.faction === state.factionKey && item.commanderId === person.person_id);
+      if (order.action === 'relieve') {
+        if (faction.resources.cash < 12_000) return issues('NO_CASH', '抚恤败军需银 12000 两。');
+        const current = runtime.militaryLoyalty ?? person.loyalty;
+        return {
+          ok: true,
+          issues: [],
+          preview: `抚恤${person.name}及其败军，耗银 12000 两；军令忠诚 ${Math.round(current)} → ${Math.round(Math.min(100, current + 8))}，仍存部队士气${army ? ' +6' : '不变（军团已不存在）'}。`,
+        };
+      }
+      const current = runtime.militaryLoyalty ?? person.loyalty;
+      return {
+        ok: true,
+        issues: [],
+        preview: `追责${person.name}：不耗银，军令忠诚 ${Math.round(current)} → ${Math.round(Math.max(0, current - 8))}；仍存部队训练 +5、士气 -3。`,
+      };
+    }
     case 'appoint': {
       if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '任命官职需君主权限。');
       const person = ctx.charactersById[order.personId];
@@ -1192,6 +1221,72 @@ export function applyOrder(
         before: { militaryLoyalty: before, cash: faction.resources.cash + order.amount },
         after: { militaryLoyalty: after, loyaltyGain: after - before, cash: faction.resources.cash },
         evidence: '军令忠诚属于本局人物运行时数据；赏赐金额 1000 两换取 1 点忠诚，忠诚上限 100',
+        source,
+      }));
+      return;
+    }
+    case 'settle_defeated_commander': {
+      const person = ctx.charactersById[order.personId];
+      if (!person) return;
+      const runtime = state.characters[person.person_id];
+      if (!runtime) return;
+      const before = clamp(runtime.militaryLoyalty ?? person.loyalty);
+      const army = state.armies.find((item) => item.faction === fk && item.commanderId === person.person_id);
+      const cashBefore = faction.resources.cash;
+      let loyaltyAfter = before;
+      let moraleBefore: number | undefined;
+      let moraleAfter: number | undefined;
+      let trainingBefore: number | undefined;
+      let trainingAfter: number | undefined;
+      if (order.action === 'relieve') {
+        faction.resources.cash -= 12_000;
+        loyaltyAfter = clamp(before + 8);
+        if (army) {
+          moraleBefore = army.morale;
+          army.morale = clamp(army.morale + 6);
+          moraleAfter = army.morale;
+        }
+      } else {
+        loyaltyAfter = clamp(before - 8);
+        if (army) {
+          moraleBefore = army.morale;
+          trainingBefore = army.training;
+          army.training = clamp(army.training + 5);
+          army.morale = clamp(army.morale - 3);
+          moraleAfter = army.morale;
+          trainingAfter = army.training;
+        }
+      }
+      runtime.militaryLoyalty = loyaltyAfter;
+      state.characters[person.person_id] = runtime;
+      const isRelief = order.action === 'relieve';
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: isRelief ? `抚恤败军·${person.name}` : `追责败将·${person.name}`,
+        summary: isRelief
+          ? `君主拨银 12000 两抚恤败军，${person.name}军令忠诚由 ${Math.round(before)} 升至 ${Math.round(loyaltyAfter)}。${army ? '所部士气得到恢复。' : '原军团已不复存在，抚恤仅影响将领忠诚。'}`
+          : `君主追究${person.name}战败之责，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}。${army ? '所部训练加强，但士气受挫。' : '原军团已不复存在，追责仅影响将领忠诚。'}`,
+        actorId,
+        actorName,
+        factionKey: fk,
+        targetId: person.person_id,
+        targetLabel: person.name,
+        before: {
+          militaryLoyalty: before,
+          cash: cashBefore,
+          morale: moraleBefore,
+          training: trainingBefore,
+        },
+        after: {
+          action: order.action,
+          militaryLoyalty: loyaltyAfter,
+          loyaltyDelta: loyaltyAfter - before,
+          cash: faction.resources.cash,
+          morale: moraleAfter,
+          training: trainingAfter,
+          armyId: army?.armyId,
+        },
+        evidence: '仅允许处置上一回合记录为战败的在世将领；抚恤/追责结果由规则引擎结算',
         source,
       }));
       return;
