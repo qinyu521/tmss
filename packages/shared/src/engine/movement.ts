@@ -10,20 +10,39 @@ export interface AdjacentRegion {
   cost: number;
   edgeId: string;
   routeType: string;
+  throughput: string;
+}
+
+/** 道路容量体现大军队列、辎重与交通拥堵的额外时间成本，不代表封路。 */
+export function routeCapacityMultiplier(troops: number, throughput: string): number {
+  const size = Math.max(0, Number.isFinite(troops) ? troops : 0);
+  if (/高/.test(throughput)) return 1;
+  if (/争议|中低/.test(throughput)) {
+    if (size >= 50_000) return 1.6;
+    if (size >= 25_000) return 1.3;
+    return 1.1;
+  }
+  if (/低/.test(throughput)) {
+    if (size >= 50_000) return 1.4;
+    if (size >= 25_000) return 1.18;
+    return 1;
+  }
+  if (/中/.test(throughput)) return size >= 50_000 ? 1.1 : 1;
+  return 1;
 }
 
 export function buildAdjacency(ctx: DerivedContext): Record<string, AdjacentRegion[]> {
   const adj: Record<string, AdjacentRegion[]> = {};
   const idByName = new Map(ctx.territories.map((t) => [t.region, t.region_id]));
-  const add = (from: string, to: string, edgeId: string, cost: number, routeType: string) => {
+  const add = (from: string, to: string, edgeId: string, cost: number, routeType: string, throughput: string) => {
     adj[from] ??= [];
-    adj[from].push({ to, cost, edgeId, routeType });
+    adj[from].push({ to, cost, edgeId, routeType, throughput });
   };
   for (const edge of ctx.edges) {
     const from = idByName.get(edge.from_region) ?? edge.from_region;
     const to = idByName.get(edge.to_region) ?? edge.to_region;
-    add(from, to, edge.edge_id, edge.base_movement_cost, edge.route_type);
-    add(to, from, edge.edge_id, edge.base_movement_cost, edge.route_type);
+    add(from, to, edge.edge_id, edge.base_movement_cost, edge.route_type, edge.throughput ?? '');
+    add(to, from, edge.edge_id, edge.base_movement_cost, edge.route_type, edge.throughput ?? '');
   }
   return adj;
 }
@@ -57,6 +76,7 @@ export interface AdjacentMapNode {
   cost: number;
   edgeId: string;
   routeType: string;
+  throughput: string;
 }
 
 /** 用原始州府道路连接 24 座主城，再按 parent_node_id 接通其附属据点。 */
@@ -65,16 +85,16 @@ export function buildMapAdjacency(ctx: DerivedContext): Record<string, AdjacentM
   const capitalByRegionName = new Map(
     ctx.seed.map_nodes.filter((n) => n.node_type === '州府/主城').map((n) => [n.region, n.node_id]),
   );
-  const add = (from: string, to: string, edgeId: string, cost: number, routeType: string) => {
+  const add = (from: string, to: string, edgeId: string, cost: number, routeType: string, throughput: string) => {
     adj[from] ??= [];
-    adj[from].push({ to, cost, edgeId, routeType });
+    adj[from].push({ to, cost, edgeId, routeType, throughput });
   };
   for (const edge of ctx.edges) {
     const from = capitalByRegionName.get(edge.from_region);
     const to = capitalByRegionName.get(edge.to_region);
     if (!from || !to) continue;
-    add(from, to, edge.edge_id, edge.base_movement_cost, edge.route_type);
-    add(to, from, edge.edge_id, edge.base_movement_cost, edge.route_type);
+    add(from, to, edge.edge_id, edge.base_movement_cost, edge.route_type, edge.throughput ?? '');
+    add(to, from, edge.edge_id, edge.base_movement_cost, edge.route_type, edge.throughput ?? '');
   }
   for (const node of ctx.seed.map_nodes) {
     if (!node.parent_node_id || !ctx.seed.map_nodes.some((n) => n.node_id === node.parent_node_id)) continue;
@@ -82,8 +102,9 @@ export function buildMapAdjacency(ctx: DerivedContext): Record<string, AdjacentM
     const isPort = /水军|渡口|港埠/.test(node.node_type);
     const cost = isPass || isPort ? 2 : 1;
     const routeType = isPass ? '关隘支路' : isPort ? '河网水路支路' : '地方支路';
-    add(node.parent_node_id, node.node_id, 'LOCAL-' + node.node_id, cost, routeType);
-    add(node.node_id, node.parent_node_id, 'LOCAL-' + node.node_id, cost, routeType);
+    const throughput = '低';
+    add(node.parent_node_id, node.node_id, 'LOCAL-' + node.node_id, cost, routeType, throughput);
+    add(node.node_id, node.parent_node_id, 'LOCAL-' + node.node_id, cost, routeType, throughput);
   }
   return adj;
 }
@@ -94,6 +115,7 @@ export function findMapPath(
   faction: FactionKey,
   from: string,
   to: string,
+  options: { troops?: number } = {},
 ): PathResult {
   if (from === to) return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '部队已在该地图节点。' };
   if (!state.mapNodes?.[from] || !state.mapNodes?.[to]) {
@@ -108,6 +130,7 @@ export function findMapPath(
     return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '目标据点由' + target.name + '方面控制，双方尚未交战，不能进军。' };
   }
   const adj = buildMapAdjacency(ctx);
+  const troops = options.troops ?? 0;
   const dist: Record<string, number> = { [from]: 0 };
   const prev: Record<string, { node: string; cost: number; routeType: string }> = {};
   const visited = new Set<string>();
@@ -120,10 +143,11 @@ export function findMapPath(
     if (node === to) break;
     for (const link of adj[node] ?? []) {
       if (visited.has(link.to) || !canTraverseNode(link.to)) continue;
-      const candidate = dist[node] + link.cost;
+      const effectiveCost = link.cost * routeCapacityMultiplier(troops, link.throughput);
+      const candidate = dist[node] + effectiveCost;
       if (dist[link.to] === undefined || candidate < dist[link.to]) {
         dist[link.to] = candidate;
-        prev[link.to] = { node, cost: link.cost, routeType: link.routeType };
+        prev[link.to] = { node, cost: effectiveCost, routeType: link.routeType };
         queue.push(link.to);
       }
     }
@@ -223,6 +247,7 @@ export function findPath(
   faction: FactionKey,
   from: string,
   to: string,
+  options: { troops?: number } = {},
 ): PathResult {
   if (from === to) return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '部队已在该州府。' };
   if (!state.regions[from] || !state.regions[to]) {
@@ -240,6 +265,7 @@ export function findPath(
     };
   }
   const adj = buildAdjacency(ctx);
+  const troops = options.troops ?? 0;
   const dist: Record<string, number> = { [from]: 0 };
   const prev: Record<string, { node: string; cost: number; routeType: string }> = {};
   const visited = new Set<string>();
@@ -252,10 +278,11 @@ export function findPath(
     if (node === to) break;
     for (const link of adj[node] ?? []) {
       if (!visited.has(link.to) && !canTraverse(state, ctx, faction, link.to)) continue;
-      const candidate = dist[node] + link.cost;
+      const effectiveCost = link.cost * routeCapacityMultiplier(troops, link.throughput);
+      const candidate = dist[node] + effectiveCost;
       if (dist[link.to] === undefined || candidate < dist[link.to]) {
         dist[link.to] = candidate;
-        prev[link.to] = { node, cost: link.cost, routeType: link.routeType };
+        prev[link.to] = { node, cost: effectiveCost, routeType: link.routeType };
         queue.push(link.to);
       }
     }
@@ -306,6 +333,13 @@ export function dayCostsFor(
     const seasonal = frozenFord !== 1 && isRiverRoute(routeType) ? frozenFord : 1;
     return Math.max(1, Math.round((c * seasonal) / speed));
   });
+}
+
+/** 将有效道路成本换算为行军天数，供 NPC 判断是否能及时抵达战线。 */
+export function estimatePathDays(army: Army, path: PathResult, season?: Season): number {
+  if (!path.ok) return Number.POSITIVE_INFINITY;
+  return dayCostsFor(army, path.costs, { routeTypes: path.routeTypes, season })
+    .reduce((sum, days) => sum + days, 0);
 }
 
 export function assignMarch(army: Army, path: string[], dayCosts: number[], targetRegionId: string): void {
