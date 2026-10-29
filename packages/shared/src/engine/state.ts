@@ -17,7 +17,7 @@ import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
 import { buildContext, buildInitialArmies, buildInitialMapNodes, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -245,6 +245,7 @@ export function createGame(
     mapNodes,
     armies,
     diplomacy,
+    treaties: [],
     special,
     intel: initialIntel(ctx, factionKey, date.label),
     pendingOrders: [],
@@ -342,11 +343,17 @@ function migrateV4toV5(state: GameState): void {
   }
 }
 
+/** v5 → v6：新增正式外交条约账本；旧档不视为自动结盟。 */
+function migrateV5toV6(state: GameState): void {
+  state.treaties ??= [];
+}
+
 const MIGRATIONS: Migration[] = [
   { from: 1, to: 2, apply: migrateV1toV2 },
   { from: 2, to: 3, apply: migrateV2toV3 },
   { from: 3, to: 4, apply: migrateV3toV4 },
   { from: 4, to: 5, apply: migrateV4toV5 },
+  { from: 5, to: 6, apply: migrateV5toV6 },
 ];
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
