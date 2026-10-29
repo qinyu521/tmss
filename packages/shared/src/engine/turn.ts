@@ -196,14 +196,24 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
     let remainingDays = TURN_DAYS;
     while (remainingDays > 0 && army.path.length > 0) {
       const hop = Math.max(1, army.hopCosts[0] ?? 1);
+      // 旧档或测试构造的行军状态可能没有当前路段总时长；首次进入时以剩余值兜底。
+      army.currentHopDaysTotal ??= hop;
       if (remainingDays < hop) {
-        army.marchDaysLeft = Math.max(0, army.marchDaysLeft - remainingDays);
+        const traveledDays = remainingDays;
+        // hopCosts[0] 永远表示当前路段尚未消耗的天数，不能在下一旬重走完整路段。
+        army.hopCosts[0] = Math.max(1, hop - traveledDays);
+        army.marchDaysLeft = army.hopCosts.reduce((s, d) => s + d, 0);
+        army.supply = clamp(army.supply - traveledDays * BALANCE.army.marchSupplyDrainPerDay);
+        army.fatigue = clamp(
+          army.fatigue + traveledDays * BALANCE.army.fatigueMarchPerDay * marchFatigueSeasonFactor(season, army.faction),
+        );
         remainingDays = 0;
         break;
       }
       remainingDays -= hop;
       const nextRegionId = army.path.shift() as string;
       army.hopCosts.shift();
+      army.currentHopDaysTotal = army.hopCosts[0] ?? 0;
       army.marchDaysLeft = army.hopCosts.reduce((s, d) => s + d, 0);
       const previous = army.nodeId;
       army.nodeId = nextRegionId;
