@@ -859,7 +859,7 @@ describe('NPC 前线防御调兵', () => {
     const originalHun = state.armies.find((army) => army.faction === 'HUN');
     const originalChu = state.armies.find((army) => army.faction === 'CHU');
     if (!originalHun || !originalChu) throw new Error('测试缺少攻守两方军团。');
-    const setTroops = (army: typeof originalHun, total: number) => {
+    const setTroops = (army: NonNullable<typeof originalHun>, total: number) => {
       const elite = army.units.reduce((sum, unit) => sum + unit.count, 0);
       army.levies = Math.max(0, total - elite);
       army.troops = army.levies + elite;
