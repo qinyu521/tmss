@@ -161,6 +161,42 @@ describe('API 集成', () => {
     expect(turnBody.report.chronicle.length).toBeGreaterThan(0);
   });
 
+  it('API 可直接向 72 节点中的附属据点下达行军命令', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'HUN', playerRole: 'ruler', seed: 20261029 },
+    });
+    expect(created.statusCode).toBe(200);
+    const gid = created.json().gameId as string;
+    const view = created.json().view;
+    const army = view.armies.find((a: any) => a.own && a.mapNodeId);
+    expect(army).toBeTruthy();
+
+    const mapResponse = await app.inject({ method: 'GET', url: '/api/map' });
+    const child = mapResponse.json().nodes.find((node: any) => node.parent_node_id === army.mapNodeId);
+    expect(child).toBeTruthy();
+    const targetRegion = view.regions.find((region: any) => region.name === child.region);
+    expect(targetRegion).toBeTruthy();
+
+    const order = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: {
+        orders: [{
+          orderId: 'map-node-api',
+          kind: 'move_army',
+          armyId: army.armyId,
+          targetRegionId: targetRegion.regionId,
+          targetMapNodeId: child.node_id,
+        }],
+      },
+    });
+    expect(order.statusCode).toBe(200);
+    expect(order.json().accepted).toHaveLength(1);
+    expect(order.json().view.pendingOrders).toHaveLength(1);
+  });
+
   it('分兵/州兵/计谋可通过 API 下达并结算', async () => {
     const created = await app.inject({
       method: 'POST',

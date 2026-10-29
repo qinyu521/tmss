@@ -874,11 +874,14 @@ export class MapScene {
       const region = ownerByRegion.get(cell.regionId);
       if (region) cell.faction = region.faction;
     }
+    const ownerByMapNode = new Map(this.view.mapNodes.map((mapNode) => [mapNode.nodeId, mapNode]));
     for (const { group, node } of this.nodeGroups) {
       const region = ownerByRegion.get(node.region);
-      if (!region) continue;
-      const colorPrimary = FACTION_VISUALS[region.faction].primary;
-      const colorAccent = FACTION_VISUALS[region.faction].mapBorder;
+      const mapNode = ownerByMapNode.get(node.node_id);
+      const faction = mapNode?.faction ?? region?.faction;
+      if (!faction) continue;
+      const colorPrimary = FACTION_VISUALS[faction].primary;
+      const colorAccent = FACTION_VISUALS[faction].mapBorder;
       group.traverse((obj) => {
         const mat = (obj as THREE.Mesh).material as THREE.MeshStandardMaterial;
         if (!mat || !mat.color) return;
@@ -948,10 +951,14 @@ export class MapScene {
     this.armyMarkers = [];
     if (!this.view || !this.map) return;
     const territories = new Map(this.map.territories.map((t) => [t.region_id, t]));
+    const mapNodes = new Map(this.map.nodes.map((node) => [node.node_id, node]));
     for (const army of this.view.armies) {
+      const currentMapNode = army.mapNodeId ? mapNodes.get(army.mapNodeId) : undefined;
       const territory = territories.get(army.nodeId);
-      if (!territory) continue;
-      const coord = this.displayCoord(territory.region, territory.map_x, territory.map_y);
+      if (!territory && !currentMapNode) continue;
+      const coord = currentMapNode
+        ? this.displayCoord(currentMapNode.region, currentMapNode.map_x, currentMapNode.map_y)
+        : this.displayCoord(territory!.region, territory!.map_x, territory!.map_y);
       const w = mapToWorld(coord.x, coord.y);
       const group = new THREE.Group();
       const base = new THREE.Mesh(
@@ -1003,28 +1010,40 @@ export class MapScene {
 
       const position = new THREE.Vector3(w.x, this.heightAt(w.x, w.z) + 4, w.z);
       let routeLine: THREE.Line | null = null;
-      if (army.own && army.path.length > 0) {
-        const routePoints = [army.nodeId, ...army.path]
+      const mapPath = army.mapPath ?? [];
+      let routePoints: THREE.Vector3[] = [];
+      if (army.own && army.mapNodeId && mapPath.length > 0) {
+        routePoints = [army.mapNodeId, ...mapPath]
           .map((id) => {
-            const t = territories.get(id);
-            if (!t) return null;
-            const p = mapToWorld(this.displayCoord(t.region, t.map_x, t.map_y).x, this.displayCoord(t.region, t.map_x, t.map_y).y);
+            const node = mapNodes.get(id);
+            if (!node) return null;
+            const c = this.displayCoord(node.region, node.map_x, node.map_y);
+            const p = mapToWorld(c.x, c.y);
             return new THREE.Vector3(p.x, this.heightAt(p.x, p.z) + 8, p.z);
           })
           .filter((p): p is THREE.Vector3 => Boolean(p));
-        if (routePoints.length > 1) {
-          const routeGeo = new THREE.BufferGeometry().setFromPoints(routePoints);
-          routeLine = new THREE.Line(
-            routeGeo,
-            new THREE.LineDashedMaterial({ color: '#e5c46d', dashSize: 14, gapSize: 8, transparent: true, opacity: 0.85 }),
-          );
-          routeLine.computeLineDistances();
-          this.scene.add(routeLine);
-          const routePoint = pointAlong(routePoints, army.progress);
-          position.set(routePoint.x, routePoint.y + 4, routePoint.z);
-        }
+      } else if (army.own && army.path.length > 0) {
+        routePoints = [army.nodeId, ...army.path]
+          .map((id) => {
+            const t = territories.get(id);
+            if (!t) return null;
+            const c = this.displayCoord(t.region, t.map_x, t.map_y);
+            const p = mapToWorld(c.x, c.y);
+            return new THREE.Vector3(p.x, this.heightAt(p.x, p.z) + 8, p.z);
+          })
+          .filter((p): p is THREE.Vector3 => Boolean(p));
       }
-
+      if (routePoints.length > 1) {
+        const routeGeo = new THREE.BufferGeometry().setFromPoints(routePoints);
+        routeLine = new THREE.Line(
+          routeGeo,
+          new THREE.LineDashedMaterial({ color: '#e5c46d', dashSize: 14, gapSize: 8, transparent: true, opacity: 0.85 }),
+        );
+        routeLine.computeLineDistances();
+        this.scene.add(routeLine);
+        const routePoint = pointAlong(routePoints, army.progress);
+        position.set(routePoint.x, routePoint.y + 4, routePoint.z);
+      }
       group.position.copy(position);
       group.scale.setScalar(1.3);
       group.userData = { type: 'army', armyId: army.armyId };

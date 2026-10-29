@@ -228,12 +228,14 @@ export default function RightPanel() {
 
   function nodeDetail(nodeView: NonNullable<typeof node>) {
     const rv = view!.regions.find((r) => r.name === nodeView.region);
+    const nodeState = view!.mapNodes.find((n) => n.nodeId === nodeView.node_id);
+    const nodeTerritory = mapData?.territories.find((t) => t.region === nodeView.region);
     return (
       <>
         <div className="rp-head">
           <div className="kicker">{nodeView.node_type}</div>
           <div className="title">{nodeView.node_name}</div>
-          <div className="small muted">{nodeView.region} · {nodeView.faction}</div>
+          <div className="small muted">{nodeView.region} · 当前控制：{nodeState?.ownerShort ?? nodeView.faction}</div>
         </div>
         <div className="rp-body">
           <div className="subhead">地点档案</div>
@@ -244,7 +246,8 @@ export default function RightPanel() {
           </div>
           <div className="subhead">控制与驻防</div>
           <div className="kv">
-            <div className="item"><div className="k">控制者</div><div className="v" style={{ fontSize: 13 }}>{nodeView.controller_name}</div></div>
+            <div className="item"><div className="k">当前势力</div><div className="v" style={{ fontSize: 13 }}>{nodeState?.ownerShort ?? nodeView.controller_name}</div></div>
+            {nodeState?.owned && nodeState.garrison !== undefined && <div className="item"><div className="k">节点守军</div><div className="v">{fmt(nodeState.garrison)}</div></div>}
             <div className="item"><div className="k">本州主官</div><div className="v" style={{ fontSize: 13 }}>{rv?.governorName ?? '未详'}</div></div>
             <div className="item"><div className="k">地方驻将</div><div className="v" style={{ fontSize: 13 }}>{nodeView.local_military || '—'}</div></div>
             <div className="item"><div className="k">州府</div><div className="v" style={{ fontSize: 13 }}>{nodeView.region}</div></div>
@@ -257,6 +260,13 @@ export default function RightPanel() {
           )}
           {rv && !rv.owned && allowed.includes('scout') && (
             <button className="btn small" onClick={() => openOrders({ kind: 'scout', regionId: rv.regionId })}>遣斥候</button>
+          )}
+          {nodeTerritory && allowed.includes('move_army') && (
+            <button className="btn small primary" onClick={() => openOrders({
+              kind: 'move_army',
+              targetRegionId: nodeTerritory.region_id,
+              targetMapNodeId: nodeView.node_id,
+            })}>令军前往此据点</button>
           )}
         </div>
       </>

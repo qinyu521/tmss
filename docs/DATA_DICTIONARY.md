@@ -70,7 +70,15 @@
 
 以 18 条 `national_force_allocations.initial_force_count` 为唯一兵员总量来源。每个军区编成一个军团，驻地由军区名称/防区推导。每个军团初始编入两支精锐编制，人数由 `packages/shared/src/unitProfiles.ts` 的 `initialFormationSize` 明确规定：常规精锐通常为 8,000–10,000 人，稀有禁卫、突击、水寨或专门用途兵种可为 3,000–5,000 人。`capPerFaction` 表示全势力该兵种同时部署总上限，独立于单支初始编制。精锐兵员从原军区分配兵力中扣出，其余为征集兵；特殊兵种分遣队**计入**军团总兵力，不额外增加兵力。验收必须维持匈奴 400,000、大雍 800,000、大楚 300,000 的初始总兵力守恒。
 
-### 4.3 数据缺失记录
+### 4.3 战略地图节点运行时状态
+
+- 权威地图种子提供 72 个 `map_nodes`：24 个州府/主城、48 个附属据点；附属节点通过 `parent_node_id` 与主城连接，地图本身仍由只读种子定义。
+- `MapNodeState` 为每个存档单独保存控制方 `faction`、所属州府 `regionId`、节点驻军 `garrison`、城防 `fortification`、补给 `supplyLevel`、地形 `terrain` 与资源画像。占领附属节点不会自动改变 `RegionState.faction`。
+- `Army.mapNodeId/mapPath/mapHopCosts/mapCurrentHopDaysTotal/targetMapNodeId` 记录实际节点驻地、节点路线、每段剩余行军日和当前段完整时长；原有 `nodeId/path/hopCosts/currentHopDaysTotal` 保留为州府兼容路径。
+- `move_army.targetMapNodeId` 可选择附属据点；缺省时目标为州府/主城。节点控制和驻军是游戏存档状态，不写回权威种子 JSON。
+- schema v4 用 v3 → v4 迁移为旧档补齐节点状态和路线字段；已有节点控制方、驻军和行军进度优先保留。
+
+### 4.4 数据缺失记录
 
 当前工作区包含权威种子，无缺失。若部署时缺失：`data/source/tianming_world_roster_v0_3_1.json` 必须人工放回；程序会在启动时报错，不会生成替代数据。
 

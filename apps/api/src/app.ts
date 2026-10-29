@@ -91,6 +91,7 @@ const orderSchema = z.discriminatedUnion('kind', [
     kind: z.literal('move_army'),
     armyId: z.string().min(1),
     targetRegionId: z.string().min(1),
+    targetMapNodeId: z.string().min(1).optional(),
     amount: z.number().finite().optional(),
     units: z.array(z.object({ unitId: z.string().min(1), count: z.number().int().positive() })).max(5).optional(),
     commanderId: z.string().min(1).optional(),
@@ -299,7 +300,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       .prepare(`SELECT payload FROM characters ${where} ORDER BY faction_key, person_id LIMIT ? OFFSET ?`)
       .all(...params, pageSize, (page - 1) * pageSize) as any[];
     // 携带 gameId 时合并该局人物运行时状态（生死/死因）；人物档案本就公开属性，生死讣闻同理公开
-    const runtimeMap = q.gameId ? (getGameState(db, q.gameId, seed.characters)?.characters ?? null) : null;
+    const runtimeMap = q.gameId ? (getGameState(db, q.gameId, seed.characters, seed)?.characters ?? null) : null;
     return {
       total,
       page,
@@ -342,7 +343,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     const relationships = rels.map((r) => JSON.parse(r.payload));
     // 携带 gameId 时返回该局运行时状态（存活/死因/成长/有效属性），否则保持纯静态档案
     const gameId = (req.query as Record<string, string | undefined>).gameId;
-    const runtime = gameId ? (getGameState(db, gameId, seed.characters)?.characters?.[id] ?? null) : null;
+    const runtime = gameId ? (getGameState(db, gameId, seed.characters, seed)?.characters?.[id] ?? null) : null;
     return {
       character,
       runtime,
@@ -435,7 +436,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   });
 
   app.get('/api/games/:id', async (req, reply) => {
-    const state = getGameState(db, String((req.params as any).id), seed.characters);
+    const state = getGameState(db, String((req.params as any).id), seed.characters, seed);
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '存档/游戏不存在。' });
     return {
       view: buildPlayerView(state, ctx),
@@ -451,7 +452,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   });
 
   app.post('/api/games/:id/orders', async (req, reply) => {
-    const state = getGameState(db, String((req.params as any).id), seed.characters);
+    const state = getGameState(db, String((req.params as any).id), seed.characters, seed);
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     const parsed = ordersBodySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -484,7 +485,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   });
 
   app.delete('/api/games/:id/orders/:orderId', async (req, reply) => {
-    const state = getGameState(db, String((req.params as any).id), seed.characters);
+    const state = getGameState(db, String((req.params as any).id), seed.characters, seed);
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     const orderId = String((req.params as any).orderId);
     state.pendingOrders = state.pendingOrders.filter((o) => o.orderId !== orderId);
@@ -493,7 +494,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   });
 
   app.post('/api/games/:id/turn', async (req, reply) => {
-    const state = getGameState(db, String((req.params as any).id), seed.characters);
+    const state = getGameState(db, String((req.params as any).id), seed.characters, seed);
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     const result = runTurn(state, ctx);
     saveGameState(db, result.state);
@@ -512,7 +513,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
 
   app.get('/api/games/:id/events', async (req, reply) => {
     const gameId = String((req.params as any).id);
-    if (!getGameState(db, gameId, seed.characters)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
+    if (!getGameState(db, gameId, seed.characters, seed)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     const q = req.query as Record<string, string | undefined>;
     return {
       items: listEvents(db, gameId, {
@@ -526,7 +527,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   // 战报回放：交战双方数据属战报公开内容，直接返回确定性展开的分阶段脚本
   app.get('/api/games/:id/battles/:eventId/replay', async (req, reply) => {
     const gameId = String((req.params as any).id);
-    if (!getGameState(db, gameId, seed.characters)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
+    if (!getGameState(db, gameId, seed.characters, seed)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     const eventId = String((req.params as any).eventId);
     const event = getEvent(db, gameId, eventId);
     if (!event) return reply.code(404).send({ error: 'NOT_FOUND', message: '事件不存在。' });
@@ -538,14 +539,14 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
 
   app.get('/api/games/:id/chronicle', async (req, reply) => {
     const gameId = String((req.params as any).id);
-    if (!getGameState(db, gameId, seed.characters)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
+    if (!getGameState(db, gameId, seed.characters, seed)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     return { items: listChronicle(db, gameId, 200) };
   });
 
   // 可选 LLM 史官：只读本旬条目的事实层与事件摘要，仅回写 literary/inference 表达层
   app.post('/api/games/:id/chronicle/llm', async (req, reply) => {
     const gameId = String((req.params as any).id);
-    if (!getGameState(db, gameId, seed.characters)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
+    if (!getGameState(db, gameId, seed.characters, seed)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     const parsed = chronicleLlmSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.issues.map((i) => i.message).join(';') });
@@ -569,7 +570,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   });
 
   app.post('/api/games/:id/save', async (req, reply) => {
-    const state = getGameState(db, String((req.params as any).id), seed.characters);
+    const state = getGameState(db, String((req.params as any).id), seed.characters, seed);
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     const parsed = saveBodySchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: '存档名不合法。' });
@@ -579,7 +580,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
 
   app.get('/api/games/:id/saves', async (req, reply) => {
     const gameId = String((req.params as any).id);
-    if (!getGameState(db, gameId, seed.characters)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
+    if (!getGameState(db, gameId, seed.characters, seed)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     return { items: listSaves(db, gameId) };
   });
 
@@ -588,7 +589,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     const saveId = String((req.params as any).saveId);
     const save = getSave(db, gameId, saveId);
     if (!save) return reply.code(404).send({ error: 'NOT_FOUND', message: '存档不存在。' });
-    const state = migrateState(save.state as GameState, seed.characters);
+    const state = migrateState(save.state as GameState, seed.characters, seed);
     saveGameState(db, state);
     pruneAfterTurn(db, gameId, state.date.turn);
     return {
@@ -609,7 +610,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
 
   app.get('/api/admin/npc-intent', async () => {
     const games = listGames(db).slice(0, 5);
-    const state = games[0] ? getGameState(db, games[0].game_id, seed.characters) : null;
+    const state = games[0] ? getGameState(db, games[0].game_id, seed.characters, seed) : null;
     if (!state) return { items: [] };
     return { items: generateNpcOrders(state, ctx).map((o) => ({ kind: o.kind, orderId: o.orderId })) };
   });
