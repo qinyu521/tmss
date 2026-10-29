@@ -26,7 +26,7 @@ import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
 import { courtCost, courtDecisionForResolution, courtOpinion, courtRelationshipAffinity, courtSkill, politicalGrudgeCourtPenalty } from './court.js';
-import { appointmentRelationshipEffect, successionCommandRisk } from './relationships.js';
+import { appointmentRelationshipEffect, findDefectionAllegiance, successionCommandRisk } from './relationships.js';
 
 function currentFactionOfCharacter(state: GameState, ctx: DerivedContext, personId: string): FactionKey | undefined {
   return state.characters[personId]?.allegianceFaction ?? ctx.charactersById[personId]?.faction_key;
@@ -765,7 +765,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       if (oldRuntime?.defectionWarningTurn === undefined || !oldRuntime.defectionTargetFaction) {
         return issues('NO_DEFLECTION_WARNING', '该军团当前没有有效的倒戈预警，无需执行预防性撤换。');
       }
-      if (oldRuntime.allegianceFaction) return issues('ALREADY_DEFECTED', '将领已经倒戈，不能再由原势力撤换。');
+      if (oldRuntime.allegianceFaction && oldRuntime.allegianceFaction !== state.factionKey) return issues('ALREADY_DEFECTED', '该将领当前不归本势力管辖，不能撤换。');
       const region = state.regions[army.nodeId];
       if (!region || region.faction !== state.factionKey ||
         state.armies.some((item) => item.armyId !== army.armyId && item.faction === state.factionKey && item.nodeId === army.nodeId)) {
@@ -804,6 +804,46 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         ok: true,
         issues: [],
         preview: `赏赐${person.name}白银 ${order.amount.toLocaleString()} 两，军令忠诚度 ${Math.round(current)} → ${Math.round(current + gain)}（+ ${Math.round(gain)}）。`,
+      };
+    }
+    case 'offer_defector_amnesty': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '招抚已倒戈旧将需君主权限。');
+      const person = ctx.charactersById[order.personId];
+      const runtime = state.characters[order.personId];
+      if (!person || person.faction_key !== state.factionKey || !runtime?.allegianceFaction || runtime.allegianceFaction === state.factionKey) {
+        return issues('NOT_DEFECTOR', '只能招抚原属本方、当前已倒戈到其他势力的人物。');
+      }
+      if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，不能招抚。');
+      const currentFaction = runtime.allegianceFaction;
+      const army = state.armies.find((item) => item.faction === currentFaction && item.commanderId === person.person_id);
+      if (!army || army.status !== 'idle') return issues('NO_ACTIVE_ARMY', '该旧将须仍统领归附势力的一支驻定军团，且军团不能正在行军或交战。');
+      const region = state.regions[army.nodeId];
+      if (!region || region.faction !== currentFaction ||
+        state.armies.some((item) => item.armyId !== army.armyId && item.faction === currentFaction && item.nodeId === army.nodeId)) {
+        return issues('NO_EXCLUSIVE_POSITION', '招抚要求该将领仍独占一处由归附势力控制的驻地。');
+      }
+      if (!isAtWar(state.diplomacy, state.factionKey, currentFaction)) {
+        return issues('NO_WAR', '需与旧将当前归附势力处于交战状态，才能发动军政招抚。');
+      }
+      if (![10_000, 20_000, 40_000].includes(order.amount)) return issues('BAD_AMOUNT', '招抚赏赐只能选择 10000、20000 或 40000 两。');
+      if (faction.resources.cash < order.amount) return issues('NO_CASH', `招抚需银 ${order.amount.toLocaleString()} 两。`);
+      const tie = findDefectionAllegiance(
+        ctx.seed.relationships,
+        ctx.charactersById,
+        person.person_id,
+        currentFaction,
+        (personId) => currentFactionOfCharacter(state, ctx, personId),
+        (personId, factionKey) => state.characters[personId]?.alive !== false && isAtWar(state.diplomacy, currentFaction, factionKey),
+        state.factionKey,
+      );
+      if (!tie) return issues('NO_OLD_TIE', '未发现该将领与本方在世人物之间明确、强且非敌对的关系，不能仅凭银钱无条件招抚。');
+      const loyalty = runtime.militaryLoyalty ?? person.loyalty;
+      const penalty = Math.round(order.amount / 2_500) + 2;
+      const after = clamp(loyalty - penalty);
+      return {
+        ok: true,
+        issues: [],
+        preview: `向旧将${person.name}发出招抚，耗银 ${order.amount.toLocaleString()} 两，军令忠诚 ${Math.round(loyalty)} → ${Math.round(after)}（-${Math.round(loyalty - after)}）。${after <= 15 ? '若归附方下一旬前未能挽回，将进入旧主归还预警。' : '忠诚虽下降，但尚未触发归还预警。'}`,
       };
     }
     case 'settle_defeated_commander': {
@@ -1686,6 +1726,66 @@ export function applyOrder(
         after: { militaryLoyalty: after, loyaltyGain: after - before, cash: faction.resources.cash },
         evidence: '军令忠诚属于本局人物运行时数据；赏赐金额 1000 两换取 1 点忠诚，忠诚上限 100',
         source,
+      }));
+      return;
+    }
+    case 'offer_defector_amnesty': {
+      const person = ctx.charactersById[order.personId];
+      const runtime = state.characters[order.personId];
+      if (!person || !runtime?.allegianceFaction || person.faction_key !== fk || !isCharacterAlive(state, person.person_id)) return;
+      const currentFaction = runtime.allegianceFaction;
+      const army = state.armies.find((item) => item.faction === currentFaction && item.commanderId === person.person_id);
+      const region = army ? state.regions[army.nodeId] : undefined;
+      if (!army || army.status !== 'idle' || !region || region.faction !== currentFaction ||
+        state.armies.some((item) => item.armyId !== army.armyId && item.faction === currentFaction && item.nodeId === army.nodeId) ||
+        !isAtWar(state.diplomacy, fk, currentFaction)) return;
+      const tie = findDefectionAllegiance(
+        ctx.seed.relationships,
+        ctx.charactersById,
+        person.person_id,
+        currentFaction,
+        (personId) => currentFactionOfCharacter(state, ctx, personId),
+        (personId, factionKey) => state.characters[personId]?.alive !== false && isAtWar(state.diplomacy, currentFaction, factionKey),
+        fk,
+      );
+      if (!tie) return;
+      const before = clamp(runtime.militaryLoyalty ?? person.loyalty);
+      const penalty = Math.round(order.amount / 2_500) + 2;
+      const after = clamp(before - penalty);
+      const cashBefore = faction.resources.cash;
+      runtime.militaryLoyalty = after;
+      runtime.defectionWarningTurn = undefined;
+      runtime.defectionTargetFaction = undefined;
+      if (after <= 15) {
+        runtime.defectionWarningTurn = state.date.turn;
+        runtime.defectionTargetFaction = fk;
+      }
+      faction.resources.cash -= order.amount;
+      const stabilityLoss = Math.max(1, Math.round(penalty / 3));
+      state.factions[currentFaction].stability = clamp(state.factions[currentFaction].stability - stabilityLoss);
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: `旧主招抚·${person.name}`,
+        summary: `${actorName}凭与${person.name}的旧主知遇关系向其发出招抚，耗银 ${order.amount.toLocaleString()} 两，军令忠诚 ${Math.round(before)} → ${Math.round(after)}（-${Math.round(before - after)}）。${after <= 15 ? `忠诚已跌至归还阈值；${state.factions[currentFaction].name}须在下一旬结束前赏赐或撤换统将，否则军团与${region.name}可能归还${state.factions[fk].name}。` : '忠诚下降但尚未进入自动归还预警，后续仍取决于忠诚、关系与战局。'}`,
+        actorId,
+        actorName,
+        factionKey: fk,
+        targetId: person.person_id,
+        targetLabel: person.name,
+        before: { militaryLoyalty: before, currentFaction, cash: cashBefore },
+        after: {
+          militaryLoyalty: after,
+          loyaltyDelta: after - before,
+          currentFaction,
+          targetFaction: fk,
+          warningTurn: runtime.defectionWarningTurn,
+          defectionTargetFaction: runtime.defectionTargetFaction,
+          currentFactionStability: state.factions[currentFaction].stability,
+          cash: faction.resources.cash,
+        },
+        evidence: '只允许君主对原属本方、现由敌对势力控制驻地的归附将领发动招抚；需存在明确强关系，金额越高对忠诚打击越大，阈值命中后保留一整回合反制窗口',
+        source,
+        visibleToPlayer: true,
       }));
       return;
     }
