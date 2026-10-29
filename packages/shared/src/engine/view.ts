@@ -128,6 +128,8 @@ export interface MapNodeView {
   garrison?: number;
   fortification?: number;
   supplyLevel?: number;
+  /** 仅围城方与被围方能看到围城态势，敌对第三方不获知精确进度。 */
+  siege?: { besiegerFaction: FactionKey; startedTurn: number; progress: number; turns: number; besiegerCount: number };
 }
 
 export interface DiplomacyView {
@@ -237,6 +239,15 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
           : node.garrison;
       result.fortification = node.fortification;
       result.supplyLevel = node.supplyLevel;
+    }
+    if (node.siege && (node.siege.besiegerFaction === ownKey || node.faction === ownKey)) {
+      result.siege = {
+        besiegerFaction: node.siege.besiegerFaction,
+        startedTurn: node.siege.startedTurn,
+        progress: node.siege.progress,
+        turns: node.siege.turns,
+        besiegerCount: node.siege.besiegerArmyIds.length,
+      };
     }
     return result;
   });
