@@ -24,7 +24,7 @@ import {
   retreatMapNode,
 } from './movement.js';
 import { marchFatigueSeasonFactor, SEASON_LABELS, seasonOf } from './season.js';
-import { retreatRegion as retreatGuard, resolveBattle } from './battle.js';
+import { applyArmyLosses, retreatRegion as retreatGuard, resolveBattle } from './battle.js';
 import { runEconomy, politicalTags, shortageTags } from './economy.js';
 import { runPolitics } from './politics.js';
 import { runLifecycle } from './lifecycle.js';
@@ -788,52 +788,107 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
     }
   }
 
-  // 休整中的部队恢复；仓储据点与港埠可用有限库存提供额外补给。
+  // 休整中的部队恢复；缺少本土后勤线的孤军会持续耗粮，不能靠驻扎状态无限回满补给。
   for (const army of state.armies) {
-    if (army.status === 'idle' && army.nodeId) {
-      const region = state.regions[army.nodeId];
-      const mapNode = army.mapNodeId && state.mapNodes ? state.mapNodes[army.mapNodeId] : undefined;
-      const locationFaction = mapNode ? mapNode.faction : region?.faction;
-      if (region && locationFaction === army.faction) {
-        const logistics = mapNode && mapNode.faction === army.faction
-          ? mapNodeRestSupply(mapNode)
-          : { bonus: 0, stockCost: 0, facility: '' };
-        const beforeArmySupply = Math.round(army.supply);
-        const beforeNodeSupply = mapNode?.supplyLevel;
-        army.supply = clamp(army.supply + 8 + logistics.bonus);
-        army.fatigue = clamp(army.fatigue - 8);
-        army.morale = clamp(army.morale + 1);
+    if (army.status !== 'idle' || !army.nodeId) continue;
+    const region = state.regions[army.nodeId];
+    if (!region) continue;
 
-        if (mapNode && logistics.bonus > 0) {
-          mapNode.supplyLevel = clamp(mapNode.supplyLevel - logistics.stockCost);
-          events.push(emitEvent(state, {
-            type: 'resource',
-            title: `${mapNode.name}为${army.name}补充军需`,
-            summary: `${army.name}驻扎于${mapNode.name}，利用${logistics.facility}库存额外恢复补给 ${logistics.bonus}；据点储备由 ${Math.round(beforeNodeSupply ?? 0)} 降至 ${Math.round(mapNode.supplyLevel)}。`,
-            actorId: army.commanderId,
-            actorName: army.commanderName,
-            factionKey: army.faction,
-            targetId: mapNode.nodeId,
-            targetLabel: mapNode.name,
-            before: { armySupply: beforeArmySupply, nodeSupplyLevel: beforeNodeSupply },
-            after: {
-              armySupply: Math.round(army.supply),
-              nodeSupplyLevel: Math.round(mapNode.supplyLevel),
-              logisticsBonus: logistics.bonus,
-              stockCost: logistics.stockCost,
-            },
-            payload: {
-              action: 'node_resupply',
-              facility: logistics.facility,
-              bonus: logistics.bonus,
-              stockCost: logistics.stockCost,
-            },
-            evidence: '确定性节点后勤规则：据点库存提供额外补给，储备按实际恢复量消耗；不增加兵员。',
-            source: 'engine',
-            visibleToPlayer: army.faction === state.factionKey,
-          }));
-        }
+    const mapNode = army.mapNodeId && state.mapNodes ? state.mapNodes[army.mapNodeId] : undefined;
+    // 本土补给线要求“州府行政归属”和实际节点控制权都属于本方。
+    // 占领敌境附属据点可以消耗节点剩余库存，但不能凭空获得常规 +8 补给。
+    const hasHomeSupplyLine = region.faction === army.faction &&
+      (!mapNode || mapNode.faction === army.faction);
+    const canUseNodeStock = Boolean(mapNode && mapNode.faction === army.faction);
+    const logistics = canUseNodeStock && mapNode
+      ? mapNodeRestSupply(mapNode)
+      : { bonus: 0, stockCost: 0, facility: '' };
+
+    const beforeArmySupply = Math.round(army.supply);
+    const beforeNodeSupply = mapNode?.supplyLevel;
+    const beforeTroops = Math.round(army.troops);
+    const beforeFatigue = Math.round(army.fatigue);
+    const beforeMorale = Math.round(army.morale);
+
+    if (hasHomeSupplyLine) {
+      army.supply = clamp(army.supply + 8 + logistics.bonus);
+      army.fatigue = clamp(army.fatigue - 8);
+      army.morale = clamp(army.morale + 1);
+    } else {
+      // 孤军仍可休息，但没有常规补给线；有限节点库存只能抵消一部分当回合消耗。
+      army.supply = clamp(army.supply - BALANCE.army.isolatedSupplyDrainPerTurn + logistics.bonus);
+      army.fatigue = clamp(army.fatigue - BALANCE.army.isolatedFatigueRecoverPerTurn);
+    }
+
+    if (mapNode && logistics.bonus > 0) {
+      mapNode.supplyLevel = clamp(mapNode.supplyLevel - logistics.stockCost);
+      events.push(emitEvent(state, {
+        type: 'resource',
+        title: `${mapNode.name}为${army.name}补充军需`,
+        summary: `${army.name}驻扎于${mapNode.name}，利用${logistics.facility}库存额外恢复补给 ${logistics.bonus}；据点储备由 ${Math.round(beforeNodeSupply ?? 0)} 降至 ${Math.round(mapNode.supplyLevel)}。`,
+        actorId: army.commanderId,
+        actorName: army.commanderName,
+        factionKey: army.faction,
+        targetId: mapNode.nodeId,
+        targetLabel: mapNode.name,
+        before: { armySupply: beforeArmySupply, nodeSupplyLevel: beforeNodeSupply },
+        after: {
+          armySupply: Math.round(army.supply),
+          nodeSupplyLevel: Math.round(mapNode.supplyLevel),
+          logisticsBonus: logistics.bonus,
+          stockCost: logistics.stockCost,
+        },
+        payload: {
+          action: 'node_resupply',
+          facility: logistics.facility,
+          bonus: logistics.bonus,
+          stockCost: logistics.stockCost,
+        },
+        evidence: '确定性节点后勤规则：据点库存提供额外补给，储备按实际恢复量消耗；不增加兵员。',
+        source: 'engine',
+        visibleToPlayer: army.faction === state.factionKey,
+      }));
+    }
+
+    if (!hasHomeSupplyLine) {
+      let attritionLosses = 0;
+      if (army.supply < BALANCE.army.attritionSupplyBelow && army.troops > 0) {
+        const requestedLosses = Math.max(
+          1,
+          Math.round(army.troops * BALANCE.army.attritionRatePerDay * TURN_DAYS),
+        );
+        applyArmyLosses(army, requestedLosses);
+        attritionLosses = Math.max(0, beforeTroops - Math.round(army.troops));
       }
+      events.push(emitEvent(state, {
+        type: 'shortage',
+        title: attritionLosses > 0 ? `${army.name}孤军断粮减员` : `${army.name}孤军补给消耗`,
+        summary: attritionLosses > 0
+          ? `${army.name}缺少本土后勤线，补给由 ${beforeArmySupply} 降至 ${Math.round(army.supply)}；断粮导致约 ${attritionLosses.toLocaleString()} 人减员。`
+          : `${army.name}驻于缺少本土后勤线的据点，补给由 ${beforeArmySupply} 降至 ${Math.round(army.supply)}。目前尚未发生断粮减员。`,
+        actorId: army.commanderId,
+        actorName: army.commanderName,
+        factionKey: army.faction,
+        targetId: army.armyId,
+        targetLabel: army.name,
+        before: { supply: beforeArmySupply, troops: beforeTroops, fatigue: beforeFatigue, morale: beforeMorale },
+        after: {
+          supply: Math.round(army.supply),
+          troops: Math.round(army.troops),
+          fatigue: Math.round(army.fatigue),
+          morale: Math.round(army.morale),
+          attritionLosses,
+        },
+        payload: {
+          action: 'isolated_army_supply',
+          supplyDrain: BALANCE.army.isolatedSupplyDrainPerTurn,
+          nodeStockBonus: logistics.bonus,
+          attritionLosses,
+        },
+        evidence: '孤军每回合消耗补给；库存只能有限抵消消耗，补给低于阈值后按既有军队损耗函数减员。',
+        source: 'engine',
+        visibleToPlayer: army.faction === state.factionKey,
+      }));
     }
   }
 
