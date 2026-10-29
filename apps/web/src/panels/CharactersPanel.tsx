@@ -59,7 +59,7 @@ export default function CharactersPanel() {
 
   if (!view) return null;
   const c = detail?.character;
-  const runtime = detail?.runtime as { alive?: boolean; deathCause?: string; growthNote?: string; goal?: CharacterGoalType; goalTargetId?: string; goalSinceTurn?: number; goalReason?: string } | null | undefined;
+  const runtime = detail?.runtime as { alive?: boolean; deathCause?: string; growthNote?: string; goal?: CharacterGoalType; goalTargetId?: string; goalSinceTurn?: number; goalReason?: string; militaryLoyalty?: number; allegianceFaction?: string; defectionWarningTurn?: number; defectionTargetFaction?: string } | null | undefined;
 
   return (
     <Modal
@@ -137,6 +137,21 @@ export default function CharactersPanel() {
                 <div className="divider" />
                 <div className="small muted">性别/年龄：{c.gender} · {c.age_band}</div>
                 <div className="small muted">原型：{c.historical_archetype}（{c.archetype_id}）</div>
+
+                {c.faction_key === view.factionKey && runtime?.militaryLoyalty !== undefined && (
+                  <div className="small muted" style={{ marginTop: 6 }}>
+                    本局军令忠诚：{Math.round(runtime.militaryLoyalty)} / 100
+                  </div>
+                )}
+                {c.faction_key === view.factionKey && runtime?.defectionWarningTurn !== undefined && (
+                  <div className="card" style={{ marginTop: 10, borderColor: 'var(--danger)', color: 'var(--danger)', lineHeight: 1.6 }}>
+                    <strong>倒戈预警</strong>
+                    <div className="small">
+                      该将领与交战敌方存在明确强关系。预警始于第 {runtime.defectionWarningTurn} 回合；
+                      可在命令面板使用“赏赐将领”提高军令忠诚，或承担军团与驻地可能易手的后果。
+                    </div>
+                  </div>
+                )}
                 {runtime?.growthNote && <div className="small" style={{ color: 'var(--gold)' }}>{runtime.growthNote}</div>}
                 {runtime?.goal && runtime.goal !== 'idle' && (
                   <div className="card small" style={{ marginTop: 10, lineHeight: 1.6 }}>
