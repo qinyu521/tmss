@@ -727,7 +727,7 @@ describe('NPC 战略地图节点进攻', () => {
     state.date.turn = 2;
     for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
     state.diplomacy['HUN|YONG'] = -40;
-    state.diplomacy['CHU|YONG'] = -40;
+    state.diplomacy['YONG|CHU'] = -40;
     state.diplomacy['HUN|CHU'] = 50;
     state.treaties = [{
       treatyId: 'treaty-hun-chu-map-target',
