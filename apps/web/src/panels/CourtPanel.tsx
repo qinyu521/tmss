@@ -1,4 +1,5 @@
-import { fmt } from '@tianming/shared';
+import { useState } from 'react';
+import { fmt, type CourtResolution, type CourtTopic } from '@tianming/shared';
 import { useApp } from '../state/store';
 import { Modal, StatLine } from '../components/ui';
 
@@ -7,8 +8,26 @@ export default function CourtPanel() {
   const events = useApp((s) => s.events);
   const setNav = useApp((s) => s.setNav);
   const openOrders = useApp((s) => s.openOrders);
+  const submitOrders = useApp((s) => s.submitOrders);
+  const busy = useApp((s) => s.busy);
+  const [debateNote, setDebateNote] = useState('');
   if (!view) return null;
+  const pendingDebate = view.pendingOrders.find((order) => order.kind === 'court_debate');
   const s = view.special;
+  const submitDebate = async (topic: CourtTopic, resolution: CourtResolution) => {
+    if (busy || pendingDebate) return;
+    const result = await submitOrders([{
+      orderId: `court-${view.gameId}-T${view.date.turn}`,
+      kind: 'court_debate',
+      topic,
+      resolution,
+    }]);
+    setDebateNote(
+      result.accepted
+        ? '议案已列入本回合朝议。结束本回合后，列席官员将按人物能力与身份影响投票；未获通过的议案不会执行政策。'
+        : result.issues.join('；') || '议案未提交。',
+    );
+  };
   const politicsEvents = events.filter((e) => ['politics', 'succession', 'scheme', 'shortage'].includes(e.type)).slice(0, 8);
   const topics: string[] = [];
   if (view.flags.successionCrisis) topics.push('大雍式夺嫡危机：皇子派系与军区开始站队，需尽快平衡或立储。');
@@ -17,7 +36,7 @@ export default function CourtPanel() {
   if (view.own.statusTags.includes('粮草紧张')) topics.push('军粮告急：征粮、贸易或缩短远征，避免士气与逃兵恶化。');
   if (view.own.statusTags.includes('缺盐')) topics.push('盐供应不足：影响军需与民生，可边市购入或争夺盐场。');
   if (view.own.statusTags.includes('缺战马')) topics.push('战马短缺：骑兵扩编受限，优先保护牧马地或用贸易补充。');
-  if (topics.length === 0) topics.push('本旬无迫在眉睫的危机，可积蓄粮秣、整军或谋划边境。');
+  if (topics.length === 0) topics.push('本回合无迫在眉睫的危机，可积蓄粮秣、整军或谋划边境。');
 
   return (
     <Modal
@@ -113,18 +132,62 @@ export default function CourtPanel() {
         </>
       )}
 
-      <div className="section-title">本旬朝议议题</div>
+      <div className="section-title">本回合朝议议题</div>
       <div className="card small" style={{ lineHeight: 1.8 }}>
         {topics.map((t, i) => <div key={i}>· {t}</div>)}
       </div>
+
+      <div className="section-title">正式朝议 · 提出一项议案</div>
+      <div className="form-note">
+        每回合最多提出一项。五名列席官员按能力画像形成赞成或反对立场；君主拥有额外裁决权，州牧、将军、军师在各自擅长议题上更有影响。
+        议案必须经投票通过才会生效；用兵、赋税和派系处置都有实际代价。
+      </div>
+      {pendingDebate ? (
+        <div className="card small" style={{ lineHeight: 1.8 }}>
+          <strong>本回合已有待议案</strong>
+          <div>议题：{pendingDebate.topic === 'military' ? '军务与战备' : pendingDebate.topic === 'taxation' ? '赋役与民生' : '派系与朝局'}</div>
+          <div>主张：{pendingDebate.resolution === 'mobilize' ? '积极用兵' : pendingDebate.resolution === 'consolidate' ? '整军休养' : pendingDebate.resolution === 'raise' ? '加征军需税' : pendingDebate.resolution === 'relieve' ? '蠲免赋役' : pendingDebate.resolution === 'balance' ? '协调各派' : '扶持主导派系'}</div>
+          <div className="muted">结束本回合后才会计票；本回合不能重复提出第二项。</div>
+        </div>
+      ) : (
+        <div className="sheet-grid">
+          <div className="card">
+            <strong>一、军务与战备</strong>
+            <div className="small muted" style={{ margin: '6px 0 10px', lineHeight: 1.7 }}>积极用兵提升士气与训练，但消耗军费和粮秣；整军休养能恢复补给、降低疲劳。</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button className="btn small primary" disabled={busy} onClick={() => void submitDebate('military', 'mobilize')}>积极用兵 · 银 12,000 / 粮 15,000</button>
+              <button className="btn small" disabled={busy} onClick={() => void submitDebate('military', 'consolidate')}>整军休养 · 银 4,000</button>
+            </div>
+          </div>
+          <div className="card">
+            <strong>二、赋役与民生</strong>
+            <div className="small muted" style={{ margin: '6px 0 10px', lineHeight: 1.7 }}>加征军需税可取得收入，但地方治安、民心及利益集团支持会下降；蠲免赋役则需要国库承担成本。</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button className="btn small primary" disabled={busy} onClick={() => void submitDebate('taxation', 'raise')}>加征军需税 · 最多三州</button>
+              <button className="btn small" disabled={busy} onClick={() => void submitDebate('taxation', 'relieve')}>蠲免赋役 · 银 15,000</button>
+            </div>
+          </div>
+          <div className="card">
+            <strong>三、派系与朝局</strong>
+            <div className="small muted" style={{ margin: '6px 0 10px', lineHeight: 1.7 }}>
+              协调各派会照顾最弱势的政治集团；扶持主导派系能在短期内增强核心盟友，但会扩大内部差距。
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button className="btn small primary" disabled={busy} onClick={() => void submitDebate('factions', 'balance')}>协调各派</button>
+              <button className="btn small" disabled={busy} onClick={() => void submitDebate('factions', 'patronize')}>扶持主导派系</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {debateNote && <div className="form-note">{debateNote}</div>}
       <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-        <button className="btn small primary" onClick={() => openOrders()}>召开廷议并下令</button>
+        <button className="btn small primary" onClick={() => openOrders()}>其他政务命令</button>
         <button className="btn small" onClick={() => setNav('events')}>查看近期朝局记录</button>
       </div>
 
       <div className="section-title">近期朝局与战事密报</div>
       {politicsEvents.length === 0 ? (
-        <div className="empty">暂无朝局记录。推进一旬后，政治动向、计谋与短缺会记录在此。</div>
+        <div className="empty">暂无朝局记录。推进一回合后，政治动向、计谋与短缺会记录在此。</div>
       ) : (
         <table className="table">
           <thead><tr><th>日期</th><th>类型</th><th>事项</th><th>摘要</th></tr></thead>

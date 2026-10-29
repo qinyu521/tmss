@@ -118,6 +118,12 @@ const orderSchema = z.discriminatedUnion('kind', [
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('appease_tribe'), tribeId: z.string().min(1), amount: z.number().finite() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('balance_princes'), amount: z.number().finite() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('negotiate_house'), houseId: z.string().min(1), amount: z.number().finite() }),
+  z.object({
+    orderId: z.string().min(1).max(80),
+    kind: z.literal('court_debate'),
+    topic: z.enum(['military', 'taxation', 'factions']),
+    resolution: z.enum(['mobilize', 'consolidate', 'raise', 'relieve', 'balance', 'patronize']),
+  }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('appoint'), personId: z.string().min(1), regionId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('rest_army'), armyId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('scout'), regionId: z.string().min(1) }),
@@ -543,7 +549,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     return { items: listChronicle(db, gameId, 200) };
   });
 
-  // 可选 LLM 史官：只读本旬条目的事实层与事件摘要，仅回写 literary/inference 表达层
+  // 可选 LLM 史官：只读本回合条目的事实层与事件摘要，仅回写 literary/inference 表达层
   app.post('/api/games/:id/chronicle/llm', async (req, reply) => {
     const gameId = String((req.params as any).id);
     if (!getGameState(db, gameId, seed.characters, seed)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
