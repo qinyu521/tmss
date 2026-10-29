@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveCommanderDefectionThreats } from './engine/turn.js';
+import { battleDefeatLoyaltyPenalty, resolveCommanderDefectionThreats } from './engine/turn.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1071,32 +1071,14 @@ describe('回合结算', () => {
       Math.max(0, loyaltyBefore - expectedNormalPenalty),
     );
 
-    // 将阈值临时压到 0，强制覆盖重伤亡分支；finally 确保不污染同文件其它测试。
-    const originalThreshold = BALANCE.militaryLoyalty.heavyCasualtyRate;
-    let heavyResult: ReturnType<typeof runTurn>;
-    try {
-      BALANCE.militaryLoyalty.heavyCasualtyRate = 0;
-      heavyResult = runTurn(clone(base), ctx);
-    } finally {
-      BALANCE.militaryLoyalty.heavyCasualtyRate = originalThreshold;
-    }
-    const heavyBattle = heavyResult!.report.events.find((event) =>
-      event.type === 'battle' &&
-      event.actorId === battleA!.actorId &&
-      event.targetId === battleA!.targetId &&
-      event.payload?.seed === battleA!.payload?.seed,
-    );
-    expect(heavyBattle).toBeTruthy();
-    expect((heavyBattle!.after as any).attackerWon).toBe((battleA!.after as any).attackerWon);
-    expect((heavyBattle!.after as any).totalLosses).toBe((battleA!.after as any).totalLosses);
-    const heavyPenaltyEvent = heavyResult!.report.events.find((event) =>
-      event.type === 'politics' &&
-      event.title.includes('战败失威') &&
-      event.actorId === defeatedCommanderId,
-    );
-    expect(heavyPenaltyEvent?.after?.penalty).toBe(
-      BALANCE.militaryLoyalty.battleLossPenalty + BALANCE.militaryLoyalty.heavyCasualtyPenalty,
-    );
+    // 明确覆盖普通阈值、精确边界与重伤亡区间，不修改全局平衡常量。
+    expect(battleDefeatLoyaltyPenalty(0)).toBe(BALANCE.militaryLoyalty.battleLossPenalty);
+    expect(battleDefeatLoyaltyPenalty(BALANCE.militaryLoyalty.heavyCasualtyRate - 0.000001))
+      .toBe(BALANCE.militaryLoyalty.battleLossPenalty);
+    expect(battleDefeatLoyaltyPenalty(BALANCE.militaryLoyalty.heavyCasualtyRate))
+      .toBe(BALANCE.militaryLoyalty.battleLossPenalty + BALANCE.militaryLoyalty.heavyCasualtyPenalty);
+    expect(battleDefeatLoyaltyPenalty(0.75))
+      .toBe(BALANCE.militaryLoyalty.battleLossPenalty + BALANCE.militaryLoyalty.heavyCasualtyPenalty);
   });
 
   it('匈奴部落忠诚过低时拒绝出兵', () => {
