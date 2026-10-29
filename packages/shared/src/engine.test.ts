@@ -46,7 +46,11 @@ describe('初始世界', () => {
       const state = newGame(key);
       const counts: Record<string, number> = {};
       for (const army of state.armies) {
-        for (const u of army.units) counts[u.unitId] = (counts[u.unitId] ?? 0) + u.count;
+        for (const u of army.units) {
+          counts[u.unitId] = (counts[u.unitId] ?? 0) + u.count;
+          expect(UNIT_PROFILES[u.unitId]).toBeTruthy();
+          expect(u.count).toBe(UNIT_PROFILES[u.unitId].initialFormationSize);
+        }
         expect(army.troops).toBe(army.levies + army.units.reduce((s, u) => s + u.count, 0));
       }
       for (const [unitId, count] of Object.entries(counts)) {
@@ -54,6 +58,24 @@ describe('初始世界', () => {
         expect(profile).toBeTruthy();
         expect(count).toBeLessThanOrEqual(profile.capPerFaction);
       }
+    }
+  });
+
+
+  it('精锐按成建制规模部署，但总兵力仍严格守恒', () => {
+    const expectedForce = { HUN: 400_000, YONG: 800_000, CHU: 300_000 };
+    const expectedElite = { HUN: 96_000, YONG: 97_000, CHU: 75_000 };
+    for (const key of ['HUN', 'YONG', 'CHU'] as const) {
+      const state = newGame(key);
+      const armies = state.armies.filter((a) => a.faction === key);
+      const total = armies.reduce((sum, army) => sum + army.troops, 0);
+      const elite = armies.reduce(
+        (sum, army) => sum + army.units.reduce((unitSum, unit) => unitSum + unit.count, 0),
+        0,
+      );
+      expect(total).toBe(expectedForce[key]);
+      expect(elite).toBe(expectedElite[key]);
+      expect(armies.every((army) => army.troops === army.levies + army.units.reduce((sum, unit) => sum + unit.count, 0))).toBe(true);
     }
   });
 
