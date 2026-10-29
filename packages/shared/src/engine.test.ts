@@ -722,7 +722,7 @@ describe('正式外交行动', () => {
 });
 
 describe('战略节点后勤补给', () => {
-  function logisticsScenario(supplyLevel: number) {
+  function logisticsScenario(supplyLevel: number, regionAdminFaction: 'HUN' | 'YONG' | 'CHU' = 'HUN') {
     const state = newGame('HUN', 'ruler', `node-logistics-${supplyLevel}`);
     for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
     const seedNode = ctx.seed.map_nodes.find((node) => /粮仓|驻军营地|集镇|补给/.test(node.node_type));
@@ -732,6 +732,7 @@ describe('战略节点后勤补给', () => {
     for (const region of Object.values(state.regions)) region.faction = 'HUN';
     for (const node of Object.values(state.mapNodes ?? {})) node.faction = 'HUN';
     const node = state.mapNodes![seedNode.node_id];
+    state.regions[regionId].faction = regionAdminFaction;
     node.supplyLevel = supplyLevel;
     const army = state.armies[0];
     state.armies = [{
@@ -767,22 +768,24 @@ describe('战略节点后勤补给', () => {
     const result = runTurn(state, ctx);
     const army = result.state.armies.find((item) => item.faction === 'HUN');
     const node = result.state.mapNodes![nodeId];
-    expect(army?.supply).toBe(55);
-    expect(node.supplyLevel).toBe(66);
+    expect(army?.supply).toBe(56);
+    // 行政归属一致的后方节点先恢复 2 点储备，再支出 4 点为驻军补给。
+    expect(node.supplyLevel).toBe(68);
     const event = result.report.events.find((item) =>
       item.type === 'resource' &&
       item.payload?.action === 'node_resupply' &&
       item.targetId === nodeId,
     );
     expect(event).toBeTruthy();
-    expect(event?.before?.nodeSupplyLevel).toBe(70);
-    expect(event?.after?.nodeSupplyLevel).toBe(66);
-    expect(event?.after?.logisticsBonus).toBe(7);
+    expect(event?.before?.nodeSupplyLevel).toBe(72);
+    expect(event?.after?.nodeSupplyLevel).toBe(68);
+    expect(event?.after?.logisticsBonus).toBe(8);
     expect(event?.visibleToPlayer).toBe(true);
   });
 
   it('节点库存耗尽时不再提供额外补给或生成后勤事件', () => {
-    const { state, nodeId } = logisticsScenario(0);
+    // 敌方行政州府内的孤立附属据点没有本土后勤线，库存归零后不会自动补充。
+    const { state, nodeId } = logisticsScenario(0, 'CHU');
     const result = runTurn(state, ctx);
     const army = result.state.armies.find((item) => item.faction === 'HUN');
     expect(army?.supply).toBe(48);
