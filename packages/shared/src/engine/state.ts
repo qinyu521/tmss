@@ -17,7 +17,7 @@ import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
 import { buildContext, buildInitialArmies, buildInitialMapNodes, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -253,7 +253,7 @@ export function createGame(
     characters: Object.fromEntries(
       seed.characters.map((c) => [
         c.person_id,
-        { personId: c.person_id, alive: true, ageBand: c.age_band },
+        { personId: c.person_id, alive: true, ageBand: c.age_band, goal: 'idle', goalSinceTurn: date.turn },
       ]),
     ),
     statistics: { battles: 0, casualties: 0, turnsPlayed: 0, occupiedRegions: 0 },
@@ -333,10 +333,20 @@ function migrateV3toV4(state: GameState, _roster?: CharacterSeed[], mapSeed?: Se
   }
 }
 
+/** v4 → v5：为旧存档人物补齐目标状态；不触发行动，也不更改既有世界数值。 */
+function migrateV4toV5(state: GameState): void {
+  if (!state.characters) state.characters = {};
+  for (const runtime of Object.values(state.characters)) {
+    runtime.goal ??= 'idle';
+    runtime.goalSinceTurn ??= state.date?.turn ?? 1;
+  }
+}
+
 const MIGRATIONS: Migration[] = [
   { from: 1, to: 2, apply: migrateV1toV2 },
   { from: 2, to: 3, apply: migrateV2toV3 },
   { from: 3, to: 4, apply: migrateV3toV4 },
+  { from: 4, to: 5, apply: migrateV4toV5 },
 ];
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
