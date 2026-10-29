@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { FactionKey, PlayerView } from '@tianming/shared';
-import { FACTION_VISUALS } from '@tianming/shared';
+import { FACTION_VISUALS, isRouteWaypointId, ROUTE_WAYPOINT_PREFIX } from '@tianming/shared';
 import type { MapData, MapEdge, MapNode, TerritorySeed } from '../api/client';
 import art from '../../../../data/derived/map_art.json';
 
@@ -938,6 +938,27 @@ export class MapScene {
     attr.needsUpdate = true;
   }
 
+  /** Resolve a region or a deterministic road midpoint into a world-space map point. */
+  private routePointForNodeId(nodeId: string, territories: Map<string, TerritorySeed>): THREE.Vector3 | null {
+    const territory = territories.get(nodeId);
+    if (territory) {
+      const coord = this.displayCoord(territory.region, territory.map_x, territory.map_y);
+      const world = mapToWorld(coord.x, coord.y);
+      return new THREE.Vector3(world.x, this.heightAt(world.x, world.z) + 8, world.z);
+    }
+    if (!isRouteWaypointId(nodeId) || !this.map) return null;
+    const edgeId = nodeId.slice(ROUTE_WAYPOINT_PREFIX.length);
+    const edge = this.map.edges.find((item) => item.edge_id === edgeId);
+    if (!edge) return null;
+    const from = this.map.territories.find((item) => item.region === edge.from_region);
+    const to = this.map.territories.find((item) => item.region === edge.to_region);
+    if (!from || !to) return null;
+    const fromCoord = this.displayCoord(from.region, from.map_x, from.map_y);
+    const toCoord = this.displayCoord(to.region, to.map_x, to.map_y);
+    const world = mapToWorld((fromCoord.x + toCoord.x) / 2, (fromCoord.y + toCoord.y) / 2);
+    return new THREE.Vector3(world.x, this.heightAt(world.x, world.z) + 8, world.z);
+  }
+
   private rebuildArmies(): void {
     // 保留旧位置，视图刷新后让军队标记平滑移动到新位置，而不是瞬间跳点。
     const previousPositions = new Map(this.armyMarkers.map((marker) => [marker.armyId, marker.group.position.clone()]));
@@ -1005,16 +1026,13 @@ export class MapScene {
         group.add(icon);
       }
 
-      const position = new THREE.Vector3(w.x, this.heightAt(w.x, w.z) + 4, w.z);
+      const currentPositionNodeId = army.positionNodeId ?? army.nodeId;
+      const position = this.routePointForNodeId(currentPositionNodeId, territories)
+        ?? new THREE.Vector3(w.x, this.heightAt(w.x, w.z) + 4, w.z);
       let routeLine: THREE.Line | null = null;
       if (army.own && army.path.length > 0) {
-        const routePoints = [army.nodeId, ...army.path]
-          .map((id) => {
-            const t = territories.get(id);
-            if (!t) return null;
-            const p = mapToWorld(this.displayCoord(t.region, t.map_x, t.map_y).x, this.displayCoord(t.region, t.map_x, t.map_y).y);
-            return new THREE.Vector3(p.x, this.heightAt(p.x, p.z) + 8, p.z);
-          })
+        const routePoints = [currentPositionNodeId, ...army.path]
+          .map((id) => this.routePointForNodeId(id, territories))
           .filter((p): p is THREE.Vector3 => Boolean(p));
         if (routePoints.length > 1) {
           const routeGeo = new THREE.BufferGeometry().setFromPoints(routePoints);
