@@ -163,6 +163,7 @@ describe('初始世界', () => {
 
   it('旧存档迁移会幂等补齐 72 节点，且不覆盖已发生的节点易手', () => {
     const oldState = JSON.parse(JSON.stringify(newGame('HUN'))) as GameState;
+    oldState.schemaVersion = 3;
     delete oldState.mapNodes;
     for (const army of oldState.armies) {
       delete army.mapNodeId;
