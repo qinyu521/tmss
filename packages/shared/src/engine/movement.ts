@@ -123,13 +123,14 @@ export function findPath(
 ): PathResult {
   if (from === to) return { ok: false, path: [], edgeIds: [], costs: [], routeTypes: [], totalDays: 0, error: '部队已在该州府。' };
   if (!state.regions[from] || !state.regions[to]) {
-    return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '州府不存在。' };
+    return { ok: false, path: [], edgeIds: [], costs: [], routeTypes: [], totalDays: 0, error: '州府不存在。' };
   }
   if (!canTraverse(state, ctx, faction, to)) {
     const target = state.regions[to];
     return {
       ok: false,
       path: [],
+      edgeIds: [],
       costs: [],
       routeTypes: [],
       totalDays: 0,

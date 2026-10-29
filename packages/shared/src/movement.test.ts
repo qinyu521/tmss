@@ -8,7 +8,9 @@ import {
   createGame,
   dayCostsFor,
   estimatePathDays,
+  expandLongRouteSegments,
   findPath,
+  routeWaypointId,
   routeCapacityMultiplier,
   type MapEdgeSeed,
   type SeedRoster,
@@ -102,6 +104,17 @@ describe('行军路线与道路通行能力', () => {
     expect(large.path).toEqual(['HUN-REG02', 'HUN-REG05']);
     expect(large.costs).toEqual([2, 2]);
     expect(large.totalDays).toBe(4); // Dijkstra 成本用于选路；实际天数由 estimatePathDays 换算。
+  });
+
+  it('长路段会拆出唯一中途节点，短路段保持单段', () => {
+    const expanded = expandLongRouteSegments({
+      path: ['HUN-REG02', 'HUN-REG05'],
+      edgeIds: ['LONG-ROAD-01', 'SHORT-ROAD-02'],
+    }, [11, 7]);
+    expect(expanded.path).toEqual([routeWaypointId('LONG-ROAD-01'), 'HUN-REG02', 'HUN-REG05']);
+    expect(expanded.dayCosts).toEqual([6, 5, 7]);
+    expect(expanded.dayCosts.reduce((sum, days) => sum + days, 0)).toBe(18);
+    expect(expanded.path.some((nodeId) => nodeId === routeWaypointId('SHORT-ROAD-02'))).toBe(false);
   });
 
   it('道路成本换算为实际行军日，标准军团会自然跨旬', () => {

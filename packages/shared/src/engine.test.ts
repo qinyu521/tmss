@@ -24,6 +24,7 @@ import {
   migrateState,
   resolveBattle,
   runTurn,
+  routeWaypointId,
   validateOrder,
   type GameEvent,
   type GameState,
@@ -2082,5 +2083,49 @@ describe('存档快照', () => {
 describe('平衡常量', () => {
   it('一回合固定为 7 天', () => {
     expect(BALANCE.turnDays).toBe(7);
+  });
+});
+
+
+describe('长路段中途节点', () => {
+  it('军团先到达道路中途节点，再于下一旬抵达州府，行政归属不提前变化', () => {
+    const state = newGame('HUN', 'ruler', 'waypoint-midroute');
+    const army = state.armies.find((item) => item.armyId === 'HUN-ARMY-02')!;
+    const origin = army.nodeId;
+    const destination = Object.values(state.regions).find(
+      (region) => region.faction === 'HUN' && region.regionId !== origin,
+    )!.regionId;
+    const waypoint = routeWaypointId('TEST-LONG-ROAD');
+
+    army.path = [waypoint, destination];
+    army.hopCosts = [6, 5];
+    army.targetRegionId = destination;
+    army.stance = 'march';
+    army.status = 'marching';
+    army.marchDaysTotal = 11;
+    army.marchDaysLeft = 11;
+    army.currentHopDaysTotal = 6;
+    army.positionNodeId = origin;
+
+    const firstTurn = runTurn(state, ctx);
+    const halfway = firstTurn.state.armies.find((item) => item.armyId === army.armyId)!;
+    expect(halfway.nodeId).toBe(origin);
+    expect(halfway.positionNodeId).toBe(waypoint);
+    expect(halfway.path).toEqual([destination]);
+    expect(halfway.hopCosts).toEqual([4]);
+    expect(halfway.currentHopDaysTotal).toBe(5);
+    expect(halfway.marchDaysLeft).toBe(4);
+    const view = buildPlayerView(firstTurn.state, ctx);
+    const armyView = view.armies.find((item) => item.armyId === army.armyId)!;
+    expect(armyView.positionNodeId).toBe(waypoint);
+    expect(armyView.nodeId).toBe(origin);
+    expect(armyView.progress).toBeCloseTo(0.2);
+
+    const secondTurn = runTurn(firstTurn.state, ctx);
+    const arrived = secondTurn.state.armies.find((item) => item.armyId === army.armyId)!;
+    expect(arrived.nodeId).toBe(destination);
+    expect(arrived.positionNodeId).toBe(destination);
+    expect(arrived.path).toEqual([]);
+    expect(arrived.status).toBe('idle');
   });
 });
