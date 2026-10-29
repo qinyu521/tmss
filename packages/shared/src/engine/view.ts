@@ -137,6 +137,8 @@ export interface DiplomacyView {
   value: number;
   state: 'war' | 'tense' | 'neutral' | 'friendly';
   label: string;
+  allianceActive: boolean;
+  allianceEndTurn?: number;
 }
 
 export interface PlayerView {
@@ -323,6 +325,12 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
       const a = FACTION_KEYS[i];
       const b = FACTION_KEYS[j];
       const value = state.diplomacy[pairKey(a, b)] ?? 0;
+      const treaty = (state.treaties ?? []).find((item) =>
+        item.kind === 'alliance' &&
+        item.status === 'active' &&
+        state.date.turn <= item.endTurn &&
+        ((item.a === a && item.b === b) || (item.a === b && item.b === a)),
+      );
       diplomacy.push({
         key: pairKey(a, b),
         a,
@@ -330,6 +338,8 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
         value,
         state: value <= -25 ? 'war' : value < 0 ? 'tense' : value < 25 ? 'neutral' : 'friendly',
         label: value <= -25 ? '交战' : value < 0 ? '戒备' : value < 25 ? '中立' : '友好',
+        allianceActive: Boolean(treaty),
+        allianceEndTurn: treaty?.endTurn,
       });
     }
   }
