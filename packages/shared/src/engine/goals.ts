@@ -168,10 +168,12 @@ export function refreshCharacterGoals(state: GameState, ctx: DerivedContext, eve
     }
 
     runtime.goal = nextGoal;
-    runtime.goalTargetId = nextTarget;
-    runtime.goalReason = draft?.reason;
+    if (nextTarget) runtime.goalTargetId = nextTarget;
+    else delete runtime.goalTargetId;
+    if (draft) runtime.goalReason = draft.reason;
+    else delete runtime.goalReason;
     runtime.goalSinceTurn = state.date.turn;
-    runtime.goalLastActionTurn = undefined;
+    delete runtime.goalLastActionTurn;
 
     // 只记录活跃目标之间的变化，首次初始化与回到 idle 不制造叙事噪音。
     if (state.date.turn > 1 && oldGoal !== 'idle' && nextGoal !== 'idle' && draft) {
@@ -262,7 +264,7 @@ export function advanceCharacterGoals(state: GameState, ctx: DerivedContext, eve
 
     if (goal === 'demand_patronage' && runtime.goalTargetId && person.faction_key === 'HUN') {
       const tribe = state.special.HUN.tribes?.find((item) => item.tribeId === runtime.goalTargetId);
-      if (!tribe || tribe.loyalty >= 48) continue;
+      if (!tribe || tribe.loyalty >= 48 || tribe.lastGiftTurn >= turn) continue;
       const before = { loyalty: Math.round(tribe.loyalty), stance: tribe.stance };
       tribe.loyalty = clamp(tribe.loyalty - 2);
       tribe.stance = tribe.loyalty >= 65 ? 'eager' : tribe.loyalty >= 50 ? 'watchful' : tribe.loyalty >= 38 ? 'reluctant' : 'refusing';
