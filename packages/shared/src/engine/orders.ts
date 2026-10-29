@@ -21,7 +21,7 @@ import { BALANCE } from '../balance.js';
 import { FACTION_SHORT, ROLE_ALLOWED_ORDERS, ROLE_LABEL, SCHEME_LABELS } from '../constants.js';
 import { emitEvent } from './events.js';
 import { clamp, isCharacterAlive } from './state.js';
-import { assignMarch, dayCostsFor, findPath, regionNameById } from './movement.js';
+import { assignMarch, dayCostsFor, estimatePathDays, findPath, regionNameById } from './movement.js';
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';

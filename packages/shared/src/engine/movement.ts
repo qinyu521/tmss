@@ -83,7 +83,7 @@ export interface PathResult {
   error?: string;
 }
 
-export function armyMobility(army: Army): number {
+export function armyMobility(army: Pick<Army, 'troops' | 'levies' | 'units'>): number {
   const total = army.troops || 1;
   const elite = army.units.reduce((s, u) => s + u.count, 0);
   const eliteMobility = army.units.reduce(
@@ -95,7 +95,7 @@ export function armyMobility(army: Army): number {
 }
 
 /** 重甲与疲劳会拖慢行军；骑兵与轻装则更快。 */
-export function marchSpeedMultiplier(army: Army): number {
+export function marchSpeedMultiplier(army: Pick<Army, 'troops' | 'levies' | 'units' | 'fatigue'>): number {
   const mobility = armyMobility(army);
   const fatigue = 1 + army.fatigue / 220;
   return Math.max(0.55, Math.min(1.45, (0.72 + mobility / 130) / fatigue));
@@ -164,7 +164,7 @@ export function findPath(
 }
 
 /** 骑兵是否占全军半数以上（冬季涉渡封冻河面的前提） */
-export function cavalryDominant(army: Army): boolean {
+export function cavalryDominant(army: Pick<Army, 'faction' | 'troops' | 'levies' | 'units'>): boolean {
   const total = Math.max(1, army.troops);
   let mounted = army.levies * (BALANCE.economy.horsesPerCavalryRatio[army.faction] ?? 0.1);
   for (const u of army.units) {
@@ -178,8 +178,10 @@ export function cavalryDominant(army: Army): boolean {
  * 季节修正（可选，保持纯函数与确定性）：冬季匈奴骑兵为主的部队
  * 行经河网/水路边的成本 ×0.8（河流封冻可涉渡，南下窗口），系数在 balance.seasons。
  */
+export type MarchProfile = Pick<Army, 'faction' | 'troops' | 'levies' | 'units' | 'fatigue'>;
+
 export function dayCostsFor(
-  army: Army,
+  army: MarchProfile,
   costs: number[],
   opts?: { routeTypes?: string[]; season?: Season },
 ): number[] {
@@ -193,6 +195,16 @@ export function dayCostsFor(
     const seasonal = frozenFord !== 1 && isRiverRoute(routeType) ? frozenFord : 1;
     return Math.max(1, Math.round((c * seasonal) / speed));
   });
+}
+
+/** 将容量修正后的路线成本换算为包含机动性与季节影响的实际行军日。 */
+export function estimatePathDays(
+  army: MarchProfile,
+  path: Pick<PathResult, 'costs' | 'routeTypes'>,
+  season: Season,
+): number {
+  return dayCostsFor(army, path.costs, { routeTypes: path.routeTypes, season })
+    .reduce((sum, days) => sum + days, 0);
 }
 
 export function assignMarch(army: Army, path: string[], dayCosts: number[], targetRegionId: string): void {
