@@ -629,6 +629,12 @@ function handleBattle(
     garrison: region.garrison,
   };
   const outcome = resolveBattle(state, ctx, attacker, defender ?? null, region, seed);
+  if (capitalNode?.nodeType === '州府/主城') {
+    // 州府主城的节点守军与行政区域共享账本，战斗后立即同步，避免地图显示旧驻军。
+    capitalNode.garrison = region.garrison;
+    capitalNode.fortification = region.fortification;
+    capitalNode.supplyLevel = region.supplyLevel;
+  }
   // 记录本回合参战主将，生命周期据此追加战死概率
   attacker.lastBattleTurn = state.date.turn;
   if (defender) defender.lastBattleTurn = state.date.turn;
