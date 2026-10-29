@@ -17,7 +17,7 @@ import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
 import { buildContext, buildInitialArmies, buildInitialMapNodes, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -369,6 +369,15 @@ function migrateV6toV7(state: GameState, roster?: CharacterSeed[]): void {
   }
 }
 
+/** v7 → v8：补齐节点围城账本；旧档默认没有进行中的围城，不改写已发生的节点控制。 */
+function migrateV7toV8(state: GameState, _roster?: CharacterSeed[], mapSeed?: SeedRoster): void {
+  if (mapSeed) {
+    const ctx = buildContext(mapSeed);
+    state.mapNodes ??= buildInitialMapNodes(ctx, state.regions);
+  }
+  for (const node of Object.values(state.mapNodes ?? {})) node.siege ??= null;
+}
+
 const MIGRATIONS: Migration[] = [
   { from: 1, to: 2, apply: migrateV1toV2 },
   { from: 2, to: 3, apply: migrateV2toV3 },
@@ -376,6 +385,7 @@ const MIGRATIONS: Migration[] = [
   { from: 4, to: 5, apply: migrateV4toV5 },
   { from: 5, to: 6, apply: migrateV5toV6 },
   { from: 6, to: 7, apply: migrateV6toV7 },
+  { from: 7, to: 8, apply: migrateV7toV8 },
 ];
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
@@ -393,6 +403,7 @@ export function migrateState(state: GameState, roster?: CharacterSeed[], mapSeed
   if (mapSeed) {
     const ctx = buildContext(mapSeed);
     state.mapNodes ??= buildInitialMapNodes(ctx, state.regions);
+    for (const node of Object.values(state.mapNodes)) node.siege ??= null;
     for (const army of state.armies ?? []) {
       if (!army.mapNodeId) {
         const regionName = state.regions[army.nodeId]?.name;
