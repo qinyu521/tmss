@@ -21,6 +21,7 @@ import {
   validateOrder,
   generateNpcOrders,
   type GameState,
+  type Order,
   type SeedRoster,
 } from './index.js';
 
