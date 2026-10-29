@@ -76,19 +76,19 @@ describe('生命周期', () => {
     expect(isCharacterAlive(state, state.playerPersonId)).toBe(true);
   });
 
-  it('迁移框架：v1 存档补 characters（全在世）且 schemaVersion 升为 2，且迁移幂等', () => {
+  it('迁移框架：v1 存档补 characters（全在世）且 schemaVersion 升为 3，且迁移幂等', () => {
     const state = newGame('HUN');
     const legacy = JSON.parse(JSON.stringify(state)) as GameState;
     delete (legacy as Partial<GameState>).characters;
     legacy.schemaVersion = 1;
     const migrated = migrateState(legacy, seed.characters);
-    expect(migrated.schemaVersion).toBe(2);
+    expect(migrated.schemaVersion).toBe(3);
     expect(Object.keys(migrated.characters)).toHaveLength(seed.characters.length);
     expect(Object.values(migrated.characters).every((c) => c.alive)).toBe(true);
     expect(migrated.characters[seed.characters[0].person_id].ageBand).toBe(seed.characters[0].age_band);
     // 幂等：再次迁移不产生变化
     const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters);
-    expect(again.schemaVersion).toBe(2);
+    expect(again.schemaVersion).toBe(3);
     expect(again.characters).toEqual(migrated.characters);
   });
 

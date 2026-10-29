@@ -459,7 +459,7 @@ describe('存档快照', () => {
     expect(restored.date.label).toBe(result.state.date.label);
     expect(restored.armies.length).toBe(result.state.armies.length);
     expect(restored.factions.YONG.resources).toEqual(result.state.factions.YONG.resources);
-    expect(restored.schemaVersion).toBe(2);
+    expect(restored.schemaVersion).toBe(3);
   });
 });
 
