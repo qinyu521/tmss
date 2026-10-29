@@ -41,6 +41,14 @@ interface ArmyMarker {
   position: THREE.Vector3;
   route: THREE.Line | null;
   isOwn: boolean;
+  marching: boolean;
+}
+
+interface MarchAnimation {
+  marker: ArmyMarker;
+  points: THREE.Vector3[];
+  elapsed: number;
+  duration: number;
 }
 
 const SCALE = 125;
@@ -103,7 +111,10 @@ function segmentDistance(px: number, py: number, ax: number, ay: number, bx: num
 
 function layerColor(view: PlayerView | null, region: PlayerView['regions'][number], layer: LayerKey): { color: string; alpha: number } {
   const faction = FACTION_VISUALS[region.faction];
-  if (layer === 'political') return { color: faction.mapFill, alpha: region.owned ? 0.62 : 0.52 };
+  if (layer === 'political') {
+    const fill = new THREE.Color(faction.mapFill).lerp(new THREE.Color('#efe6d2'), 0.3);
+    return { color: `#${fill.getHexString()}`, alpha: region.owned ? 0.66 : 0.54 };
+  }
   if (!region.owned) {
     if (layer === 'threat') return { color: threatColor(region.threat), alpha: 0.34 };
     if (layer === 'intel') {
@@ -169,6 +180,7 @@ export class MapScene {
   private cells: { regionId: string; name: string; faction: FactionKey; center: THREE.Vector3 }[] = [];
   private nodeGroups: { group: THREE.Group; node: MapNode }[] = [];
   private armyMarkers: ArmyMarker[] = [];
+  private marchAnimations: MarchAnimation[] = [];
   private labelLayer: HTMLDivElement;
   private regionLabels: { el: HTMLButtonElement; position: THREE.Vector3; regionId: string; priority: boolean }[] = [];
   private nodeLabels: { el: HTMLDivElement; position: THREE.Vector3; nodeId: string }[] = [];
@@ -201,10 +213,10 @@ export class MapScene {
   private downPointer = { x: 0, y: 0 };
   private target = new THREE.Vector3(55, 0, 20);
   private desiredTarget = new THREE.Vector3(55, 0, 20);
-  private yaw = 0.55;
-  private pitch = 0.94;
-  private distance = 960;
-  private desiredDistance = 960;
+  private yaw = 0.48;
+  private pitch = 1.02;
+  private distance = 900;
+  private desiredDistance = 900;
   private resizeObserver: ResizeObserver;
   private pointerHandlers: Array<[string, EventListener]> = [];
 
@@ -214,19 +226,23 @@ export class MapScene {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
-    this.renderer.setClearColor('#0d1418');
+    this.renderer.setClearColor('#d8cfba');
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.cursor = 'grab';
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2('#0d1418', 0.00062);
-    this.camera = new THREE.PerspectiveCamera(44, container.clientWidth / Math.max(1, container.clientHeight), 4, 4000);
-    this.scene.add(new THREE.HemisphereLight('#e4e9e2', '#4a3b28', 1.65));
-    const sun = new THREE.DirectionalLight('#ffe6b8', 0.55);
+    // 纸色远景仅用于边界收束，不遮住主地图
+    this.scene.fog = new THREE.Fog('#d8cfba', 1650, 3800);
+    this.camera = new THREE.PerspectiveCamera(42, container.clientWidth / Math.max(1, container.clientHeight), 4, 4000);
+    this.scene.add(new THREE.HemisphereLight('#fff7e4', '#8a795f', 2.35));
+    this.scene.add(new THREE.AmbientLight('#fff5df', 0.45));
+    const sun = new THREE.DirectionalLight('#fff0cd', 1.05);
     sun.position.set(-420, 620, -260);
     this.scene.add(sun);
-    const rim = new THREE.DirectionalLight('#4a7a86', 0.3);
+    const rim = new THREE.DirectionalLight('#cfe0dc', 0.35);
     rim.position.set(500, 220, 420);
     this.scene.add(rim);
 
@@ -263,9 +279,10 @@ export class MapScene {
   }
 
   setView(view: PlayerView | null): void {
+    const previous = this.view;
     this.view = view;
     this.refreshOwnership();
-    this.rebuildArmies();
+    this.rebuildArmies(previous);
   }
 
   setLayer(layer: LayerKey): void {
@@ -293,11 +310,19 @@ export class MapScene {
     this.selectionRing.visible = true;
   }
 
+  /** 把镜头移到格子中心，用于行军演出时跟到目的地。 */
+  focusTile(x: number, y: number): void {
+    const center = tileCenter(x, y);
+    const world = mapToWorld(center.x, center.y);
+    this.desiredTarget.set(world.x, this.heightAt(world.x, world.z), world.z);
+    this.desiredDistance = Math.min(this.desiredDistance, 560);
+  }
+
   resetCamera(): void {
     this.desiredTarget.set(55, 0, 20);
-    this.yaw = 0.55;
-    this.pitch = 0.94;
-    this.desiredDistance = 960;
+    this.yaw = 0.48;
+    this.pitch = 1.02;
+    this.desiredDistance = 900;
   }
 
   zoomBy(factor: number): void {
@@ -369,6 +394,7 @@ export class MapScene {
     this.cells = [];
     this.nodeGroups = [];
     this.armyMarkers = [];
+    this.marchAnimations = [];
     this.regionLabels = [];
     this.nodeLabels = [];
     this.labelLayer.innerHTML = '';
@@ -446,24 +472,24 @@ export class MapScene {
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const colors: number[] = [];
-    const grass = new THREE.Color('#4c4c35');
-    const dry = new THREE.Color('#6b5f43');
-    const rock = new THREE.Color('#4f4b41');
-    const snow = new THREE.Color('#989485');
-    const sand = new THREE.Color('#8f7d5c');
-    const under = new THREE.Color('#13282f');
+    const grass = new THREE.Color('#aba77e');
+    const dry = new THREE.Color('#c8b183');
+    const rock = new THREE.Color('#a99c83');
+    const snow = new THREE.Color('#e8e1cf');
+    const sand = new THREE.Color('#d9c7a2');
+    const under = new THREE.Color('#809da0');
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i);
       const z = pos.getZ(i);
       const h = heightAt(x, z);
       pos.setY(i, h);
       const c = new THREE.Color();
-      if (h < -2) c.copy(under).lerp(new THREE.Color('#1c4148'), Math.min(1, -h / 30));
+      if (h < -2) c.copy(under).lerp(new THREE.Color('#6e8e93'), Math.min(1, -h / 30));
       else if (h < 4) c.copy(sand);
       else if (h < 26) c.copy(grass).lerp(dry, Math.min(1, (h - 4) / 24));
-      else if (h < 62) c.copy(rock).lerp(new THREE.Color('#847d6b'), Math.min(1, (h - 26) / 40));
+      else if (h < 62) c.copy(rock).lerp(new THREE.Color('#c9bda5'), Math.min(1, (h - 26) / 40));
       else c.copy(rock).lerp(snow, Math.min(1, (h - 62) / 45));
-      const jitter = (noiseB(x * 0.03, z * 0.03) - 0.5) * 0.09;
+      const jitter = (noiseB(x * 0.03, z * 0.03) - 0.5) * 0.045;
       c.offsetHSL(0, 0, jitter);
       colors.push(c.r, c.g, c.b);
     }
@@ -485,23 +511,49 @@ export class MapScene {
       }
       this.terrainRegionIds.push(nearest);
     }
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.98, metalness: 0, flatShading: true });
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, flatShading: false });
     this.terrain = new THREE.Mesh(geo, mat);
     this.scene.add(this.terrain);
 
     const water = new THREE.Mesh(
       new THREE.PlaneGeometry(4000, 4000),
-      new THREE.MeshStandardMaterial({ color: '#153742', roughness: 0.55, metalness: 0.12, transparent: true, opacity: 0.94 }),
+      new THREE.MeshStandardMaterial({ color: '#8fadb1', roughness: 0.82, metalness: 0.04, transparent: true, opacity: 0.9 }),
     );
     water.rotation.x = -Math.PI / 2;
     water.position.y = -3.7;
     this.scene.add(water);
 
-    const foamMat = new THREE.LineBasicMaterial({ color: '#9fc8cc', transparent: true, opacity: 0.4 });
+    const foamMat = new THREE.LineBasicMaterial({ color: '#4d5b58', transparent: true, opacity: 0.5 });
     const coastGeo = new THREE.BufferGeometry().setFromPoints(
       coast.map((p) => new THREE.Vector3(p.x, 1.2, p.z)),
     );
     this.scene.add(new THREE.Line(coastGeo, foamMat));
+    this.buildMountainInk(ridges);
+  }
+
+  /** 山脉皴线：用几条淡墨脊线替代厚重雾气，让山势更接近水墨制图。 */
+  private buildMountainInk(ridges: { a: number[]; b: number[]; h: number }[]): void {
+    const material = new THREE.LineBasicMaterial({ color: '#5f5545', transparent: true, opacity: 0.2 });
+    const materialSoft = new THREE.LineBasicMaterial({ color: '#5f5545', transparent: true, opacity: 0.1 });
+    for (const seg of ridges) {
+      const wa = mapToWorld(seg.a[0], seg.a[1]);
+      const wb = mapToWorld(seg.b[0], seg.b[1]);
+      for (const [offset, mat] of [[0, material], [-18, materialSoft], [18, materialSoft]] as const) {
+        const dx = wb.x - wa.x;
+        const dz = wb.z - wa.z;
+        const len = Math.hypot(dx, dz) || 1;
+        const nx = (-dz / len) * offset;
+        const nz = (dx / len) * offset;
+        const points: THREE.Vector3[] = [];
+        for (let i = 0; i <= 12; i++) {
+          const t = i / 12;
+          const x = THREE.MathUtils.lerp(wa.x, wb.x, t) + nx;
+          const z = THREE.MathUtils.lerp(wa.z, wb.z, t) + nz;
+          points.push(new THREE.Vector3(x, this.heightAt(x, z) + 3.5, z));
+        }
+        this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), mat));
+      }
+    }
   }
 
   private displayCoord(regionName: string, x: number, y: number): { x: number; y: number } {
@@ -556,7 +608,7 @@ export class MapScene {
     borderGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     const borders = new THREE.LineSegments(
       borderGeo,
-      new THREE.LineBasicMaterial({ color: '#a99463', transparent: true, opacity: 0.32 }),
+      new THREE.LineBasicMaterial({ color: '#67583f', transparent: true, opacity: 0.46 }),
     );
     this.scene.add(borders);
     this.inspectGeometry();
@@ -598,11 +650,11 @@ export class MapScene {
       const geo = new THREE.BufferGeometry().setFromPoints(points);
       const isRiver = /航道|水路|漕运|运河|江路|峡江|沿海/.test(edge.route_type);
       const material = new THREE.LineDashedMaterial({
-        color: isRiver ? '#6fa3a8' : '#c0a062',
+        color: isRiver ? '#5c8288' : '#8b6c40',
         dashSize: 6,
         gapSize: 10,
         transparent: true,
-        opacity: isRiver ? 0.32 : 0.22,
+        opacity: isRiver ? 0.38 : 0.34,
       });
       const line = new THREE.Line(geo, material);
       line.computeLineDistances();
@@ -613,7 +665,7 @@ export class MapScene {
   }
 
   private buildRivers(): void {
-    const material = new THREE.MeshBasicMaterial({ color: '#2f7f8c', transparent: true, opacity: 0.78 });
+    const material = new THREE.MeshBasicMaterial({ color: '#5b8288', transparent: true, opacity: 0.74 });
     for (const river of art.rivers) {
       const curve = new THREE.CatmullRomCurve3(
         river.points.map(([x, y]) => {
@@ -645,7 +697,7 @@ export class MapScene {
     for (const lake of art.lakes) {
       const w = mapToWorld(lake.x, lake.y);
       const geo = new THREE.CircleGeometry(1, 40);
-      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: '#2f7f8c', transparent: true, opacity: 0.8 }));
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: '#5b8288', transparent: true, opacity: 0.76 }));
       mesh.rotation.x = -Math.PI / 2;
       mesh.scale.set(lake.rx * SCALE, lake.ry * SCALE, 1);
       mesh.position.set(w.x, this.heightAt(w.x, w.z) + 2.2, w.z);
@@ -657,8 +709,8 @@ export class MapScene {
     const rand = mulberry(9081);
     const treeGeo = new THREE.ConeGeometry(2.4, 9, 5);
     const trunkGeo = new THREE.CylinderGeometry(0.5, 0.7, 3, 4);
-    const treeMat = new THREE.MeshStandardMaterial({ color: '#465238', roughness: 1, flatShading: true });
-    const trunkMat = new THREE.MeshStandardMaterial({ color: '#42352a', roughness: 1 });
+    const treeMat = new THREE.MeshStandardMaterial({ color: '#5d6b4b', roughness: 1, flatShading: true });
+    const trunkMat = new THREE.MeshStandardMaterial({ color: '#5a4938', roughness: 1 });
     const treeCount = this.quality === 'low' ? 60 : 150;
     const treeMeshes = new THREE.InstancedMesh(treeGeo, treeMat, treeCount);
     const trunkMeshes = new THREE.InstancedMesh(trunkGeo, trunkMat, treeCount);
@@ -692,7 +744,7 @@ export class MapScene {
     decor.add(treeMeshes, trunkMeshes);
 
     const rockGeo = new THREE.DodecahedronGeometry(4, 0);
-    const rockMat = new THREE.MeshStandardMaterial({ color: '#6c665a', roughness: 1, flatShading: true });
+    const rockMat = new THREE.MeshStandardMaterial({ color: '#9a8f7b', roughness: 1, flatShading: true });
     const rockCount = this.quality === 'low' ? 40 : 140;
     const rocks = new THREE.InstancedMesh(rockGeo, rockMat, rockCount);
     for (let i = 0; i < rockCount; i++) {
@@ -745,7 +797,7 @@ export class MapScene {
         new THREE.MeshBasicMaterial({
           vertexColors: true,
           transparent: true,
-          opacity: 0.42,
+          opacity: 0.28,
           depthWrite: false,
           side: THREE.DoubleSide,
         }),
@@ -781,9 +833,9 @@ export class MapScene {
     this.tileGrid = new THREE.LineSegments(
       gridGeometry,
       new THREE.LineBasicMaterial({
-        color: '#d8c08a',
+        color: '#5d5546',
         transparent: true,
-        opacity: this.quality === 'low' ? 0.06 : 0.11,
+        opacity: this.quality === 'low' ? 0.09 : 0.16,
         depthWrite: false,
       }),
     );
@@ -1046,7 +1098,7 @@ export class MapScene {
       const region = ownerByRegion.get(label.regionId);
       if (owner && region) {
         owner.textContent = FACTION_VISUALS[region.faction].shortName;
-        owner.style.color = FACTION_VISUALS[region.faction].mapBorder;
+        owner.style.color = FACTION_VISUALS[region.faction].primary;
       }
       if (garrison) {
         if (region?.owned) {
@@ -1081,7 +1133,7 @@ export class MapScene {
       const region = regionById.get(this.terrainRegionIds[i]);
       if (region) {
         const tint = layerColor(this.view, region, this.layer);
-        base.lerp(new THREE.Color(tint.color), 0.86);
+        base.lerp(new THREE.Color(tint.color), Math.min(0.84, tint.alpha * 1.25));
       }
       colors[baseIndex] = base.r;
       colors[baseIndex + 1] = base.g;
@@ -1090,7 +1142,7 @@ export class MapScene {
     attr.needsUpdate = true;
   }
 
-  private rebuildArmies(): void {
+  private rebuildArmies(previousView?: PlayerView | null): void {
     for (const marker of this.armyMarkers) {
       this.scene.remove(marker.group);
       marker.label.remove();
@@ -1100,6 +1152,7 @@ export class MapScene {
       }
     }
     this.armyMarkers = [];
+    this.marchAnimations = [];
     if (!this.view || !this.map) return;
     const territories = new Map(this.map.territories.map((t) => [t.region_id, t]));
     const mapNodes = new Map(this.map.nodes.map((node) => [node.node_id, node]));
@@ -1221,15 +1274,16 @@ export class MapScene {
 
       const label = document.createElement('div');
       label.className = `map-army-label ${army.own ? 'own' : 'enemy'}`;
-      label.style.setProperty('--faction-color', FACTION_VISUALS[army.faction].mapBorder);
-      label.innerHTML = `<span class="al-name">${army.own ? army.name : '敌踪'}</span><span class="al-troops">${army.troopsLabel}</span>`;
+      label.style.setProperty('--faction-color', FACTION_VISUALS[army.faction].primary);
+      const marchBadge = army.own && army.status === 'marching' ? '<span class="al-status">行军中</span>' : '';
+      label.innerHTML = `<span class="al-name">${army.own ? army.name : '敌踪'}</span><span class="al-troops">${army.troopsLabel}</span>${marchBadge}`;
       label.addEventListener('click', (ev) => {
         ev.stopPropagation();
         this.callbacks.onSelectArmy(army.armyId);
       });
       this.labelLayer.appendChild(label);
 
-      this.armyMarkers.push({
+      const marker: ArmyMarker = {
         armyId: army.armyId,
         group,
         detailed,
@@ -1238,10 +1292,61 @@ export class MapScene {
         position: position.clone(),
         route: routeLine,
         isOwn: army.own,
-      });
+        marching: Boolean(army.own && army.status === 'marching'),
+      };
+      this.armyMarkers.push(marker);
+      const waypoints = this.marchWaypoints(previousView, army);
+      if (waypoints) {
+        marker.group.position.copy(waypoints[0]);
+        marker.position.copy(waypoints[0]);
+        if (marker.route) marker.route.visible = false;
+        this.marchAnimations.push({
+          marker,
+          points: waypoints,
+          elapsed: -this.marchAnimations.length * 0.07,
+          duration: THREE.MathUtils.clamp((waypoints.length - 1) * 0.16, 0.8, 4.2),
+        });
+      }
     }
     this.refreshOwnership();
     this.inspectGeometry();
+  }
+
+  /** 对比上一回合的 PlayerView，若本回合确有位移，则沿原计划路线逐格播放行军。 */
+  private marchWaypoints(
+    previousView: PlayerView | null | undefined,
+    army: PlayerView['armies'][number],
+  ): THREE.Vector3[] | null {
+    if (!previousView || !this.view) return null;
+    if (previousView.gameId !== this.view.gameId) return null;
+    if (previousView.date.turn + 1 !== this.view.date.turn) return null;
+    if (!army.own || army.tileX === undefined || army.tileY === undefined) return null;
+    const previous = previousView.armies.find((item) => item.armyId === army.armyId);
+    if (!previous?.own || previous.tileX === undefined || previous.tileY === undefined) return null;
+    const from = { x: previous.tileX, y: previous.tileY };
+    const to = { x: army.tileX, y: army.tileY };
+    if (from.x === to.x && from.y === to.y) return null;
+    const planned = [from, ...(previous.tilePath ?? [])];
+    let index = -1;
+    for (let i = planned.length - 1; i >= 1; i--) {
+      if (planned[i].x === to.x && planned[i].y === to.y) {
+        index = i;
+        break;
+      }
+    }
+    let tiles: { x: number; y: number }[];
+    if (index >= 1) {
+      tiles = planned.slice(0, index + 1);
+    } else {
+      // 战败撤退、换路或旧档修正不在原路线内：近距离滑行，远距离直接落位，避免穿山越岭。
+      if (Math.hypot(to.x - from.x, to.y - from.y) > 8) return null;
+      tiles = [from, to];
+    }
+    return tiles.map((tile) => {
+      const center = tileCenter(tile.x, tile.y);
+      const point = mapToWorld(center.x, center.y);
+      return new THREE.Vector3(point.x, this.heightAt(point.x, point.z) + 4, point.z);
+    });
   }
 
   /* ----------------------------- 输入与循环 ----------------------------- */
@@ -1440,6 +1545,24 @@ export class MapScene {
     });
   }
 
+  private updateMarchAnimations(): void {
+    if (this.marchAnimations.length === 0) return;
+    this.marchAnimations = this.marchAnimations.filter((anim) => {
+      anim.elapsed += 0.016;
+      if (anim.elapsed < 0) return true;
+      const t = Math.min(1, anim.elapsed / anim.duration);
+      const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      const point = pointAlong(anim.points, eased);
+      anim.marker.group.position.copy(point);
+      anim.marker.position.copy(point);
+      if (t >= 1) {
+        if (anim.marker.route) anim.marker.route.visible = true;
+        return false;
+      }
+      return true;
+    });
+  }
+
   private animate = (): void => {
     if (this.disposed) return;
     this.frame = requestAnimationFrame(this.animate);
@@ -1461,8 +1584,13 @@ export class MapScene {
     if (this.tileGrid) this.tileGrid.visible = this.distance < 1250;
     if (this.tileOverlay) this.tileOverlay.visible = this.distance < 1500;
     if (this.decorGroup) this.decorGroup.visible = this.distance < 640 && this.quality === 'high';
+    this.updateMarchAnimations();
 
     for (const marker of this.armyMarkers) {
+      if (marker.route) {
+        const routeMaterial = marker.route.material as THREE.LineDashedMaterial;
+        routeMaterial.opacity = 0.62 + Math.sin(this.animations.time * 2.4) * 0.16;
+      }
       const dist = this.camera.position.distanceTo(marker.group.position);
       const detailed = dist < 750;
       marker.detailed.visible = detailed;

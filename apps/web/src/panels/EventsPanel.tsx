@@ -12,6 +12,12 @@ const TYPE_LABELS: Record<string, string> = {
   endgame: '终局',
 };
 
+const STYLE_LABELS: Record<string, string> = {
+  shiji: '史记体',
+  yanyi: '演义体',
+  pingshu: '评书体',
+};
+
 export default function EventsPanel() {
   const view = useApp((s) => s.view);
   const events = useApp((s) => s.events);
@@ -160,15 +166,26 @@ export default function EventsPanel() {
 
       {tab === 'chronicle' && (
         <>
-          {config?.llmEnabled && latestChronicleTurn != null && (
-            <div className="form-row" style={{ alignItems: 'center' }}>
+          <div className="form-row" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
+            {config?.llmEnabled && latestChronicleTurn != null ? (
               <button className="btn small" disabled={llmBusy} onClick={polishWithLlm}>
                 {llmBusy ? 'AI 史官润色中…' : 'AI 润色本旬'}
               </button>
-              <span className="muted small">仅改写文学润色与推断层；事实层由规则引擎生成，永不改动。</span>
-              {llmError && <span className="small" style={{ color: 'var(--red, #c66)' }}>{llmError}</span>}
-            </div>
-          )}
+            ) : (
+              <span className="small muted">
+                {config?.llmEnabled ? '完成一次回合结算后即可润色。' : '当前为本地模板史官，可在设置中接入 AI。'}
+              </span>
+            )}
+            <button className="btn small ghost" onClick={() => setNav('settings')}>AI 设置</button>
+            {config?.llmEnabled && (
+              <span className="chip gold">
+                {STYLE_LABELS[config.llmStyle] ?? '演义体'}
+                {config.llmAutoPolish ? ' · 每旬自动' : ' · 手动润色'}
+              </span>
+            )}
+            <span className="muted small">仅改写文学润色与推断层；事实层由规则引擎生成，永不改动。</span>
+            {llmError && <span className="small" style={{ color: 'var(--red, #c66)' }}>{llmError}</span>}
+          </div>
           {chronicle.length === 0 && <Empty>史官尚未落笔。完成一次回合结算后，将生成编年、列传与史论。</Empty>}
           {chronicle.map((c) => (
             <div className="chronicle-entry" key={c.entryId}>

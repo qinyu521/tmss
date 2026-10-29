@@ -77,6 +77,32 @@ export interface MapData {
   factions: Record<string, { primary: string; secondary: string; mapFill: string; mapBorder: string; shortName: string }>;
 }
 
+export type LlmStyle = 'shiji' | 'yanyi' | 'pingshu';
+
+export interface LlmStatus {
+  configured: boolean;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  timeoutMs: number;
+  style: LlmStyle;
+  autoPolish: boolean;
+  hasKey: boolean;
+  keyHint: string;
+  source: 'env' | 'settings' | 'none';
+}
+
+export interface LlmSettingsPatch {
+  provider?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  timeoutMs?: number;
+  style?: LlmStyle;
+  autoPolish?: boolean;
+  clearApiKey?: boolean;
+}
+
 export interface ConfigData {
   balance: Record<string, any>;
   factions: Record<string, any>;
@@ -85,7 +111,12 @@ export interface ConfigData {
   turnDays: number;
   singlePlayer: boolean;
   llmEnabled: boolean;
+  llmAutoPolish: boolean;
+  llmStyle: LlmStyle;
+  llmProvider: string;
+  llmModel: string;
   schemaVersion: number;
+  appVersion: string;
 }
 
 export interface CharacterSummary {
@@ -209,6 +240,14 @@ export const api = {
       `/api/games/${id}/chronicle/llm`,
       { method: 'POST', body: JSON.stringify({ turn }) },
     ),
+  llmConfig: () => request<LlmStatus>('/api/llm/config'),
+  saveLlmConfig: (patch: LlmSettingsPatch) =>
+    request<LlmStatus>('/api/llm/config', { method: 'PUT', body: JSON.stringify(patch) }),
+  testLlm: (patch: LlmSettingsPatch) =>
+    request<{ ok: boolean; latencyMs: number; message: string }>('/api/llm/test', {
+      method: 'POST',
+      body: JSON.stringify(patch),
+    }),
   save: (id: string, label?: string) =>
     request<{ save: any; items: SaveMeta[] }>(`/api/games/${id}/save`, {
       method: 'POST',

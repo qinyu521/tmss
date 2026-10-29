@@ -596,6 +596,129 @@ describe('API 集成', () => {
   });
 });
 
+describe('AI 史官本机设置（SQLite）', () => {
+  const savedEnv = { provider: process.env.LLM_PROVIDER, key: process.env.LLM_API_KEY };
+  let built3: BuiltApp | null = null;
+  let fetcherCalls: { url: string; body: any }[] = [];
+  let polishEntryId = '';
+  const fakeFetcher: LlmFetcher = async (url, init) => {
+    const body = JSON.parse(init.body);
+    fetcherCalls.push({ url, body });
+    const prompt = JSON.stringify(body);
+    const isProbe = prompt.includes('回复 OK');
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: isProbe
+                ? 'OK'
+                : JSON.stringify({
+                    entries: [{ entryId: polishEntryId, literary: '演义体长文', inference: '史官推断' }],
+                  }),
+            },
+          },
+        ],
+      }),
+    };
+  };
+
+  beforeAll(async () => {
+    delete process.env.LLM_PROVIDER;
+    delete process.env.LLM_API_KEY;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tianming-llm-settings-'));
+    built3 = await buildApp({
+      dbPath: path.join(dir, 'test.db'),
+      logger: false,
+      serveWeb: false,
+      llmFetcher: fakeFetcher,
+    });
+    (built3 as any).testDir = dir;
+    await built3.app.ready();
+  });
+
+  afterAll(async () => {
+    if (built3) {
+      const dir = (built3 as any).testDir as string;
+      await built3.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    process.env.LLM_PROVIDER = savedEnv.provider;
+    process.env.LLM_API_KEY = savedEnv.key;
+  });
+
+  it('本机设置可保存、掩码回传，并驱动连接测试与史官润色', async () => {
+    const initial = await built3!.app.inject({ method: 'GET', url: '/api/llm/config' });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json().configured).toBe(false);
+
+    const saved = await built3!.app.inject({
+      method: 'PUT',
+      url: '/api/llm/config',
+      payload: {
+        provider: 'deepseek',
+        apiKey: 'secret-key-abcd',
+        baseUrl: 'https://api.deepseek.com/v1',
+        model: 'deepseek-chat',
+        timeoutMs: 15000,
+        style: 'yanyi',
+        autoPolish: true,
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    const status = saved.json();
+    expect(status.configured).toBe(true);
+    expect(status.hasKey).toBe(true);
+    expect(status.keyHint).toBe('••••abcd');
+    expect(status.source).toBe('settings');
+    expect(status.style).toBe('yanyi');
+    expect(status.autoPolish).toBe(true);
+    expect(JSON.stringify(status)).not.toContain('secret-key-abcd');
+
+    const config = (await built3!.app.inject({ method: 'GET', url: '/api/config' })).json();
+    expect(config.llmEnabled).toBe(true);
+    expect(config.llmAutoPolish).toBe(true);
+    expect(config.llmStyle).toBe('yanyi');
+    expect(config.llmModel).toBe('deepseek-chat');
+
+    const probe = await built3!.app.inject({ method: 'POST', url: '/api/llm/test' });
+    expect(probe.statusCode).toBe(200);
+    expect(probe.json().ok).toBe(true);
+    expect(fetcherCalls[0].url).toBe('https://api.deepseek.com/v1/chat/completions');
+    expect(fetcherCalls[0].body.model).toBe('deepseek-chat');
+
+    const created = await built3!.app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'CHU', playerRole: 'ruler', seed: 909 },
+    });
+    const gid = created.json().gameId;
+    await built3!.app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
+    const chronicle = (await built3!.app.inject({ method: 'GET', url: `/api/games/${gid}/chronicle` })).json().items;
+    polishEntryId = chronicle[0].entryId;
+    const polished = await built3!.app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/chronicle/llm`,
+      payload: { turn: chronicle[0].turn },
+    });
+    expect(polished.statusCode).toBe(200);
+    expect(polished.json().updated).toBe(1);
+  });
+
+  it('显式清除本机密钥后回到未配置状态', async () => {
+    const cleared = await built3!.app.inject({
+      method: 'PUT',
+      url: '/api/llm/config',
+      payload: { clearApiKey: true },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().configured).toBe(false);
+    expect(cleared.json().hasKey).toBe(false);
+  });
+});
+
 describe('LLM 史官（可选 Provider）', () => {
   const savedEnv = { provider: process.env.LLM_PROVIDER, key: process.env.LLM_API_KEY };
 

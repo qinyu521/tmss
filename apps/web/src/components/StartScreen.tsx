@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { FACTION_VISUALS, PLAYER_ROLES, fmt, ROLE_LABEL } from '@tianming/shared';
 import { useApp } from '../state/store';
-import { Portrait } from './ui';
+import { Modal, Portrait } from './ui';
+import LlmSettings from './LlmSettings';
 
 export default function StartScreen() {
   const factions = useApp((s) => s.factions);
@@ -12,6 +13,7 @@ export default function StartScreen() {
   const deleteGame = useApp((s) => s.deleteGame);
   const [faction, setFaction] = useState<'HUN' | 'YONG' | 'CHU'>('YONG');
   const [role, setRole] = useState('ruler');
+  const [aiOpen, setAiOpen] = useState(false);
 
   const selected = factions.find((f) => f.key === faction);
   const visual = FACTION_VISUALS[faction];
@@ -110,7 +112,7 @@ export default function StartScreen() {
           <div>
             <div className="section-title">
               继续时间线
-              <span className="muted small" style={{ fontFamily: 'var(--font-ui)' }}>本机 SQLite 存档</span>
+              <span className="muted small" style={{ fontFamily: 'var(--font-ui)', marginLeft: 'auto' }}>本机 SQLite 存档</span>
             </div>
             <div className="timeline-list">
               {games.length === 0 && <div className="empty">尚无时间线。选择势力与身份后开局。</div>}
@@ -145,9 +147,23 @@ export default function StartScreen() {
               模式：单机/个人部署，无登录鉴权；请勿直接暴露公网。未配置 LLM 密钥时，史官使用本地模板，
               核心玩法完整可玩。
             </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+              <button className="btn small" onClick={() => setAiOpen(true)}>AI 史官设置</button>
+              <span className="small muted">接入 OpenAI 兼容接口，把每旬记录润色成演义长篇。</span>
+            </div>
           </div>
         </div>
       </div>
+      {aiOpen && (
+        <Modal
+          title="AI 史官设置"
+          subtitle="OpenAI 兼容接口 · 密钥仅存本机"
+          onClose={() => setAiOpen(false)}
+          width={720}
+        >
+          <LlmSettings />
+        </Modal>
+      )}
     </div>
   );
 }

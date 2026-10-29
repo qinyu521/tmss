@@ -40,6 +40,8 @@ export default function MapView() {
   const labels = useApp((s) => s.labels);
   const quality = useApp((s) => s.quality);
   const selected = useApp((s) => s.selected);
+  const marchReport = useApp((s) => s.marchReport);
+  const clearMarchReport = useApp((s) => s.clearMarchReport);
   const setLayer = useApp((s) => s.setLayer);
   const select = useApp((s) => s.select);
   const [tooltip, setTooltip] = useState<{ title: string; subtitle: string; x: number; y: number } | null>(null);
@@ -139,6 +141,12 @@ export default function MapView() {
   }, [view]);
 
   useEffect(() => {
+    if (!marchReport || marchReport.items.length === 0) return;
+    const first = marchReport.items[0];
+    sceneRef.current?.focusTile(first.to.x, first.to.y);
+  }, [marchReport]);
+
+  useEffect(() => {
     sceneRef.current?.setLayer(layer);
   }, [layer]);
 
@@ -229,13 +237,44 @@ export default function MapView() {
               <div style={{ marginTop: 4 }}>
                 <span className="gold">{selectedArmy.name}</span>
                 {selectedArmyTile ? ` · 格 ${selectedArmyTile}` : ''}
-                {selectedArmy.tileMpLeft !== undefined ? ` · 本旬余 ${selectedArmy.tileMpLeft} 点移动力` : ''}
+                {selectedArmy.status === 'marching' && selectedArmy.tileMpLeft !== undefined
+                  ? ` · 本旬余 ${selectedArmy.tileMpLeft} 点移动力`
+                  : ''}
                 {selectedArmy.status === 'marching' ? ' · 行军中' : ''}
               </div>
             )}
           </div>
         </div>
       </div>
+      {marchReport && (
+        <div className="march-report" role="status">
+          <div className="mr-head">
+            <span>行军日报 · {marchReport.dateLabel}</span>
+            <button className="mr-close" onClick={clearMarchReport} title="收起">✕</button>
+          </div>
+          {marchReport.items.length === 0 && <div className="mr-empty">本旬无我军部队移动。</div>}
+          {marchReport.items.map((item) => (
+            <div className="mr-row" key={item.armyId}>
+              <span className="mr-name">{item.name}</span>
+              <span className="mr-move">
+                ({item.from.x},{item.from.y}) → ({item.to.x},{item.to.y}) · {item.tiles} 格
+              </span>
+              <span className="mr-note">{item.note}</span>
+            </div>
+          ))}
+          {marchReport.battles.length > 0 && (
+            <div className="mr-battles">
+              <span className="mr-tag">战报</span>
+              {marchReport.battles.map((battle, index) => (
+                <div className="mr-battle" key={`${battle.title}-${index}`}>
+                  <span className="t">{battle.title}</span>
+                  <span className="s">{battle.summary}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {tooltip && (
         <div className="map-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
           <div className="t">{tooltip.title}</div>

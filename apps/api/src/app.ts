@@ -53,7 +53,16 @@ import {
   StaleGameStateError,
   updateChroniclePolish,
 } from './gameRepo.js';
-import { loadLlmConfig, polishChronicle, type LlmFetcher } from './llm.js';
+import {
+  describeLlmConfig,
+  loadLlmConfig,
+  parseStoredLlmSettings,
+  polishChronicle,
+  testLlmConnection,
+  type LlmFetcher,
+  type StoredLlmSettings,
+} from './llm.js';
+import { deleteAppSetting, getAppSetting, setAppSetting } from './appSettings.js';
 import { assertSupportedDeploymentMode, resolveTrustProxy } from './security.js';
 
 const factionEnum = z.enum(['HUN', 'YONG', 'CHU']);
@@ -168,6 +177,36 @@ const ordersBodySchema = z
 const saveBodySchema = z.object({ label: z.string().min(1).max(60).optional() });
 const chronicleLlmSchema = z.object({ turn: z.number().int().min(0).max(100_000) });
 
+const LLM_SETTINGS_KEY = 'llm';
+
+const llmSettingsSchema = z.object({
+  provider: z.string().trim().max(80).optional(),
+  apiKey: z.string().trim().max(400).optional(),
+  baseUrl: z.string().trim().max(300).optional(),
+  model: z.string().trim().max(120).optional(),
+  timeoutMs: z.number().int().min(5_000).max(120_000).optional(),
+  style: z.enum(['shiji', 'yanyi', 'pingshu']).optional(),
+  autoPolish: z.boolean().optional(),
+  clearApiKey: z.boolean().optional(),
+});
+
+/** 合并补丁与本机已存设置；apiKey 留空表示沿用旧密钥，显式 clearApiKey 才清除。 */
+function mergeLlmSettings(
+  existing: StoredLlmSettings | null,
+  patch: z.infer<typeof llmSettingsSchema>,
+): StoredLlmSettings {
+  const next: StoredLlmSettings = { ...(existing ?? {}) };
+  if (patch.provider !== undefined) next.provider = patch.provider;
+  if (patch.baseUrl !== undefined) next.baseUrl = patch.baseUrl;
+  if (patch.model !== undefined) next.model = patch.model;
+  if (patch.timeoutMs !== undefined) next.timeoutMs = patch.timeoutMs;
+  if (patch.style !== undefined) next.style = patch.style;
+  if (patch.autoPolish !== undefined) next.autoPolish = patch.autoPolish;
+  if (patch.clearApiKey) delete next.apiKey;
+  else if (patch.apiKey) next.apiKey = patch.apiKey;
+  return next;
+}
+
 interface BuildOptions {
   dbPath?: string;
   seed?: SeedRoster;
@@ -197,6 +236,10 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   syncReferenceData(db, seed);
   const ctx = buildContext(seed);
 
+  const readLlmSettings = () => parseStoredLlmSettings(getAppSetting(db, LLM_SETTINGS_KEY));
+  const currentLlmConfig = () => loadLlmConfig(process.env, readLlmSettings());
+  const currentLlmStatus = () => describeLlmConfig(process.env, readLlmSettings());
+
   const app = Fastify({
     logger:
       options.logger === false
@@ -214,6 +257,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean),
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
   // 简易限速：单机部署防止误操作与脚本刷接口
@@ -233,27 +277,69 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
 
   /* ------------------------------ 基础信息 ------------------------------ */
 
-  app.get('/api/health', async () => ({
-    ok: true,
-    version: apiPkg.version,
-    schemaVersion: SCHEMA_VERSION,
-    mode: 'single-player',
-    db: path.basename(dbPath),
-    seedCounts: referenceCounts(db),
-    llm: process.env.LLM_PROVIDER ? 'configured（可选）' : 'disabled（本地模板史官）',
-  }));
+  app.get('/api/health', async () => {
+    const llm = currentLlmStatus();
+    return {
+      ok: true,
+      version: apiPkg.version,
+      schemaVersion: SCHEMA_VERSION,
+      mode: 'single-player',
+      db: path.basename(dbPath),
+      seedCounts: referenceCounts(db),
+      llm: llm.configured ? `configured（${llm.provider} / ${llm.model}）` : 'disabled（本地模板史官）',
+    };
+  });
 
-  app.get('/api/config', async () => ({
-    balance: BALANCE,
-    factions: FACTION_VISUALS,
-    roles: PLAYER_ROLES,
-    unitProfiles: UNIT_PROFILES,
-    initialResources: INITIAL_RESOURCES,
-    turnDays: BALANCE.turnDays,
-    schemaVersion: SCHEMA_VERSION,
-    singlePlayer: true,
-    llmEnabled: Boolean(process.env.LLM_PROVIDER && process.env.LLM_API_KEY),
-  }));
+  app.get('/api/config', async () => {
+    const llm = currentLlmStatus();
+    return {
+      balance: BALANCE,
+      factions: FACTION_VISUALS,
+      roles: PLAYER_ROLES,
+      unitProfiles: UNIT_PROFILES,
+      initialResources: INITIAL_RESOURCES,
+      turnDays: BALANCE.turnDays,
+      schemaVersion: SCHEMA_VERSION,
+      appVersion: apiPkg.version,
+      singlePlayer: true,
+      llmEnabled: llm.configured,
+      llmAutoPolish: llm.autoPolish,
+      llmStyle: llm.style,
+      llmProvider: llm.provider,
+      llmModel: llm.model,
+    };
+  });
+
+  // AI 史官本机设置：密钥只存本机 SQLite，接口只回传掩码摘要。
+  app.get('/api/llm/config', async () => currentLlmStatus());
+
+  app.put('/api/llm/config', async (req, reply) => {
+    const parsed = llmSettingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.issues.map((i) => i.message).join(';') });
+    }
+    const next = mergeLlmSettings(readLlmSettings(), parsed.data);
+    const hasValue = Object.values(next).some((value) => value !== undefined && value !== '');
+    if (hasValue) setAppSetting(db, LLM_SETTINGS_KEY, JSON.stringify(next));
+    else deleteAppSetting(db, LLM_SETTINGS_KEY);
+    return currentLlmStatus();
+  });
+
+  app.post('/api/llm/test', async (req, reply) => {
+    const parsed = llmSettingsSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.issues.map((i) => i.message).join(';') });
+    }
+    const candidate = loadLlmConfig(process.env, mergeLlmSettings(readLlmSettings(), parsed.data));
+    if (!candidate) {
+      return reply.code(400).send({
+        error: 'LLM_INCOMPLETE',
+        message: '请先填写服务商与 API Key，或设置 LLM_PROVIDER / LLM_API_KEY。',
+      });
+    }
+    const probe = await testLlmConnection(candidate, { fetcher: options.llmFetcher });
+    return probe;
+  });
 
   app.get('/api/map', async () => {
     const nodes = db.prepare('SELECT payload FROM map_nodes ORDER BY node_id').all() as any[];
@@ -639,9 +725,12 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.issues.map((i) => i.message).join(';') });
     }
-    const config = loadLlmConfig();
+    const config = currentLlmConfig();
     if (!config) {
-      return reply.code(503).send({ error: 'LLM_DISABLED', message: '未配置 LLM_PROVIDER/LLM_API_KEY，史官仍为本地模板。' });
+      return reply.code(503).send({
+        error: 'LLM_DISABLED',
+        message: '尚未配置 AI 史官，请在「设置 → AI 史官」填写服务商与密钥，或设置 LLM_PROVIDER/LLM_API_KEY。',
+      });
     }
     const turn = parsed.data.turn;
     const entries = listChronicleForTurn(db, gameId, turn);

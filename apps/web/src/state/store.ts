@@ -26,6 +26,24 @@ interface Toast {
   kind: 'info' | 'success' | 'error';
 }
 
+export interface MarchReportItem {
+  armyId: string;
+  name: string;
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  tiles: number;
+  mpLeft: number;
+  status: string;
+  note: string;
+}
+
+export interface MarchReport {
+  turn: number;
+  dateLabel: string;
+  items: MarchReportItem[];
+  battles: { title: string; summary: string }[];
+}
+
 interface AppState {
   status: 'boot' | 'start' | 'playing' | 'error';
   bootError: string | null;
@@ -46,10 +64,12 @@ interface AppState {
   quality: 'high' | 'low';
   ordersOpen: boolean;
   orderPreset: Record<string, any> | null;
+  marchReport: MarchReport | null;
   busy: boolean;
   toast: Toast | null;
 
   boot: () => Promise<void>;
+  refreshConfig: () => Promise<void>;
   startGame: (factionKey: string, playerRole: string) => Promise<void>;
   continueGame: (gameId: string) => Promise<void>;
   refreshGame: () => Promise<void>;
@@ -67,6 +87,7 @@ interface AppState {
   setQuality: (q: 'high' | 'low') => void;
   setOrdersOpen: (open: boolean) => void;
   openOrders: (preset?: Record<string, any> | null) => void;
+  clearMarchReport: () => void;
   notify: (message: string, kind?: Toast['kind']) => void;
 }
 
@@ -98,6 +119,7 @@ export const useApp = create<AppState>((set, get) => ({
   quality: 'high',
   ordersOpen: false,
   orderPreset: null,
+  marchReport: null,
   busy: false,
   toast: null,
 
@@ -149,6 +171,7 @@ export const useApp = create<AppState>((set, get) => ({
         status: 'playing',
         nav: 'map',
         layer: 'political',
+        marchReport: null,
         busy: false,
         selected: defaultSelection(data.view, get().factions),
       });
@@ -175,6 +198,7 @@ export const useApp = create<AppState>((set, get) => ({
         status: 'playing',
         busy: false,
         nav: 'map',
+        marchReport: null,
         selected: defaultSelection(data.view, get().factions),
       });
     } catch (err: any) {
@@ -191,6 +215,15 @@ export const useApp = create<AppState>((set, get) => ({
       set({ view: data.view, events: data.events, chronicle: data.chronicle, saves: data.saves });
     } catch (err: any) {
       get().notify(err?.message ?? '刷新失败', 'error');
+    }
+  },
+
+  refreshConfig: async () => {
+    try {
+      const config = await api.config();
+      set({ config });
+    } catch {
+      // 设置页仍可保存；配置摘要刷新失败不阻塞操作。
     }
   },
 
@@ -232,6 +265,7 @@ export const useApp = create<AppState>((set, get) => ({
   endTurn: async () => {
     const id = get().gameId;
     if (!id) return;
+    const before = get().view;
     set({ busy: true });
     try {
       const res = await api.endTurn(id);
@@ -241,10 +275,24 @@ export const useApp = create<AppState>((set, get) => ({
         chronicle: res.report.chronicle.concat(get().chronicle),
         busy: false,
         ordersOpen: res.view.outcome ? false : get().ordersOpen,
+        marchReport: buildMarchReport(before, res.view, res.report.events),
       });
       const saves = await api.saves(id);
       set({ saves: saves.items });
       get().notify(res.report.summary, 'info');
+      const config = get().config;
+      const polishTurn = res.report.chronicle[0]?.turn;
+      if (config?.llmEnabled && config.llmAutoPolish && polishTurn != null) {
+        void (async () => {
+          try {
+            const polished = await api.polishChronicleLlm(id, polishTurn);
+            set({ chronicle: mergeChronicle(get().chronicle, polished.items) });
+            get().notify(`AI 史官已自动润色本旬 ${polished.updated} 条记录`, 'success');
+          } catch (err: any) {
+            get().notify(`AI 史官自动润色失败：${err?.message ?? '未知错误'}`, 'error');
+          }
+        })();
+      }
     } catch (err: any) {
       set({ busy: false });
       get().notify(err?.message ?? '回合结算失败', 'error');
@@ -275,6 +323,7 @@ export const useApp = create<AppState>((set, get) => ({
         chronicle: res.chronicle,
         busy: false,
         nav: 'map',
+        marchReport: null,
       });
       get().notify(`已载入：${res.loadedSave.label}`, 'success');
     } catch (err: any) {
@@ -296,6 +345,7 @@ export const useApp = create<AppState>((set, get) => ({
       selected: null,
       ordersOpen: false,
       orderPreset: null,
+      marchReport: null,
       nav: 'map',
       busy: false,
     });
@@ -313,7 +363,7 @@ export const useApp = create<AppState>((set, get) => ({
       const games = await api.games();
       if (get().gameId === gameId) {
         localStorage.removeItem(LAST_GAME);
-        set({ gameId: null, view: null, status: 'start', games: games.items, nav: 'map' });
+        set({ gameId: null, view: null, status: 'start', games: games.items, nav: 'map', marchReport: null });
       } else {
         set({ games: games.items });
       }
@@ -336,6 +386,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     set({ ordersOpen: true, orderPreset: preset });
   },
+  clearMarchReport: () => set({ marchReport: null }),
   notify: (message, kind = 'info') => {
     set({ toast: { message, kind } });
     setTimeout(() => {
@@ -348,4 +399,45 @@ function defaultSelection(view: PlayerView, factions: FactionSeedLike[]): Select
   const capital = capitalName(view, factions);
   const region = view.regions.find((r) => r.owned && r.name === capital) ?? view.regions.find((r) => r.owned);
   return region ? { type: 'region', id: region.regionId } : null;
+}
+
+function mergeChronicle(current: ChronicleEntry[], updated: ChronicleEntry[]): ChronicleEntry[] {
+  const byId = new Map(updated.map((entry) => [entry.entryId, entry]));
+  return current.map((entry) => byId.get(entry.entryId) ?? entry);
+}
+
+function buildMarchReport(before: PlayerView | null, after: PlayerView, events: GameEvent[]): MarchReport | null {
+  if (!before || before.gameId !== after.gameId || before.date.turn + 1 !== after.date.turn) return null;
+  const items: MarchReportItem[] = [];
+  for (const army of after.armies) {
+    if (!army.own || army.tileX === undefined || army.tileY === undefined) continue;
+    const previous = before.armies.find((item) => item.armyId === army.armyId);
+    if (!previous || previous.tileX === undefined || previous.tileY === undefined) continue;
+    if (previous.tileX === army.tileX && previous.tileY === army.tileY) continue;
+    const tiles = Math.max(Math.abs(army.tileX - previous.tileX), Math.abs(army.tileY - previous.tileY));
+    const mpLeft = army.tileMpLeft ?? 0;
+    const target = army.targetTile ? `，目标 (${army.targetTile.x},${army.targetTile.y})` : '';
+    const note =
+      army.status === 'marching'
+        ? `行军中，本旬余 ${mpLeft} 点移动力${target}`
+        : (army.tilePath?.length ?? 0) === 0
+          ? '已抵达，转入驻防'
+          : '已停止行军';
+    items.push({
+      armyId: army.armyId,
+      name: army.name,
+      from: { x: previous.tileX, y: previous.tileY },
+      to: { x: army.tileX, y: army.tileY },
+      tiles,
+      mpLeft,
+      status: army.status,
+      note,
+    });
+  }
+  const battles = events
+    .filter((event) => event.type === 'battle')
+    .slice(0, 3)
+    .map((event) => ({ title: event.title, summary: event.summary }));
+  if (items.length === 0 && battles.length === 0) return null;
+  return { turn: after.date.turn, dateLabel: after.date.label, items, battles };
 }

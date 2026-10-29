@@ -267,7 +267,7 @@ h4 {
 .section-title {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   font-family: var(--font-display);
   font-size: 13px;
@@ -761,8 +761,20 @@ h4 {
   position: relative;
   min-width: 0;
   min-height: 0;
-  background: #0b1114;
+  background: #d8cfba;
   overflow: hidden;
+}
+
+.map-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  box-shadow: inset 0 0 120px rgba(76, 62, 40, 0.16);
+  background:
+    radial-gradient(900px 500px at 50% 42%, transparent 62%, rgba(102, 84, 54, 0.05) 100%),
+    linear-gradient(180deg, rgba(255, 250, 236, 0.12), transparent 30%);
 }
 
 .map-stage canvas {
@@ -789,55 +801,60 @@ h4 {
   flex-direction: column;
   align-items: center;
   gap: 1px;
-  border: 1px solid rgba(201, 162, 39, 0.22);
-  background: rgba(12, 11, 9, 0.78);
-  color: var(--ink);
-  padding: 3px 9px 4px;
+  border: 1px solid rgba(78, 64, 42, 0.32);
+  background: rgba(246, 238, 219, 0.9);
+  color: #2c2720;
+  padding: 3px 10px 4px;
   border-radius: 4px;
   font-family: var(--font-display);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
   letter-spacing: 0.1em;
   white-space: nowrap;
   line-height: 1.25;
-  backdrop-filter: blur(2px);
   transition: border-color 0.15s, background 0.15s;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 2px 8px rgba(68, 54, 32, 0.24);
 }
 
 .map-region-label:hover,
 .map-region-label.selected {
-  border-color: var(--gold);
-  background: rgba(30, 25, 15, 0.9);
+  border-color: #a5821c;
+  background: rgba(255, 249, 232, 0.97);
+  box-shadow: 0 2px 12px rgba(120, 92, 30, 0.3);
 }
 
 .map-region-label .rl-owner {
   font-family: var(--font-ui);
   font-size: 9px;
+  font-weight: 700;
   letter-spacing: 0.08em;
-  opacity: 0.85;
+  opacity: 0.9;
 }
 
 .map-region-label .rl-name {
-  text-shadow: 0 1px 4px #000;
+  text-shadow: 0 1px 0 rgba(255, 252, 242, 0.8);
 }
 
 .map-region-label .rl-garrison {
   font-family: var(--font-mono);
   font-size: 9px;
-  color: var(--ink-dim);
+  color: #6b6250;
   letter-spacing: 0.02em;
 }
 
 .map-region-label.enemy {
-  opacity: 0.78;
+  opacity: 0.84;
 }
 
 .map-node-label {
   position: absolute;
   transform: translate(-50%, -50%);
-  font-size: 10px;
-  color: rgba(236, 227, 205, 0.72);
-  text-shadow: 0 1px 4px #000;
+  font-size: 11px;
+  font-weight: 600;
+  color: #3b3427;
+  text-shadow:
+    0 0 4px rgba(248, 241, 226, 0.95),
+    0 1px 2px rgba(248, 241, 226, 0.95);
   white-space: nowrap;
   pointer-events: none;
 }
@@ -850,31 +867,38 @@ h4 {
   align-items: center;
   gap: 1px;
   transform: translate(-50%, -100%);
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: 4px;
-  background: rgba(10, 9, 7, 0.82);
-  border: 1px solid color-mix(in srgb, var(--faction-color, var(--gold)) 55%, transparent);
+  background: rgba(247, 239, 222, 0.93);
+  border: 1px solid color-mix(in srgb, var(--faction-color, #7b6434) 62%, transparent);
   white-space: nowrap;
   font-size: 10px;
-  color: var(--ink);
+  color: #2c2720;
   cursor: pointer;
-  backdrop-filter: blur(2px);
+  box-shadow: 0 2px 8px rgba(60, 48, 28, 0.24);
 }
 
 .map-army-label .al-name {
   font-family: var(--font-display);
+  font-weight: 700;
   letter-spacing: 0.06em;
-  color: var(--faction-color, var(--gold-soft));
+  color: var(--faction-color, #6f541f);
 }
 
 .map-army-label .al-troops {
   font-variant-numeric: tabular-nums;
-  color: var(--ink-dim);
+  color: #5f5748;
   font-size: 9px;
 }
 
+.map-army-label .al-status {
+  font-size: 8px;
+  color: #9a6d1c;
+  letter-spacing: 0.12em;
+}
+
 .map-army-label.enemy {
-  opacity: 0.85;
+  opacity: 0.88;
   border-style: dashed;
 }
 
@@ -984,6 +1008,121 @@ h4 {
   padding: 6px 10px;
   box-shadow: var(--shadow);
   max-width: 260px;
+}
+
+.march-report {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 3;
+  width: min(520px, calc(100% - 24px));
+  pointer-events: auto;
+  background: rgba(18, 15, 11, 0.92);
+  border: 1px solid rgba(201, 162, 39, 0.4);
+  border-radius: 8px;
+  padding: 8px 10px 9px;
+  box-shadow: 0 14px 34px rgba(20, 14, 4, 0.35);
+  color: var(--ink-dim);
+  font-size: 10px;
+  line-height: 1.55;
+  backdrop-filter: blur(7px);
+}
+
+.march-report .mr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--gold-soft);
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+}
+
+.march-report .mr-close {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.march-report .mr-close:hover {
+  color: var(--gold-soft);
+}
+
+.march-report .mr-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.march-report .mr-name {
+  font-family: var(--font-display);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.march-report .mr-move {
+  color: var(--gold-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.march-report .mr-note {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.march-report .mr-empty {
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+.march-report .mr-battles {
+  margin-top: 5px;
+  border-top: 1px dashed var(--line-soft);
+  padding-top: 5px;
+}
+
+.march-report .mr-tag {
+  display: inline-block;
+  border: 1px solid rgba(192, 71, 58, 0.5);
+  color: var(--danger-soft);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-bottom: 3px;
+  font-size: 9px;
+}
+
+.march-report .mr-battle {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 1px 0;
+}
+
+.march-report .mr-battle .t {
+  font-family: var(--font-display);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.march-report .mr-battle .s {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .map-tooltip .t {
@@ -1458,6 +1597,39 @@ h4 {
   margin: 8px 0;
   border-left: 2px solid var(--line);
   padding-left: 8px;
+}
+
+.llm-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 11px;
+  margin: 8px 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.llm-probe {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  border: 1px solid var(--line-soft);
+}
+
+.llm-probe.ok {
+  color: #9fd3a8;
+  border-color: rgba(120, 190, 130, 0.4);
+  background: rgba(70, 130, 80, 0.12);
+}
+
+.llm-probe.bad {
+  color: #e0a09a;
+  border-color: rgba(200, 110, 100, 0.4);
+  background: rgba(140, 60, 50, 0.12);
 }
 
 .action-grid {
