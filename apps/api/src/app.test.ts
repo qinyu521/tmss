@@ -423,13 +423,18 @@ describe('API 集成', () => {
       payload: { factionKey: 'HUN', playerRole: 'ruler', seed: 424242 },
     });
     const gid = created.json().gameId;
-    const order = await app.inject({
-      method: 'POST',
-      url: `/api/games/${gid}/orders`,
-      payload: { orders: [{ orderId: 'rb1', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' }] },
-    });
-    expect(order.statusCode).toBe(200);
-    expect(order.json().accepted).toHaveLength(1);
+    // 回放 API 的测试固定一个当旬可抵达的在途军团；行军耗时由引擎路线测试独立覆盖。
+    const battleState = createGame(built.seed, { gameId: gid, factionKey: 'HUN', playerRole: 'ruler', seed: 424242 });
+    const attacker = battleState.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
+    attacker.path = ['YONG-REG03'];
+    attacker.hopCosts = [5];
+    attacker.targetRegionId = 'YONG-REG03';
+    attacker.stance = 'march';
+    attacker.status = 'marching';
+    attacker.marchDaysTotal = 5;
+    attacker.marchDaysLeft = 5;
+    attacker.currentHopDaysTotal = 5;
+    saveGameState(built.db, battleState);
     await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
 
     const events = (await app.inject({ method: 'GET', url: `/api/games/${gid}/events` })).json().items;
