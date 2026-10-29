@@ -142,7 +142,7 @@
 - 战斗修正在 `armyPower` 的地形修正处叠加，只作用于 `river` 地形州的冬季战斗。
 - 事件：`turn_start` 摘要附当回合季节与一句影响；月份进入 3/6/9/12 的第一回合额外发一条 `season` 类型事件（司天监发布）。玩家视图 `PlayerView.season` 携带季节名与提示，顶栏展示。
 
-## 6.6 人物生命周期（schema v2）
+## 6.6 人物生命周期（schema v2 起）
 
 每回合在政治机制之后结算一次（`engine/lifecycle.ts` 的 `runLifecycle`）。`GameState.characters` 记录每个人物的运行时状态：`alive / ageBand / deathTurn / deathCause / growthNote / attrs`（成长覆盖值）；种子 JSON 永不改写，缺失条目按在世处理（`isCharacterAlive`）。
 
