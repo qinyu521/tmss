@@ -372,6 +372,7 @@ export function buildInitialMapNodes(
       supplyLevel: isCapital ? region.supplyLevel : isDepot ? 76 : 60,
       terrain: deriveTerrain(node.node_name + ' ' + node.node_type + ' ' + node.terrain_and_risk),
       resourceProfile: node.resource_profile,
+      siege: null,
     };
   }
   return states;
