@@ -51,7 +51,7 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
       orders.push({ orderId: oid(), kind: 'recruit', amount: 8_000 });
     }
 
-    // 4) 军事行动：以部队战备、将领统率与敌方守备共同评估，不再无条件挑最大军团。
+    // 4) 军事行动：先评估敌方前线威胁，再决定反击、增援与休整；不让 AI 只会一味进攻。
     const idleArmies = state.armies
       .filter((army) => army.faction === key && army.status === 'idle' && army.troops > 4_000 && army.supply > 35)
       .sort((a, b) => armyReadiness(b, ctx) - armyReadiness(a, ctx));
@@ -71,7 +71,22 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
 
     // 防御盟约召援优先级高于普通进攻意愿：有可行目标便下达军令，而非只等待概率判定。
     const mustAnswerAllianceWar = Boolean(attack && defensiveWarTargets.has(attack.targetFaction));
-    if (attack && (mustAnswerAllianceWar || rng() < attackChance)) {
+    const attackAccepted = Boolean(attack && (mustAnswerAllianceWar || rng() < attackChance));
+    const defenseArmies = attackAccepted && attack
+      ? idleArmies.filter((army) => army.armyId !== attack.army.armyId)
+      : idleArmies;
+    const defense = pickDefensiveReinforcement(state, ctx, key, defenseArmies);
+
+    if (defense) {
+      orders.push({
+        orderId: oid(),
+        kind: 'move_army',
+        armyId: defense.army.armyId,
+        targetRegionId: defense.targetRegionId,
+        targetMapNodeId: defense.targetNodeId,
+      });
+    }
+    if (attackAccepted && attack) {
       orders.push({
         orderId: oid(),
         kind: 'move_army',
@@ -79,7 +94,7 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
         targetRegionId: attack.region.regionId,
         ...(attack.targetMapNodeId ? { targetMapNodeId: attack.targetMapNodeId } : {}),
       });
-    } else {
+    } else if (!defense) {
       const tired = state.armies
         .filter((army) => army.faction === key && army.status === 'idle')
         .sort((a, b) =>
@@ -233,6 +248,95 @@ function armyReadiness(army: Army, ctx: DerivedContext): number {
 
 function restPriority(army: Army): number {
   return army.supply - army.fatigue * 0.7 - (100 - army.morale) * 0.35;
+}
+
+interface DefensiveReinforcementCandidate {
+  army: Army;
+  targetNodeId: string;
+  targetRegionId: string;
+  urgency: number;
+  estimatedDays: number;
+}
+
+/**
+ * 有敌军驻于相邻节点且当地守备明显不足时，派一支机动部队增援。
+ * 只响应已确认的敌军实体，不使用模糊情报凭空制造威胁，也不生成新兵。
+ */
+function pickDefensiveReinforcement(
+  state: GameState,
+  ctx: DerivedContext,
+  factionKey: FactionKey,
+  armies: Army[],
+): DefensiveReinforcementCandidate | null {
+  if (!state.mapNodes || armies.length === 0) return null;
+  const adjacency = buildMapAdjacency(ctx);
+  const enemyArmiesByNode = new Map<string, Army[]>();
+
+  for (const army of state.armies) {
+    if (army.faction === factionKey || !isAtWar(state.diplomacy, factionKey, army.faction)) continue;
+    const nodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
+    const node = nodeId ? state.mapNodes[nodeId] : undefined;
+    if (!nodeId || !node || node.faction === factionKey) continue;
+    const stationed = enemyArmiesByNode.get(nodeId) ?? [];
+    stationed.push(army);
+    enemyArmiesByNode.set(nodeId, stationed);
+  }
+
+  const candidates: DefensiveReinforcementCandidate[] = [];
+  for (const targetNode of Object.values(state.mapNodes)) {
+    if (targetNode.faction !== factionKey) continue;
+    const threatenedEnemyArmies = new Map<string, Army>();
+    for (const link of adjacency[targetNode.nodeId] ?? []) {
+      const neighbor = state.mapNodes[link.to];
+      if (!neighbor || neighbor.faction === factionKey || !isAtWar(state.diplomacy, factionKey, neighbor.faction)) continue;
+      for (const army of enemyArmiesByNode.get(neighbor.nodeId) ?? []) threatenedEnemyArmies.set(army.armyId, army);
+    }
+    if (threatenedEnemyArmies.size === 0) continue;
+
+    const region = state.regions[targetNode.regionId];
+    if (!region) continue;
+    const isCapital = targetNode.nodeType === '州府/主城';
+    const garrison = isCapital ? region.garrison : targetNode.garrison;
+    const fortification = isCapital ? region.fortification : targetNode.fortification;
+    const friendlyPower = state.armies
+      .filter((army) => army.faction === factionKey && army.troops > 0 &&
+        (army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId)) === targetNode.nodeId)
+      .reduce((sum, army) => sum + armyReadiness(army, ctx), 0);
+    // 已经在路上、目的地是该节点的增援也计入估算，防止每回合重复派出过量军团。
+    const inboundPower = state.armies
+      .filter((army) => army.faction === factionKey && army.status === 'marching' &&
+        army.targetMapNodeId === targetNode.nodeId && army.troops > 0)
+      .reduce((sum, army) => sum + armyReadiness(army, ctx) * 0.7, 0);
+    const localPower = friendlyPower + inboundPower + garrison * 0.62 + fortification * 260;
+    const enemyPower = [...threatenedEnemyArmies.values()]
+      .reduce((sum, army) => sum + armyReadiness(army, ctx), 0);
+    if (enemyPower <= Math.max(1_000, localPower) * 1.15) continue;
+    const urgency = enemyPower / Math.max(1_000, localPower) + strategicNodePriorityBonus(targetNode.nodeType);
+
+    for (const army of armies) {
+      const fromNodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
+      if (!fromNodeId || fromNodeId === targetNode.nodeId) continue;
+      const path = findMapPath(state, ctx, factionKey, fromNodeId, targetNode.nodeId, { troops: army.troops });
+      const estimatedDays = estimatePathDays(army, path, seasonOf(state.date.month));
+      if (!path.ok || estimatedDays > BALANCE.turnDays * 2) continue;
+      candidates.push({
+        army,
+        targetNodeId: targetNode.nodeId,
+        targetRegionId: targetNode.regionId,
+        urgency,
+        estimatedDays,
+      });
+    }
+  }
+
+  candidates.sort((a, b) =>
+    b.urgency - a.urgency ||
+    a.estimatedDays - b.estimatedDays ||
+    armyReadiness(b.army, ctx) - armyReadiness(a.army, ctx) ||
+    a.targetNodeId.localeCompare(b.targetNodeId) ||
+    a.army.armyId.localeCompare(b.army.armyId),
+  );
+  return candidates[0] ?? null;
 }
 
 /**

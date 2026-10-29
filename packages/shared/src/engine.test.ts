@@ -820,6 +820,91 @@ describe('战略节点后勤补给', () => {
   });
 });
 
+describe('NPC 前线防御调兵', () => {
+  it('敌军压到守备薄弱的友方主城时，NPC 会派另一支军团及时增援', () => {
+    const state = newGame('HUN', 'ruler', 'npc-frontline-defense');
+    state.date.turn = 2;
+    for (const pair of Object.keys(state.diplomacy)) state.diplomacy[pair] = 100;
+    state.diplomacy['HUN|CHU'] = -40;
+
+    const adjacency = buildMapAdjacency(ctx);
+    const seedNodes = new Map(ctx.seed.map_nodes.map((node) => [node.node_id, node]));
+    const pair = Object.entries(adjacency)
+      .filter(([targetNodeId]) => seedNodes.get(targetNodeId)?.node_type === '州府/主城')
+      .flatMap(([targetNodeId, links]) =>
+        links
+          .filter((link) => seedNodes.get(link.to)?.node_type === '州府/主城')
+          .map((link) => ({ targetNodeId, enemyNodeId: link.to })),
+      )
+      .find(({ targetNodeId, enemyNodeId }) =>
+        (adjacency[targetNodeId] ?? []).some((link) => link.to !== enemyNodeId),
+      );
+    expect(pair).toBeDefined();
+    const { targetNodeId, enemyNodeId } = pair!;
+    const safeNodeId = (adjacency[targetNodeId] ?? []).find((link) => link.to !== enemyNodeId)?.to;
+    if (!safeNodeId) throw new Error('测试主城缺少可供增援军团驻留的友方相邻节点。');
+
+    for (const region of Object.values(state.regions)) region.faction = 'CHU';
+    for (const node of Object.values(state.mapNodes ?? {})) node.faction = 'CHU';
+    const targetNode = state.mapNodes![targetNodeId];
+    const enemyNode = state.mapNodes![enemyNodeId];
+    targetNode.garrison = 0;
+    targetNode.fortification = 0;
+    enemyNode.faction = 'HUN';
+    enemyNode.garrison = 0;
+    enemyNode.fortification = 0;
+    state.regions[targetNode.regionId].garrison = 0;
+    state.regions[targetNode.regionId].fortification = 0;
+
+    const originalHun = state.armies.find((army) => army.faction === 'HUN');
+    const originalChu = state.armies.find((army) => army.faction === 'CHU');
+    if (!originalHun || !originalChu) throw new Error('测试缺少攻守两方军团。');
+    const setTroops = (army: NonNullable<typeof originalHun>, total: number) => {
+      const elite = army.units.reduce((sum, unit) => sum + unit.count, 0);
+      army.levies = Math.max(0, total - elite);
+      army.troops = army.levies + elite;
+      army.morale = 90;
+      army.training = 85;
+      army.supply = 90;
+      army.fatigue = 0;
+      army.status = 'idle';
+      army.path = [];
+      army.hopCosts = [];
+      army.mapPath = [];
+      army.mapHopCosts = [];
+      army.targetRegionId = null;
+      army.targetMapNodeId = null;
+      army.marchDaysTotal = 0;
+      army.marchDaysLeft = 0;
+      army.currentHopDaysTotal = 0;
+      army.mapCurrentHopDaysTotal = 0;
+    };
+    const enemy = clone(originalHun);
+    enemy.nodeId = enemyNode.regionId;
+    enemy.mapNodeId = enemyNodeId;
+    setTroops(enemy, 120_000);
+    const defender = clone(originalChu);
+    defender.nodeId = state.mapNodes![safeNodeId].regionId;
+    defender.mapNodeId = safeNodeId;
+    setTroops(defender, 50_000);
+    state.armies = [enemy, defender];
+
+    const first = generateNpcOrders(state, ctx).filter((order) =>
+      order.orderId.startsWith('npc-CHU-') && order.kind === 'move_army',
+    );
+    const second = generateNpcOrders(clone(state), ctx).filter((order) =>
+      order.orderId.startsWith('npc-CHU-') && order.kind === 'move_army',
+    );
+    expect(first).toEqual(second);
+    expect(first).toContainEqual(expect.objectContaining({
+      kind: 'move_army',
+      armyId: defender.armyId,
+      targetRegionId: targetNode.regionId,
+      targetMapNodeId: targetNodeId,
+    }));
+  });
+});
+
 describe('NPC 战略地图节点进攻', () => {
   it('防御盟约响应会优先向敌方独立据点下令，而非只选州府主城', () => {
     const state = newGame('HUN', 'ruler', 'npc-strategic-node-target');
