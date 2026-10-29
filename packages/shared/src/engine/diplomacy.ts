@@ -44,12 +44,7 @@ function relationship(state: GameState, a: FactionKey, b: FactionKey): number {
 
 function allianceCanBeFormed(state: GameState, a: FactionKey, b: FactionKey): boolean {
   // One active bilateral alliance per faction prevents contradictory three-way blocs in a three-faction world.
-  if (anyActiveAlliance(state, a) || anyActiveAlliance(state, b)) return false;
-  for (const third of ['HUN', 'YONG', 'CHU'] as const) {
-    if (third === a || third === b) continue;
-    if (isAtWar(state.diplomacy, a, third) && isAtWar(state.diplomacy, b, third)) return true;
-  }
-  return true;
+  return !anyActiveAlliance(state, a) && !anyActiveAlliance(state, b);
 }
 
 function diplomacyIssue(code: string, message: string): OrderValidation {
@@ -116,6 +111,8 @@ export function validateDiplomaticAction(
         issues: [],
         preview: `废止与 ${state.factions[target].shortName} 的盟约；关系将显著恶化，声望 -5、稳定 -3。本回合不能再提交第二项外交行动。`,
       };
+    default:
+      return diplomacyIssue('BAD_DIPLOMATIC_ACTION', '未知外交行动。');
   }
 }
 
@@ -195,13 +192,15 @@ export function applyDiplomaticAction(
     }
     case 'declare_war': {
       state.diplomacy[relationKey] = clampRelation(Math.min(beforeRelation - 20, WAR_THRESHOLD - 1));
+      const oldReputation = Math.round(faction.reputation);
+      const oldStability = Math.round(faction.stability);
       faction.reputation = Math.max(0, faction.reputation - 3);
       faction.stability = Math.max(0, faction.stability - 2);
       emitDiplomacyEvent(
         state, events, self, actorId, actorName, target,
         `${state.factions[self].shortName}向${state.factions[target].shortName}宣战`,
         `邦交由 ${beforeRelation} 降至 ${state.diplomacy[relationKey]}，声望 -3、稳定 -2；战争状态立即生效。`,
-        { relation: beforeRelation, reputation: Math.round(faction.reputation + 3), stability: Math.round(faction.stability + 2) },
+        { relation: beforeRelation, reputation: oldReputation, stability: oldStability },
         { relation: state.diplomacy[relationKey], reputation: Math.round(faction.reputation), stability: Math.round(faction.stability) },
         { action: order.action, warDeclared: true },
         source,
@@ -319,7 +318,7 @@ export function applyDiplomaticAction(
 /** 在回合开始时结束到期盟约，留存历史记录但不影响既有关系或战争事实。 */
 export function expireDiplomaticTreaties(state: GameState, events: GameEvent[]): void {
   for (const treaty of state.treaties ?? []) {
-    if (!treatyActive(state, treaty) || state.date.turn <= treaty.endTurn) continue;
+    if (treaty.status !== 'active' || state.date.turn <= treaty.endTurn) continue;
     const beforeRelation = relationship(state, treaty.a, treaty.b);
     treaty.status = 'expired';
     const key = diplomacyKey(treaty.a, treaty.b);
