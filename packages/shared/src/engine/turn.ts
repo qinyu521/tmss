@@ -559,6 +559,13 @@ function handleStrategicNodeBattle(
     }),
   );
 
+  // 只有战败方的在世统兵官承受军令威信损失；战果本身与回放数据保持不变。
+  if (!outcome.attackerWon) {
+    applyBattleDefeatLoyaltyLoss(state, ctx, attacker, outcome.attackerLosses, events);
+  } else if (defender) {
+    applyBattleDefeatLoyaltyLoss(state, ctx, defender, outcome.defenderLosses, events);
+  }
+
   if (outcome.attackerWon) {
     node.faction = attacker.faction;
     node.garrison = 0;
@@ -761,6 +768,45 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
   state.armies = state.armies.filter((a) => a.troops >= 60);
 }
 
+
+/** 战败削弱统兵官威信；损失以战前兵力占比衡量，不改变已确定的战果。 */
+function applyBattleDefeatLoyaltyLoss(
+  state: GameState,
+  ctx: DerivedContext,
+  defeatedArmy: Army,
+  casualties: number,
+  events: GameEvent[],
+): void {
+  if (casualties <= 0) return;
+  const runtime = state.characters[defeatedArmy.commanderId];
+  const commander = ctx.charactersById[defeatedArmy.commanderId];
+  if (!runtime || !commander || !runtime.alive) return;
+  const before = runtime.militaryLoyalty ?? commander.loyalty ?? 50;
+  const preBattleTroops = Math.max(1, defeatedArmy.troops + casualties);
+  const casualtyRate = casualties / preBattleTroops;
+  const heavy = casualtyRate >= BALANCE.militaryLoyalty.heavyCasualtyRate;
+  const penalty = BALANCE.militaryLoyalty.battleLossPenalty +
+    (heavy ? BALANCE.militaryLoyalty.heavyCasualtyPenalty : 0);
+  const after = clamp(before - penalty);
+  if (after === before) return;
+  runtime.militaryLoyalty = after;
+  events.push(emitEvent(state, {
+    type: 'politics',
+    title: `${commander.name}战败失威`,
+    summary: `${commander.name}所部战败，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(after)}（-${Math.round(before - after)}）；战前伤亡比例约 ${Math.round(casualtyRate * 100)}%。`,
+    actorId: commander.person_id,
+    actorName: commander.name,
+    factionKey: defeatedArmy.faction,
+    targetId: defeatedArmy.armyId,
+    targetLabel: defeatedArmy.name,
+    before: { loyalty: before, casualties, casualtyRate },
+    after: { loyalty: after, penalty },
+    evidence: '确定性战斗结算：仅战败方统兵官扣忠诚，重伤亡追加惩罚；不修改种子人物属性。',
+    source: 'engine',
+    visibleToPlayer: defeatedArmy.faction === state.factionKey,
+  }));
+}
+
 function handleBattle(
   state: GameState,
   ctx: DerivedContext,
@@ -840,6 +886,13 @@ function handleBattle(
       visibleToPlayer: visible,
     }),
   );
+
+  // 只有战败方的在世统兵官承受军令威信损失；战果本身与回放数据保持不变。
+  if (!outcome.attackerWon) {
+    applyBattleDefeatLoyaltyLoss(state, ctx, attacker, outcome.attackerLosses, events);
+  } else if (defender) {
+    applyBattleDefeatLoyaltyLoss(state, ctx, defender, outcome.defenderLosses, events);
+  }
 
   if (outcome.attackerWon) {
     // 占领
