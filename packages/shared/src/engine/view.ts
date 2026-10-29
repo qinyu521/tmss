@@ -109,6 +109,25 @@ export interface ArmyView {
   intelText?: string;
   isMilitia?: boolean;
   isDetachment?: boolean;
+  /** 仅向本方公开实际战略节点位置与路线。 */
+  mapNodeId?: string;
+  mapPath?: string[];
+  targetMapNodeId?: string | null;
+}
+
+export interface MapNodeView {
+  nodeId: string;
+  name: string;
+  regionId: string;
+  nodeType: string;
+  faction: FactionKey;
+  ownerShort: string;
+  x: number;
+  y: number;
+  owned: boolean;
+  garrison?: number;
+  fortification?: number;
+  supplyLevel?: number;
 }
 
 export interface DiplomacyView {
@@ -132,6 +151,8 @@ export interface PlayerView {
   own: OwnFactionView;
   factions: PublicFactionView[];
   regions: RegionView[];
+  /** 72 个战略节点的控制态；敌方具体驻军仍不对玩家公开。 */
+  mapNodes: MapNodeView[];
   armies: ArmyView[];
   diplomacy: DiplomacyView[];
   special: FactionSpecial;
@@ -191,6 +212,31 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
       };
     }
     return view;
+  });
+
+  const mapNodes: MapNodeView[] = Object.values(state.mapNodes ?? {}).map((node) => {
+    const owned = node.faction === ownKey;
+    const seedNode = ctx.seed.map_nodes.find((n) => n.node_id === node.nodeId);
+    const result: MapNodeView = {
+      nodeId: node.nodeId,
+      name: node.name,
+      regionId: node.regionId,
+      nodeType: node.nodeType,
+      faction: node.faction,
+      ownerShort: FACTION_VISUALS[node.faction].shortName,
+      x: seedNode?.map_x ?? 0,
+      y: seedNode?.map_y ?? 0,
+      owned,
+    };
+    if (owned) {
+      result.garrison =
+        node.nodeType === '州府/主城'
+          ? state.regions[node.regionId]?.garrison ?? node.garrison
+          : node.garrison;
+      result.fortification = node.fortification;
+      result.supplyLevel = node.supplyLevel;
+    }
+    return result;
   });
 
   const armies: ArmyView[] = [];
@@ -310,6 +356,7 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
     },
     factions,
     regions,
+    mapNodes,
     armies,
     diplomacy,
     special: state.special[ownKey],
