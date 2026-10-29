@@ -83,6 +83,8 @@ export const BALANCE = {
     depotSupplyLevelDrain: 4,
     portRestSupplyBonus: 4,
     portSupplyLevelDrain: 2,
+    /** 与州府行政归属一致的节点，每回合自然恢复的储备等级。 */
+    homeSupplyLevelRecovery: 2,
   },
 
   /** 战斗系数 */
