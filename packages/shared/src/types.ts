@@ -445,6 +445,20 @@ export interface RegionState {
   diversionFor?: FactionKey | null;
 }
 
+/** 72 个战略地图节点的运行时控制状态；与州府行政归属分离。 */
+export interface MapNodeState {
+  nodeId: string;
+  name: string;
+  regionId: string;
+  nodeType: string;
+  faction: FactionKey;
+  garrison: number;
+  fortification: number;
+  supplyLevel: number;
+  terrain: RegionState['terrain'];
+  resourceProfile: string;
+}
+
 export interface ArmyUnitStack {
   unitId: string;
   name: string;
@@ -462,7 +476,16 @@ export interface Army {
   commanderId: string;
   commanderName: string;
   districtId: string;
+  /** 行政州府 ID，供现有政务、军区权限和经济规则使用。 */
   nodeId: string;
+  /** 实际战场地图节点 ID；旧存档缺失时回退到州府节点。 */
+  mapNodeId?: string;
+  /** 当前行军路线上的战略节点 ID（不含起点）。 */
+  mapPath?: string[];
+  mapHopCosts?: number[];
+  /** 当前地图路段的完整日数，用于跨旬位置显示。 */
+  mapCurrentHopDaysTotal?: number;
+  targetMapNodeId?: string | null;
   units: ArmyUnitStack[];
   levies: number;
   troops: number;
@@ -596,6 +619,8 @@ export type Order =
       kind: 'move_army';
       armyId: string;
       targetRegionId: string;
+      /** 可选：直接指定 72 节点地图中的具体据点；缺省为目标州府。 */
+      targetMapNodeId?: string;
       /** 本次调动的总兵力；缺省为全军 */
       amount?: number;
       /** 随军调走的特殊兵种与数量；其余按征集兵计算 */
@@ -674,6 +699,8 @@ export interface GameState {
   date: GameDate;
   factions: Record<FactionKey, FactionState>;
   regions: Record<string, RegionState>;
+  /** 缺失于历史存档；加载时基于权威种子幂等补齐。 */
+  mapNodes?: Record<string, MapNodeState>;
   armies: Army[];
   diplomacy: Record<string, number>;
   special: Record<FactionKey, FactionSpecial>;
@@ -687,6 +714,8 @@ export interface GameState {
     casualties: number;
     turnsPlayed: number;
     occupiedRegions: number;
+    /** 被夺取的粮仓、关隘、港埠等非州府节点数。 */
+    occupiedMapNodes?: number;
   };
   flags: {
     successionCrisis: boolean;
