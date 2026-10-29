@@ -120,6 +120,12 @@ const orderSchema = z.discriminatedUnion('kind', [
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('negotiate_house'), houseId: z.string().min(1), amount: z.number().finite() }),
   z.object({
     orderId: z.string().min(1).max(80),
+    kind: z.literal('diplomatic_action'),
+    action: z.enum(['improve_relations', 'declare_war', 'offer_peace', 'propose_alliance', 'break_alliance']),
+    targetFaction: factionEnum,
+  }),
+  z.object({
+    orderId: z.string().min(1).max(80),
     kind: z.literal('court_debate'),
     topic: z.enum(['military', 'taxation', 'factions']),
     resolution: z.enum(['mobilize', 'consolidate', 'raise', 'relieve', 'balance', 'patronize']),
