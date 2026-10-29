@@ -306,7 +306,8 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       .prepare(`SELECT payload FROM characters ${where} ORDER BY faction_key, person_id LIMIT ? OFFSET ?`)
       .all(...params, pageSize, (page - 1) * pageSize) as any[];
     // 携带 gameId 时合并该局人物运行时状态（生死/死因）；人物档案本就公开属性，生死讣闻同理公开
-    const runtimeMap = q.gameId ? (getGameState(db, q.gameId, seed.characters, seed)?.characters ?? null) : null;
+    const runtimeState = q.gameId ? getGameState(db, q.gameId, seed.characters, seed) : null;
+    const runtimeMap = runtimeState?.characters ?? null;
     return {
       total,
       page,
@@ -314,7 +315,19 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       items: rows.map((r) => {
         const item = summariseCharacter(JSON.parse(r.payload));
         const rt = runtimeMap?.[item.person_id];
-        return rt ? { ...item, alive: rt.alive, deathCause: rt.deathCause } : item;
+        if (!rt) return item;
+        const publicRuntime = { ...item, alive: rt.alive, deathCause: rt.deathCause };
+        // 角色目标属于本势力内部动向；角色档案中的敌方目标不得通过 gameId 列表泄露。
+        if (runtimeState && item.faction_key === runtimeState.factionKey) {
+          return {
+            ...publicRuntime,
+            goal: rt.goal ?? 'idle',
+            goalTargetId: rt.goalTargetId,
+            goalSinceTurn: rt.goalSinceTurn,
+            goalReason: rt.goalReason,
+          };
+        }
+        return publicRuntime;
       }),
     };
   });
@@ -349,7 +362,11 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     const relationships = rels.map((r) => JSON.parse(r.payload));
     // 携带 gameId 时返回该局运行时状态（存活/死因/成长/有效属性），否则保持纯静态档案
     const gameId = (req.query as Record<string, string | undefined>).gameId;
-    const runtime = gameId ? (getGameState(db, gameId, seed.characters, seed)?.characters?.[id] ?? null) : null;
+    const runtimeState = gameId ? getGameState(db, gameId, seed.characters, seed) : null;
+    const rawRuntime = runtimeState?.characters?.[id] ?? null;
+    const runtime = rawRuntime && runtimeState && character.faction_key !== runtimeState.factionKey
+      ? (({ goal: _goal, goalTargetId: _target, goalSinceTurn: _since, goalLastActionTurn: _last, goalReason: _reason, ...publicFields }) => publicFields)(rawRuntime)
+      : rawRuntime;
     return {
       character,
       runtime,
