@@ -75,6 +75,10 @@ export const BALANCE = {
     fatigueRecoverPerDay: 4.0,
     attritionSupplyBelow: 30,
     attritionRatePerDay: 0.0015,
+    /** 缺少本土后勤线的驻军每回合补给消耗。 */
+    isolatedSupplyDrainPerTurn: 8,
+    /** 孤军未断粮时仍可缓慢休整的疲劳恢复量。 */
+    isolatedFatigueRecoverPerTurn: 2,
   },
 
   /** 战略节点仓储与港埠的有限后勤库存；不会额外增加兵员或凭空产生军粮。 */
