@@ -379,6 +379,11 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       delete runtime.goalSinceTurn;
       delete runtime.goalLastActionTurn;
       delete runtime.goalReason;
+      // 运行时忠诚、真实效忠与倒戈预警均属于战争迷雾信息，不向敌方人物查询者暴露。
+      delete runtime.militaryLoyalty;
+      delete runtime.allegianceFaction;
+      delete runtime.defectionWarningTurn;
+      delete runtime.defectionTargetFaction;
     }
     return {
       character,
