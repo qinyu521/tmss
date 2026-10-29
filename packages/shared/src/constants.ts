@@ -146,7 +146,7 @@ export const ORDER_LABELS: Record<string, string> = {
   balance_princes: '平衡皇子',
   negotiate_house: '协商世家',
   court_debate: '提交朝议议案',
-  diplomatic_action: '外交交涉',
+  diplomatic_action: '外交行动',
   appoint: '任命官职',
   rest_army: '整军休整',
   scout: '遣斥候侦察',
