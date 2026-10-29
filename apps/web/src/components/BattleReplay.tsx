@@ -78,7 +78,7 @@ export default function BattleReplayModal({ replay, onClose }: { replay: BattleR
             </div>
             <div className="fallback-label">{replay.defenderName}</div>
           </div>
-          <div className="fallback-phase">{stage.name}</div>
+          <div className="fallback-phase">{stage.name} · 小队阵列示意</div>
           <div className="fallback-terrain">{replay.terrainLabel}{replay.fort > 0 ? ` · 城防 ${replay.fort}` : ''}</div>
         </div>
       ) : (
