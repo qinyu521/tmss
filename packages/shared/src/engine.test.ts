@@ -353,7 +353,7 @@ describe('正式外交行动', () => {
     expect(event?.before?.relation).toBe(10);
     expect(event?.after?.relation).toBe(28);
     expect((event?.before?.cash as number) - (event?.after?.cash as number)).toBe(12_000);
-    expect(result.state.factions.HUN.resources.cash).toBeLessThan(beforeCash);
+    // 本回合后续经济结算可能增加国库；使团自身成本由事件账本精确断言。
   });
 
   it('宣战会立即跨过战争阈值，并留下声望/稳定代价', () => {
