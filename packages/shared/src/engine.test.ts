@@ -530,7 +530,7 @@ describe('朝廷廷议', () => {
     state.characters[person.person_id].deathCause = '测试旧档死因';
 
     const migrated = migrateState(state, ctx.seed.characters);
-    expect(migrated.schemaVersion).toBe(4);
+    expect(migrated.schemaVersion).toBe(5);
     expect(migrated.characters[person.person_id].courtStanding).toBe(50);
     expect(migrated.characters[person.person_id].militaryLoyalty).toBe(person.loyalty);
     expect(migrated.characters[person.person_id].alive).toBe(false);
@@ -2047,7 +2047,7 @@ describe('存档快照', () => {
     expect(restored.date.label).toBe(result.state.date.label);
     expect(restored.armies.length).toBe(result.state.armies.length);
     expect(restored.factions.YONG.resources).toEqual(result.state.factions.YONG.resources);
-    expect(restored.schemaVersion).toBe(4);
+    expect(restored.schemaVersion).toBe(5);
   });
 });
 
