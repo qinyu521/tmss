@@ -596,6 +596,19 @@ export interface IntelEntry {
   estimate?: { troops?: number; garrison?: number; note?: string };
 }
 
+export type DiplomaticAction = 'improve_relations' | 'declare_war' | 'offer_peace' | 'propose_alliance' | 'break_alliance';
+
+export interface DiplomaticTreaty {
+  treatyId: string;
+  kind: 'alliance';
+  a: FactionKey;
+  b: FactionKey;
+  startTurn: number;
+  /** Last turn on which the treaty is active. */
+  endTurn: number;
+  status: 'active' | 'expired' | 'broken';
+}
+
 export type OrderKind =
   | 'move_army'
   | 'dispatch_garrison'
@@ -607,6 +620,7 @@ export type OrderKind =
   | 'balance_princes'
   | 'negotiate_house'
   | 'court_debate'
+  | 'diplomatic_action'
   | 'appoint'
   | 'rest_army'
   | 'scout'
@@ -655,6 +669,7 @@ export type Order =
   | { orderId: string; kind: 'balance_princes'; amount: number }
   | { orderId: string; kind: 'negotiate_house'; houseId: string; amount: number }
   | { orderId: string; kind: 'court_debate'; topic: CourtTopic; resolution: CourtResolution }
+  | { orderId: string; kind: 'diplomatic_action'; action: DiplomaticAction; targetFaction: FactionKey }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }
@@ -727,6 +742,8 @@ export interface GameState {
   mapNodes?: Record<string, MapNodeState>;
   armies: Army[];
   diplomacy: Record<string, number>;
+  /** 历史与当前外交条约；关系分数只表示态度，条约另行记录。 */
+  treaties: DiplomaticTreaty[];
   special: Record<FactionKey, FactionSpecial>;
   intel: IntelEntry[];
   pendingOrders: Order[];
