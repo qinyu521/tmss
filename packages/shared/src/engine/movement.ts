@@ -36,6 +36,150 @@ export function regionNameById(ctx: DerivedContext, id: string): string {
   return ctx.territories.find((t) => t.region_id === id)?.region ?? id;
 }
 
+export function mapNodeNameById(ctx: DerivedContext, id: string): string {
+  return ctx.seed.map_nodes.find((n) => n.node_id === id)?.node_name ?? id;
+}
+
+export function mapNodeRegionId(ctx: DerivedContext, mapNodeId: string): string | undefined {
+  const node = ctx.seed.map_nodes.find((n) => n.node_id === mapNodeId);
+  return node ? regionIdByName(ctx, node.region) : undefined;
+}
+
+export function capitalMapNodeId(ctx: DerivedContext, regionId: string): string | undefined {
+  const regionName = regionNameById(ctx, regionId);
+  return ctx.seed.map_nodes.find(
+    (n) => n.region === regionName && n.node_type === '州府/主城',
+  )?.node_id;
+}
+
+export interface AdjacentMapNode {
+  to: string;
+  cost: number;
+  edgeId: string;
+  routeType: string;
+}
+
+/** 用原始州府道路连接 24 座主城，再按 parent_node_id 接通其附属据点。 */
+export function buildMapAdjacency(ctx: DerivedContext): Record<string, AdjacentMapNode[]> {
+  const adj: Record<string, AdjacentMapNode[]> = {};
+  const capitalByRegionName = new Map(
+    ctx.seed.map_nodes.filter((n) => n.node_type === '州府/主城').map((n) => [n.region, n.node_id]),
+  );
+  const add = (from: string, to: string, edgeId: string, cost: number, routeType: string) => {
+    adj[from] ??= [];
+    adj[from].push({ to, cost, edgeId, routeType });
+  };
+  for (const edge of ctx.edges) {
+    const from = capitalByRegionName.get(edge.from_region);
+    const to = capitalByRegionName.get(edge.to_region);
+    if (!from || !to) continue;
+    add(from, to, edge.edge_id, edge.base_movement_cost, edge.route_type);
+    add(to, from, edge.edge_id, edge.base_movement_cost, edge.route_type);
+  }
+  for (const node of ctx.seed.map_nodes) {
+    if (!node.parent_node_id || !ctx.seed.map_nodes.some((n) => n.node_id === node.parent_node_id)) continue;
+    const isPass = /关隘|边塞/.test(node.node_type);
+    const isPort = /水军|渡口|港埠/.test(node.node_type);
+    const cost = isPass || isPort ? 2 : 1;
+    const routeType = isPass ? '关隘支路' : isPort ? '河网水路支路' : '地方支路';
+    add(node.parent_node_id, node.node_id, 'LOCAL-' + node.node_id, cost, routeType);
+    add(node.node_id, node.parent_node_id, 'LOCAL-' + node.node_id, cost, routeType);
+  }
+  return adj;
+}
+
+export function findMapPath(
+  state: GameState,
+  ctx: DerivedContext,
+  faction: FactionKey,
+  from: string,
+  to: string,
+): PathResult {
+  if (from === to) return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '部队已在该地图节点。' };
+  if (!state.mapNodes?.[from] || !state.mapNodes?.[to]) {
+    return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '战略地图节点不存在或存档尚未迁移。' };
+  }
+  const canTraverseNode = (nodeId: string) => {
+    const node = state.mapNodes?.[nodeId];
+    return Boolean(node && (node.faction === faction || isAtWar(state.diplomacy, faction, node.faction)));
+  };
+  if (!canTraverseNode(to)) {
+    const target = state.mapNodes[to];
+    return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '目标据点由' + target.name + '方面控制，双方尚未交战，不能进军。' };
+  }
+  const adj = buildMapAdjacency(ctx);
+  const dist: Record<string, number> = { [from]: 0 };
+  const prev: Record<string, { node: string; cost: number; routeType: string }> = {};
+  const visited = new Set<string>();
+  const queue: string[] = [from];
+  while (queue.length > 0) {
+    queue.sort((a, b) => dist[a] - dist[b]);
+    const node = queue.shift() as string;
+    if (visited.has(node)) continue;
+    visited.add(node);
+    if (node === to) break;
+    for (const link of adj[node] ?? []) {
+      if (visited.has(link.to) || !canTraverseNode(link.to)) continue;
+      const candidate = dist[node] + link.cost;
+      if (dist[link.to] === undefined || candidate < dist[link.to]) {
+        dist[link.to] = candidate;
+        prev[link.to] = { node, cost: link.cost, routeType: link.routeType };
+        queue.push(link.to);
+      }
+    }
+  }
+  if (dist[to] === undefined) {
+    return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '没有可用道路抵达目标据点（可能被未交战势力阻隔）。' };
+  }
+  const path: string[] = [];
+  const costs: number[] = [];
+  const routeTypes: string[] = [];
+  let cursor = to;
+  while (cursor !== from) {
+    const previous = prev[cursor];
+    if (!previous) return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '战略路线数据不完整。' };
+    path.unshift(cursor);
+    costs.unshift(previous.cost);
+    routeTypes.unshift(previous.routeType);
+    cursor = previous.node;
+  }
+  return { ok: true, path, costs, routeTypes, totalDays: costs.reduce((sum, cost) => sum + cost, 0) };
+}
+
+export function assignMapMarch(
+  army: Army,
+  path: string[],
+  dayCosts: number[],
+  targetMapNodeId: string,
+  targetRegionId: string,
+): void {
+  army.path = [];
+  army.hopCosts = [];
+  army.mapPath = path;
+  army.mapHopCosts = dayCosts;
+  army.mapCurrentHopDaysTotal = dayCosts[0] ?? 0;
+  army.targetMapNodeId = targetMapNodeId;
+  army.targetRegionId = targetRegionId;
+  army.stance = 'march';
+  army.status = 'marching';
+  army.marchDaysTotal = dayCosts.reduce((sum, days) => sum + days, 0);
+  army.marchDaysLeft = army.marchDaysTotal;
+}
+
+export function retreatMapNode(
+  state: GameState,
+  ctx: DerivedContext,
+  army: Army,
+  fromMapNodeId: string,
+): string | null {
+  if (!state.mapNodes) return null;
+  const adjacency = buildMapAdjacency(ctx);
+  const candidates = (adjacency[fromMapNodeId] ?? [])
+    .map((edge) => edge.to)
+    .filter((nodeId) => nodeId !== fromMapNodeId && state.mapNodes?.[nodeId]?.faction === army.faction);
+  return candidates[0] ?? null;
+}
+
 /** 行军允许穿越：本国州府、交战国州府；目的地可为交战国。 */
 export function canTraverse(state: GameState, ctx: DerivedContext, faction: FactionKey, regionId: string): boolean {
   const region = state.regions[regionId];
@@ -164,6 +308,9 @@ export function dayCostsFor(
 }
 
 export function assignMarch(army: Army, path: string[], dayCosts: number[], targetRegionId: string): void {
+  army.mapPath = [];
+  army.mapHopCosts = [];
+  army.targetMapNodeId = null;
   army.path = path;
   army.hopCosts = dayCosts;
   army.targetRegionId = targetRegionId;
@@ -176,7 +323,11 @@ export function assignMarch(army: Army, path: string[], dayCosts: number[], targ
 export function clearMarch(army: Army): void {
   army.path = [];
   army.hopCosts = [];
+  army.mapPath = [];
+  army.mapHopCosts = [];
+  army.mapCurrentHopDaysTotal = 0;
   army.targetRegionId = null;
+  army.targetMapNodeId = null;
   army.marchDaysLeft = 0;
   army.marchDaysTotal = 0;
   army.stance = 'defend';

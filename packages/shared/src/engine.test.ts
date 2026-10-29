@@ -7,7 +7,10 @@ import {
   UNIT_PROFILES,
   applyUnitNames,
   buildContext,
+  buildMapAdjacency,
   createGame,
+  findMapPath,
+  migrateState,
   resolveBattle,
   runTurn,
   validateOrder,
@@ -64,6 +67,88 @@ describe('初始世界', () => {
       expect(names.has(edge.from_region)).toBe(true);
       expect(names.has(edge.to_region)).toBe(true);
     }
+  });
+
+  it('72 个节点进入运行时控制状态，附属据点能通过父子支路抵达', () => {
+    const state = newGame('HUN');
+    expect(Object.keys(state.mapNodes ?? {})).toHaveLength(72);
+    expect(Object.keys(buildMapAdjacency(ctx))).toHaveLength(72);
+    const capital = seed.map_nodes.find((node) => node.node_id === 'HUN-MAP001')!;
+    const child = seed.map_nodes.find((node) => node.parent_node_id === capital.node_id)!;
+    expect(state.mapNodes?.[capital.node_id]?.nodeType).toBe('州府/主城');
+    const route = findMapPath(state, ctx, 'HUN', capital.node_id, child.node_id);
+    expect(route.ok).toBe(true);
+    expect(route.path).toEqual([child.node_id]);
+    expect(route.costs).toEqual([1]);
+    for (const army of state.armies) {
+      expect(state.mapNodes?.[army.mapNodeId ?? '']?.regionId).toBe(army.nodeId);
+    }
+  });
+
+  it('军令可以瞄准同一州府下的具体粮仓/据点，不再被州府 ID 限制', () => {
+    const state = newGame('YONG');
+    const army = state.armies.find((item) => item.faction === 'YONG')!;
+    const regionName = state.regions[army.nodeId].name;
+    const capital = seed.map_nodes.find((node) => node.node_type === '州府/主城' && node.region === regionName)!;
+    const child = seed.map_nodes.find((node) => node.parent_node_id === capital.node_id)!;
+    const result = validateOrder(state, ctx, {
+      orderId: 'target-secondary-node',
+      kind: 'move_army',
+      armyId: army.armyId,
+      targetRegionId: army.nodeId,
+      targetMapNodeId: child.node_id,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.preview).toContain(child.node_name);
+  });
+
+  it('节点行军跨旬保留剩余路段，并在下一旬按剩余日数抵达', () => {
+    const state = newGame('HUN');
+    const army = state.armies.find((item) => item.faction === 'HUN')!;
+    const origin = army.mapNodeId!;
+    const target = seed.map_nodes.find((node) => node.parent_node_id === origin)!;
+    army.mapPath = [target.node_id];
+    army.mapHopCosts = [10];
+    army.mapCurrentHopDaysTotal = 10;
+    army.targetMapNodeId = target.node_id;
+    army.targetRegionId = army.nodeId;
+    army.path = [];
+    army.hopCosts = [];
+    army.status = 'marching';
+    army.stance = 'march';
+    army.marchDaysTotal = 10;
+    army.marchDaysLeft = 10;
+
+    const first = runTurn(state, ctx);
+    const firstArmy = first.state.armies.find((item) => item.armyId === army.armyId)!;
+    expect(firstArmy.mapNodeId).toBe(origin);
+    expect(firstArmy.mapPath).toEqual([target.node_id]);
+    expect(firstArmy.mapHopCosts).toEqual([3]);
+    expect(firstArmy.mapCurrentHopDaysTotal).toBe(10);
+    expect(firstArmy.marchDaysLeft).toBe(3);
+
+    const second = runTurn(first.state, ctx);
+    const secondArmy = second.state.armies.find((item) => item.armyId === army.armyId)!;
+    expect(secondArmy.mapNodeId).toBe(target.node_id);
+    expect(secondArmy.mapPath).toEqual([]);
+    expect(secondArmy.status).toBe('idle');
+  });
+
+  it('旧存档迁移会幂等补齐 72 节点，且不覆盖已发生的节点易手', () => {
+    const oldState = clone(newGame('HUN'));
+    delete oldState.mapNodes;
+    for (const army of oldState.armies) {
+      delete army.mapNodeId;
+      delete army.mapPath;
+      delete army.mapHopCosts;
+      delete army.targetMapNodeId;
+    }
+    const restored = migrateState(oldState, seed.characters, seed);
+    expect(Object.keys(restored.mapNodes ?? {})).toHaveLength(72);
+    const child = seed.map_nodes.find((node) => node.parent_node_id)!;
+    restored.mapNodes![child.node_id].faction = 'CHU';
+    const restoredAgain = migrateState(restored, seed.characters, seed);
+    expect(restoredAgain.mapNodes![child.node_id].faction).toBe('CHU');
   });
 
   it('初始短缺符合国情：匈奴缺粮盐、大雍缺盐马、大楚缺马铁', () => {

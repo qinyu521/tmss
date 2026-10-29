@@ -6,6 +6,7 @@ import type {
   ForceAllocationSeed,
   HouseSeed,
   MapEdgeSeed,
+  MapNodeState,
   MilitaryDistrictSeed,
   RegionState,
   SeedRoster,
@@ -269,6 +270,10 @@ export function buildInitialArmies(ctx: DerivedContext): Army[] {
         commanderName: district.commander,
         districtId: district.district_id,
         nodeId: region.region_id,
+        mapNodeId: ctx.seed.map_nodes.find((n) => n.region === region.region && n.node_type === '州府/主城')?.node_id,
+        mapPath: [],
+        mapHopCosts: [],
+        targetMapNodeId: null,
         originRegionId: region.region_id,
         units,
         levies,
@@ -333,6 +338,40 @@ export function buildRegions(ctx: DerivedContext, initial: Record<string, { grai
     });
   }
   return regions;
+}
+
+/**
+ * 把权威种子中的 72 个据点转成每局独立的控制状态。
+ * 次级节点有自己的驻防与城防；攻占它们不会自动转移整州行政归属。
+ */
+export function buildInitialMapNodes(
+  ctx: DerivedContext,
+  regions: Record<string, RegionState>,
+): Record<string, MapNodeState> {
+  const states: Record<string, MapNodeState> = {};
+  for (const node of ctx.seed.map_nodes) {
+    const territory = ctx.territories.find((t) => t.region === node.region);
+    const region = territory ? regions[territory.region_id] : undefined;
+    if (!region) continue;
+    const isCapital = node.node_type === '州府/主城';
+    const isPass = /关隘|边塞/.test(node.node_type);
+    const isPort = /水军|渡口|港埠/.test(node.node_type);
+    const isDepot = /粮仓|驻军营地|集镇|补给/.test(node.node_type);
+    const garrisonFactor = isCapital ? 1 : isPass ? 0.22 : isPort ? 0.18 : isDepot ? 0.16 : 0.12;
+    states[node.node_id] = {
+      nodeId: node.node_id,
+      name: node.node_name,
+      regionId: region.regionId,
+      nodeType: node.node_type,
+      faction: region.faction,
+      garrison: Math.round((region.garrison * garrisonFactor) / 100) * 100,
+      fortification: isCapital ? region.fortification : isPass ? 62 : isPort ? 44 : isDepot ? 38 : 32,
+      supplyLevel: isCapital ? region.supplyLevel : isDepot ? 76 : 60,
+      terrain: deriveTerrain(node.node_name + ' ' + node.node_type + ' ' + node.terrain_and_risk),
+      resourceProfile: node.resource_profile,
+    };
+  }
+  return states;
 }
 
 const DIPLOMACY_ORDER: Record<FactionKey, number> = { HUN: 0, YONG: 1, CHU: 2 };

@@ -14,10 +14,10 @@ import type {
 import { FACTION_KEYS } from '../types.js';
 import { BALANCE, INITIAL_RESOURCES } from '../balance.js';
 import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
-import { buildContext, buildInitialArmies, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
+import { buildContext, buildInitialArmies, buildInitialMapNodes, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -175,6 +175,7 @@ export function createGame(
   const date = makeDate(0, 1);
   const armies = buildInitialArmies(ctx);
   const regions = buildRegions(ctx, INITIAL_RESOURCES);
+  const mapNodes = buildInitialMapNodes(ctx, regions);
   const persona = selectPlayerPerson(ctx, factionKey, opts.playerRole);
 
   const factions = {} as Record<FactionKey, FactionState>;
@@ -241,6 +242,7 @@ export function createGame(
     date,
     factions,
     regions,
+    mapNodes,
     armies,
     diplomacy,
     special,
@@ -291,10 +293,21 @@ function migrateV1toV2(state: GameState, roster?: CharacterSeed[]): void {
   }
 }
 
-const MIGRATIONS: Migration[] = [{ from: 1, to: 2, apply: migrateV1toV2 }];
+function migrateV2toV3(state: GameState): void {
+  for (const army of state.armies ?? []) {
+    army.mapPath ??= [];
+    army.mapHopCosts ??= [];
+    if (army.targetMapNodeId === undefined) army.targetMapNodeId = null;
+  }
+}
+
+const MIGRATIONS: Migration[] = [
+  { from: 1, to: 2, apply: migrateV1toV2 },
+  { from: 2, to: 3, apply: migrateV2toV3 },
+];
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
-export function migrateState(state: GameState, roster?: CharacterSeed[]): GameState {
+export function migrateState(state: GameState, roster?: CharacterSeed[], mapSeed?: SeedRoster): GameState {
   if (!state.schemaVersion) state.schemaVersion = 1;
   if (!state.intel) state.intel = [];
   if (!state.flags) state.flags = { successionCrisis: false, tribalRefusal: false, houseBoycott: false };
@@ -302,6 +315,22 @@ export function migrateState(state: GameState, roster?: CharacterSeed[]): GameSt
     if (state.schemaVersion === m.from) {
       m.apply(state, roster);
       state.schemaVersion = m.to;
+    }
+  }
+  // 幂等兼容旧存档：不覆盖已有节点控制/驻军，也不打断仍在州府路线上行军的部队。
+  if (mapSeed) {
+    const ctx = buildContext(mapSeed);
+    state.mapNodes ??= buildInitialMapNodes(ctx, state.regions);
+    for (const army of state.armies ?? []) {
+      if (!army.mapNodeId) {
+        const regionName = state.regions[army.nodeId]?.name;
+        army.mapNodeId = ctx.seed.map_nodes.find(
+          (n) => n.region === regionName && n.node_type === '州府/主城',
+        )?.node_id;
+      }
+      army.mapPath ??= [];
+      army.mapHopCosts ??= [];
+      if (army.targetMapNodeId === undefined) army.targetMapNodeId = null;
     }
   }
   return state;

@@ -19,7 +19,18 @@ import { BALANCE } from '../balance.js';
 import { FACTION_SHORT, ROLE_ALLOWED_ORDERS, ROLE_LABEL, SCHEME_LABELS } from '../constants.js';
 import { emitEvent } from './events.js';
 import { clamp, isCharacterAlive } from './state.js';
-import { assignMarch, dayCostsFor, findPath, regionNameById } from './movement.js';
+import {
+  assignMarch,
+  assignMapMarch,
+  capitalMapNodeId,
+  dayCostsFor,
+  findMapPath,
+  findPath,
+  mapNodeNameById,
+  mapNodeRegionId,
+  regionNameById,
+  type PathResult,
+} from './movement.js';
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
@@ -183,7 +194,24 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
           );
         }
       }
-      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+      const useMapRoute = Boolean(state.mapNodes && (army.mapNodeId || order.targetMapNodeId));
+      const targetMapNodeId = state.mapNodes
+        ? order.targetMapNodeId ?? capitalMapNodeId(ctx, order.targetRegionId)
+        : undefined;
+      let path: PathResult;
+      let pathNames: string;
+      if (useMapRoute) {
+        if (!targetMapNodeId || mapNodeRegionId(ctx, targetMapNodeId) !== order.targetRegionId) {
+          return issues('BAD_MAP_TARGET', '目标地图节点必须属于所选州府。');
+        }
+        const fromMapNodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
+        if (!fromMapNodeId) return issues('MAP_NODE_MISSING', '部队当前所在州府没有对应的战略地图节点。');
+        path = findMapPath(state, ctx, army.faction, fromMapNodeId, targetMapNodeId);
+        pathNames = path.path.map((id) => mapNodeNameById(ctx, id)).join(' → ');
+      } else {
+        path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+        pathNames = path.path.map((id) => regionNameById(ctx, id)).join(' → ');
+      }
       if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
 
       const amount = order.amount ?? army.troops;
@@ -222,7 +250,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       return {
         ok: true,
         issues: [],
-        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
+        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${pathNames || (useMapRoute && targetMapNodeId ? mapNodeNameById(ctx, targetMapNodeId) : '目标州府')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
       };
     }
     case 'recruit': {
@@ -448,7 +476,18 @@ export function applyOrder(
     case 'move_army': {
       const army = state.armies.find((a) => a.armyId === order.armyId);
       if (!army) return;
-      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+      const useMapRoute = Boolean(state.mapNodes && (army.mapNodeId || order.targetMapNodeId));
+      const targetMapNodeId = state.mapNodes
+        ? order.targetMapNodeId ?? capitalMapNodeId(ctx, order.targetRegionId)
+        : undefined;
+      let path: PathResult;
+      if (useMapRoute && targetMapNodeId) {
+        const fromMapNodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
+        if (!fromMapNodeId || mapNodeRegionId(ctx, targetMapNodeId) !== order.targetRegionId) return;
+        path = findMapPath(state, ctx, army.faction, fromMapNodeId, targetMapNodeId);
+      } else {
+        path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+      }
       if (!path.ok) return;
       const amount = order.amount ?? army.troops;
       const unitRequests = (order.units ?? []).filter((u) => u.count > 0);
@@ -510,19 +549,29 @@ export function applyOrder(
         );
       }
       const days = dayCostsFor(mover, path.costs, { routeTypes: path.routeTypes, season: seasonOf(state.date.month) });
-      assignMarch(mover, path.path, days, order.targetRegionId);
+      if (useMapRoute && targetMapNodeId) {
+        assignMapMarch(mover, path.path, days, targetMapNodeId, order.targetRegionId);
+      } else {
+        assignMarch(mover, path.path, days, order.targetRegionId);
+      }
       events.push(
         emitEvent(state, {
           type: 'army_move',
           title: `${mover.name}奉命开拔`,
-          summary: `兵力 ${mover.troops.toLocaleString()}，目标${regionNameById(ctx, order.targetRegionId)}，行程 ${days.reduce((s, d) => s + d, 0)} 日。`,
+          summary: `兵力 ${mover.troops.toLocaleString()}，目标${useMapRoute && targetMapNodeId ? mapNodeNameById(ctx, targetMapNodeId) : regionNameById(ctx, order.targetRegionId)}，行程 ${days.reduce((s, d) => s + d, 0)} 日。`,
           actorId,
           actorName,
           factionKey: mover.faction,
           targetId: mover.armyId,
           targetLabel: mover.name,
-          after: { path: path.path, target: order.targetRegionId, days, troops: mover.troops },
-          evidence: '路径由地图边权与行军速度计算',
+          after: {
+            path: path.path,
+            target: order.targetRegionId,
+            targetMapNodeId: useMapRoute ? targetMapNodeId : null,
+            days,
+            troops: mover.troops,
+          },
+          evidence: useMapRoute ? '路径由72节点战略地图、州府道路和据点支路确定' : '路径由地图边权与行军速度计算',
           source,
           visibleToPlayer: mover.faction === fk || source === 'player_order',
         }),

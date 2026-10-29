@@ -1,4 +1,4 @@
-import type { CharacterSeed, ChronicleEntry, GameEvent, GameState } from '@tianming/shared';
+import type { CharacterSeed, ChronicleEntry, GameEvent, GameState, SeedRoster } from '@tianming/shared';
 import { migrateState } from '@tianming/shared';
 import type { Db } from './db.js';
 
@@ -28,12 +28,12 @@ export function saveGameState(db: Db, state: GameState): void {
 }
 
 /** 读取游戏状态；旧版本存档在此按迁移框架补齐字段（roster 用于补人物运行时默认）。 */
-export function getGameState(db: Db, gameId: string, roster?: CharacterSeed[]): GameState | null {
+export function getGameState(db: Db, gameId: string, roster?: CharacterSeed[], mapSeed?: SeedRoster): GameState | null {
   const row = db.prepare('SELECT state_json FROM games WHERE game_id = ?').get(gameId) as
     | { state_json: string }
     | undefined;
   if (!row) return null;
-  return migrateState(JSON.parse(row.state_json) as GameState, roster);
+  return migrateState(JSON.parse(row.state_json) as GameState, roster, mapSeed);
 }
 
 export function listGames(db: Db): any[] {

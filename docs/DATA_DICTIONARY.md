@@ -87,3 +87,12 @@
 - `Army`：`isDetachment`（分遣队）、`isMilitia`（州兵临时编成）；新军队拥有独立统兵官，同一统兵官不能同时统领两军。
 - `Order`：`move_army.amount/units/commanderId`、`recruit.regionId/commanderId/formNewArmy`、`dispatch_garrison`、`scheme`（五类计谋与目标/施计者）。
 - 原有存档缺这些字段时按 0/空兼容，不强制迁移；新存档完整写入。
+
+
+## 5. 战略地图运行时状态
+
+- 权威种子 map_nodes（72 条）与 map_edges（31 条）保持只读。
+- GameState.mapNodes 是按每局生成的动态控制态，按 node_id 记录控制方、驻军、城防、补给、地形与资源画像。
+- Army.nodeId 保留州府行政/军区定位；Army.mapNodeId、mapPath、mapHopCosts 表示实际战略地图位置与行军路线。
+- 附属节点与父州府的连接由 parent_node_id 自动派生，不再依赖额外人工硬编码道路；跨州府道路仍使用原始 map_edges。
+- 读档迁移只在缺失时补齐节点状态，保留已有节点控制与驻军；旧版在途路线继续按旧州府路径走完。

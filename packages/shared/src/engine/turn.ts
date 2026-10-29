@@ -16,7 +16,13 @@ import { FACTION_SHORT, makeDate, TURN_DAYS } from '../constants.js';
 import { emitEvent } from './events.js';
 import { applyOrder, validateOrder } from './orders.js';
 import { generateNpcOrders } from './npc.js';
-import { clearMarch, buildAdjacency } from './movement.js';
+import {
+  clearMarch,
+  buildAdjacency,
+  capitalMapNodeId,
+  mapNodeNameById,
+  retreatMapNode,
+} from './movement.js';
 import { marchFatigueSeasonFactor, SEASON_LABELS, seasonOf } from './season.js';
 import { retreatRegion as retreatGuard, resolveBattle } from './battle.js';
 import { runEconomy, politicalTags, shortageTags } from './economy.js';
@@ -187,14 +193,257 @@ function npcAffordable(state: GameState, order: Order): boolean {
   }
 }
 
+
+/** 次级据点战斗：结算只改变该节点的控制权，不吞并所属整州。 */
+function handleStrategicNodeBattle(
+  state: GameState,
+  ctx: DerivedContext,
+  attacker: Army,
+  mapNodeId: string,
+): GameEvent[] {
+  const events: GameEvent[] = [];
+  const node = state.mapNodes?.[mapNodeId];
+  if (!node) return events;
+  const region = state.regions[node.regionId];
+  if (!region) return events;
+  const originalOwner = node.faction;
+  const defender = state.armies.find(
+    (a) =>
+      a.faction === originalOwner &&
+      a.troops > 0 &&
+      a.armyId !== attacker.armyId &&
+      (a.mapNodeId ? a.mapNodeId === mapNodeId : a.nodeId === node.regionId),
+  );
+  const battleRegion = {
+    ...region,
+    name: node.name,
+    faction: node.faction,
+    garrison: node.garrison,
+    fortification: node.fortification,
+    supplyLevel: node.supplyLevel,
+    terrain: node.terrain,
+    ambushBonus: 0,
+    diversionBonus: 0,
+    diversionFor: null,
+  };
+  const seed = hashString(state.seed + '-' + attacker.armyId + '-' + mapNodeId + '-' + state.date.turn);
+  const before = {
+    nodeOwner: originalOwner,
+    region: region.name,
+    node: node.name,
+    attackerTroops: attacker.troops,
+    defenderTroops: (defender?.troops ?? 0) + node.garrison,
+    garrison: node.garrison,
+  };
+  const outcome = resolveBattle(state, ctx, attacker, defender ?? null, battleRegion, seed);
+  node.garrison = battleRegion.garrison;
+  node.supplyLevel = clamp(node.supplyLevel - 6);
+  attacker.lastBattleTurn = state.date.turn;
+  if (defender) defender.lastBattleTurn = state.date.turn;
+  state.statistics.battles += 1;
+  state.statistics.casualties += outcome.attackerLosses + outcome.defenderLosses + outcome.garrisonLosses;
+  const visible = attacker.faction === state.factionKey || originalOwner === state.factionKey;
+  events.push(
+    emitEvent(state, {
+      type: 'battle',
+      title: attacker.name + '战于' + node.name,
+      summary: outcome.narrative,
+      actorId: attacker.commanderId,
+      actorName: attacker.commanderName,
+      factionKey: attacker.faction,
+      targetId: node.nodeId,
+      targetLabel: node.name,
+      before,
+      after: {
+        totalLosses: outcome.attackerLosses + outcome.defenderLosses + outcome.garrisonLosses,
+        attackerLosses: outcome.attackerLosses,
+        defenderLosses: outcome.defenderLosses + outcome.garrisonLosses,
+        attackerRemaining: outcome.attackerRemaining,
+        defenderRemaining: outcome.defenderRemaining,
+        attackerWon: outcome.attackerWon,
+      },
+      payload: {
+        mapNodeId: node.nodeId,
+        ratio: outcome.replay.ratio,
+        terrain: outcome.replay.terrain,
+        fort: outcome.replay.fort,
+        seed: outcome.seed,
+        attackerPower: outcome.attackerPower,
+        defenderPower: outcome.defenderPower,
+        defenderFaction: originalOwner,
+        defenderArmy: defender?.name ?? '据点守军',
+        attackerCommander: outcome.replay.attackerCommander,
+        defenderCommander: outcome.replay.defenderCommander,
+        maneuverBonus: outcome.replay.maneuverBonus,
+        ambushBonus: outcome.replay.ambushBonus,
+        diversionBonus: outcome.replay.diversionBonus,
+      },
+      evidence: '战略节点 ' + node.nodeId + '；确定性战斗种子 ' + outcome.seed,
+      source: 'engine',
+      visibleToPlayer: visible,
+    }),
+  );
+
+  if (outcome.attackerWon) {
+    node.faction = attacker.faction;
+    node.garrison = 0;
+    node.supplyLevel = clamp(node.supplyLevel - 12);
+    state.statistics.occupiedMapNodes = (state.statistics.occupiedMapNodes ?? 0) + 1;
+    attacker.mapNodeId = node.nodeId;
+    attacker.nodeId = node.regionId;
+    clearMarch(attacker);
+    attacker.supply = clamp(attacker.supply - 6);
+    attacker.fatigue = clamp(attacker.fatigue + 8);
+    if (attacker.troops < 60) state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
+
+    if (defender) {
+      if (defender.troops >= 60) {
+        const retreatNode = retreatMapNode(state, ctx, defender, node.nodeId);
+        if (retreatNode) {
+          defender.mapNodeId = retreatNode;
+          defender.nodeId = state.mapNodes?.[retreatNode]?.regionId ?? defender.nodeId;
+          defender.supply = clamp(defender.supply - 18);
+          defender.morale = clamp(defender.morale - 12);
+          clearMarch(defender);
+        } else {
+          const retreat = retreatGuard(state, ctx, defender, node.regionId);
+          if (retreat) {
+            defender.nodeId = retreat;
+            defender.mapNodeId = capitalMapNodeId(ctx, retreat);
+            defender.supply = clamp(defender.supply - 18);
+            defender.morale = clamp(defender.morale - 12);
+            clearMarch(defender);
+          } else {
+            state.armies = state.armies.filter((a) => a.armyId !== defender.armyId);
+          }
+        }
+      } else {
+        state.armies = state.armies.filter((a) => a.armyId !== defender.armyId);
+      }
+    }
+    events.push(
+      emitEvent(state, {
+        type: 'occupation',
+        title: '夺取' + node.name,
+        summary: attacker.name + '夺取' + node.name + '。该节点已易手，但' + region.name + '的行政归属未改变。',
+        actorId: attacker.commanderId,
+        actorName: attacker.commanderName,
+        factionKey: attacker.faction,
+        targetId: node.nodeId,
+        targetLabel: node.name,
+        before: { nodeOwner: originalOwner, regionOwner: region.faction },
+        after: { nodeOwner: node.faction, regionOwner: region.faction },
+        evidence: '仅变更战略节点控制权；州府行政归属独立结算',
+        source: 'engine',
+        visibleToPlayer: visible,
+      }),
+    );
+  } else {
+    const retreatNode = retreatMapNode(state, ctx, attacker, node.nodeId);
+    if (retreatNode) {
+      attacker.mapNodeId = retreatNode;
+      attacker.nodeId = state.mapNodes?.[retreatNode]?.regionId ?? attacker.nodeId;
+    } else {
+      const retreat = retreatGuard(state, ctx, attacker, node.regionId);
+      if (retreat) {
+        attacker.nodeId = retreat;
+        attacker.mapNodeId = capitalMapNodeId(ctx, retreat);
+      } else {
+        state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
+      }
+    }
+    clearMarch(attacker);
+    attacker.morale = clamp(attacker.morale - 10);
+    attacker.supply = clamp(attacker.supply - 12);
+    if (attacker.troops < 60) state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
+  }
+  return events;
+}
+
 function processMovement(state: GameState, ctx: DerivedContext, events: GameEvent[]): void {
   // 夏季暑热：行军疲劳 +20%，匈奴骑兵不耐暑再 +15%（系数在 balance.seasons）
   const season = seasonOf(state.date.month);
-  const movementArmies = state.armies.filter((a) => a.path.length > 0);
+  const movementArmies = state.armies.filter((a) => (a.mapPath?.length ?? 0) > 0 || a.path.length > 0);
   for (const army of movementArmies) {
     if (!state.armies.some((a) => a.armyId === army.armyId)) continue;
     let remainingDays = TURN_DAYS;
-    while (remainingDays > 0 && army.path.length > 0) {
+    if (army.mapPath?.length && state.mapNodes) {
+      while (remainingDays > 0 && (army.mapPath?.length ?? 0) > 0) {
+        const hop = Math.max(1, army.mapHopCosts?.[0] ?? 1);
+        if (remainingDays < hop) {
+          army.mapCurrentHopDaysTotal ??= hop;
+          army.mapHopCosts![0] = Math.max(1, hop - remainingDays);
+          army.marchDaysLeft = army.mapHopCosts!.reduce((sum, days) => sum + days, 0);
+          remainingDays = 0;
+          break;
+        }
+        remainingDays -= hop;
+        const nextMapNodeId = army.mapPath!.shift() as string;
+        army.mapHopCosts!.shift();
+        army.mapCurrentHopDaysTotal = army.mapHopCosts![0] ?? 0;
+        army.marchDaysLeft = army.mapHopCosts!.reduce((sum, days) => sum + days, 0);
+        const previousMapNodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
+        const previousRegionId = army.nodeId;
+        const node = state.mapNodes[nextMapNodeId];
+        if (!node) {
+          clearMarch(army);
+          break;
+        }
+        army.mapNodeId = nextMapNodeId;
+        army.nodeId = node.regionId;
+        army.originRegionId = previousRegionId;
+        army.supply = clamp(army.supply - hop * BALANCE.army.marchSupplyDrainPerDay);
+        army.fatigue = clamp(army.fatigue + hop * BALANCE.army.fatigueMarchPerDay * marchFatigueSeasonFactor(season, army.faction));
+
+        if (node.faction !== army.faction) {
+          if (isAtWar(state.diplomacy, army.faction, node.faction)) {
+            const battleEvents = node.nodeType === '州府/主城'
+              ? handleBattle(state, ctx, army, node.regionId, node.nodeId)
+              : handleStrategicNodeBattle(state, ctx, army, node.nodeId);
+            events.push(...battleEvents);
+            break;
+          }
+          army.mapNodeId = previousMapNodeId;
+          army.nodeId = previousRegionId;
+          clearMarch(army);
+          events.push(
+            emitEvent(state, {
+              type: 'army_move',
+              title: army.name + '被边境拒止',
+              summary: '目标据点' + node.name + '由未交战势力控制，部队退回' + mapNodeNameById(ctx, previousMapNodeId ?? previousRegionId) + '。',
+              actorId: army.commanderId,
+              actorName: army.commanderName,
+              factionKey: army.faction,
+              targetId: army.armyId,
+              targetLabel: army.name,
+              source: 'engine',
+              visibleToPlayer: army.faction === state.factionKey,
+            }),
+          );
+          break;
+        }
+
+        army.supply = clamp(army.supply + 4);
+        if (army.mapPath.length === 0) {
+          clearMarch(army);
+          events.push(
+            emitEvent(state, {
+              type: 'army_move',
+              title: army.name + '抵达' + node.name,
+              summary: '部队完成行军，驻于' + node.name + '（' + state.regions[node.regionId]?.name + '），补给 ' + Math.round(army.supply) + '，疲劳 ' + Math.round(army.fatigue) + '。',
+              actorId: army.commanderId,
+              actorName: army.commanderName,
+              factionKey: army.faction,
+              targetId: army.armyId,
+              targetLabel: army.name,
+              source: 'engine',
+              visibleToPlayer: army.faction === state.factionKey,
+            }),
+          );
+        }
+      }
+    } else {
+      while (remainingDays > 0 && army.path.length > 0) {
       const hop = Math.max(1, army.hopCosts[0] ?? 1);
       if (remainingDays < hop) {
         army.marchDaysLeft = Math.max(0, army.marchDaysLeft - remainingDays);
@@ -207,6 +456,7 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
       army.marchDaysLeft = army.hopCosts.reduce((s, d) => s + d, 0);
       const previous = army.nodeId;
       army.nodeId = nextRegionId;
+      army.mapNodeId = capitalMapNodeId(ctx, nextRegionId);
       army.originRegionId = previous;
       const region = state.regions[nextRegionId];
       army.supply = clamp(army.supply - hop * BALANCE.army.marchSupplyDrainPerDay);
@@ -256,6 +506,7 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
         );
       }
     }
+    }
     // 旬末补给与疲劳
     if (army.status === 'marching') {
       army.supply = clamp(army.supply - 5);
@@ -286,7 +537,10 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
   for (const army of state.armies) {
     if (army.status === 'idle' && army.nodeId) {
       const region = state.regions[army.nodeId];
-      if (region && region.faction === army.faction) {
+      const locationFaction = army.mapNodeId && state.mapNodes
+        ? state.mapNodes[army.mapNodeId]?.faction
+        : region?.faction;
+      if (region && locationFaction === army.faction) {
         army.supply = clamp(army.supply + 8);
         army.fatigue = clamp(army.fatigue - 8);
         army.morale = clamp(army.morale + 1);
@@ -298,12 +552,23 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
   state.armies = state.armies.filter((a) => a.troops >= 60);
 }
 
-function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, regionId: string): GameEvent[] {
+function handleBattle(
+  state: GameState,
+  ctx: DerivedContext,
+  attacker: Army,
+  regionId: string,
+  mapNodeId?: string,
+): GameEvent[] {
   const events: GameEvent[] = [];
   const region = state.regions[regionId];
+  const capitalNode = mapNodeId ? state.mapNodes?.[mapNodeId] : state.mapNodes?.[capitalMapNodeId(ctx, regionId) ?? ''];
   const originalOwner = region.faction;
   const defender = state.armies.find(
-    (a) => a.faction === region.faction && a.nodeId === regionId && a.troops > 0 && a.armyId !== attacker.armyId,
+    (a) =>
+      a.faction === region.faction &&
+      a.troops > 0 &&
+      a.armyId !== attacker.armyId &&
+      (mapNodeId ? (a.mapNodeId ? a.mapNodeId === mapNodeId : a.nodeId === regionId) : a.nodeId === regionId),
   );
   const seed = hashString(`${state.seed}-${attacker.armyId}-${regionId}-${state.date.turn}`);
   const before = {
@@ -314,6 +579,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     garrison: region.garrison,
   };
   const outcome = resolveBattle(state, ctx, attacker, defender ?? null, region, seed);
+  if (capitalNode?.nodeType === '州府/主城') capitalNode.garrison = region.garrison;
   // 记录本旬参战主将，生命周期据此追加战死概率
   attacker.lastBattleTurn = state.date.turn;
   if (defender) defender.lastBattleTurn = state.date.turn;
@@ -371,6 +637,11 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     region.threat = 30;
     region.garrison = 0;
     region.garrisoned = false;
+    const heldCapital = state.mapNodes?.[capitalMapNodeId(ctx, regionId) ?? ''];
+    if (heldCapital?.nodeType === '州府/主城') {
+      heldCapital.faction = attacker.faction;
+      heldCapital.garrison = 0;
+    }
     for (const key of FACTION_KEYS) {
       state.factions[key].control = Object.values(state.regions)
         .filter((r) => r.faction === key)
@@ -378,6 +649,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     }
     state.statistics.occupiedRegions += 1;
     attacker.nodeId = regionId;
+    attacker.mapNodeId = mapNodeId ?? capitalMapNodeId(ctx, regionId);
     clearMarch(attacker);
     attacker.supply = clamp(attacker.supply - 6);
     attacker.fatigue = clamp(attacker.fatigue + 8);
@@ -391,6 +663,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
         const retreat = retreatGuard(state, ctx, defender, regionId);
         if (retreat) {
           defender.nodeId = retreat;
+          defender.mapNodeId = capitalMapNodeId(ctx, retreat);
           defender.supply = clamp(defender.supply - 18);
           defender.morale = clamp(defender.morale - 12);
           clearMarch(defender);
@@ -423,6 +696,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     const retreat = retreatGuard(state, ctx, attacker, regionId);
     if (retreat) {
       attacker.nodeId = retreat;
+      attacker.mapNodeId = capitalMapNodeId(ctx, retreat);
     } else {
       state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
     }
