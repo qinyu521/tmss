@@ -331,6 +331,63 @@ describe('正式朝议', () => {
   });
 });
 
+describe('人物目标与自主行动', () => {
+  it('地方主官会付出银钱整饬低秩序地区，并记录行动前后事实', () => {
+    const state = newGame('HUN', 'ruler', 'goal-governor');
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    const region = Object.values(state.regions)
+      .filter((item) => item.faction === 'YONG')
+      .sort((a, b) => a.regionId.localeCompare(b.regionId))[0];
+    region.order = 25;
+    region.loyalty = 30;
+    const governorId = region.governorId;
+
+    const result = runTurn(state, ctx);
+    const action = result.report.events.find(
+      (event) => event.type === 'npc_action' && event.payload?.action === 'stabilize_region' && event.targetId === region.regionId,
+    );
+    expect(action).toBeTruthy();
+    expect(action?.before?.cash).toBeGreaterThan(action?.after?.cash as number);
+    expect((action?.before?.cash as number) - (action?.after?.cash as number)).toBe(4_000);
+    expect(action?.before?.order).toBe(25);
+    expect(action?.after?.order).toBe(28);
+    expect(action?.before?.loyalty).toBe(30);
+    expect(action?.after?.loyalty).toBe(32);
+    expect(result.state.characters[governorId].goal).toBe('stabilize_region');
+    expect(result.state.characters[governorId].goalLastActionTurn).toBe(1);
+  });
+
+  it('未获安抚的匈奴部落会每四回合施压，记录忠诚变化', () => {
+    const state = newGame('YONG', 'ruler', 'goal-tribe');
+    const tribe = state.special.HUN.tribes![0];
+    tribe.loyalty = 35;
+    tribe.lastGiftTurn = 0;
+    state.factions.HUN.resources.cash = 0;
+    const result = runTurn(state, ctx);
+    const action = result.report.events.find(
+      (event) => event.type === 'npc_action' && event.payload?.action === 'demand_patronage' && event.targetId === tribe.tribeId,
+    );
+    expect(action).toBeTruthy();
+    expect(action?.before?.loyalty).toBe(35);
+    expect(action?.after?.loyalty).toBe(33);
+    expect(result.state.characters[tribe.chiefId].goal).toBe('demand_patronage');
+  });
+
+  it('NPC 将领的整军目标会优先生成休整军令', () => {
+    const state = newGame('YONG', 'ruler', 'goal-army');
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    army.supply = 40;
+    army.fatigue = 60;
+    army.morale = 35;
+    state.characters[army.commanderId].goal = 'restore_readiness';
+    state.characters[army.commanderId].goalTargetId = army.armyId;
+
+    const orders = generateNpcOrders(state, ctx);
+    expect(orders.some((order) => order.orderId.startsWith('npc-CHU') && order.kind === 'rest_army' && order.armyId === army.armyId)).toBe(true);
+  });
+});
+
 describe('回合结算', () => {
   it('推进 7 天后日期、回合与事件均更新', () => {
     const state = newGame('YONG');
@@ -620,7 +677,7 @@ describe('存档快照', () => {
     expect(restored.date.label).toBe(result.state.date.label);
     expect(restored.armies.length).toBe(result.state.armies.length);
     expect(restored.factions.YONG.resources).toEqual(result.state.factions.YONG.resources);
-    expect(restored.schemaVersion).toBe(4);
+    expect(restored.schemaVersion).toBe(5);
   });
 });
 
