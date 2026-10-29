@@ -4,6 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   BALANCE,
+  computeEconomy,
+  grainDemandForTroops,
+  perThousandDemand,
+  shortageTags,
   UNIT_PROFILES,
   applyUnitNames,
   buildContext,
@@ -132,6 +136,31 @@ describe('命令权限', () => {
     const res = validateOrder(state, ctx, { orderId: 'o5', kind: 'recruit', amount: 10_000 });
     expect(res.ok).toBe(false);
     expect(res.issues[0].code).toBe('NO_CASH');
+  });
+});
+
+describe('资源消耗单位', () => {
+  it('把每千人每周消耗换算为实际部队消耗，不放大千倍', () => {
+    expect(grainDemandForTroops(400_000)).toBe(48_000);
+    expect(grainDemandForTroops(400_000, 3)).toBe(144_000);
+    expect(grainDemandForTroops(800_000)).toBe(96_000);
+    expect(perThousandDemand(800_000, BALANCE.saltPerThousandPerWeek, 3)).toBe(3_600);
+  });
+
+  it('经济账本与粮草短缺标签使用相同的单位口径', () => {
+    const yong = newGame('YONG');
+    expect(computeEconomy(yong, ctx).YONG.grainUsed).toBe(96_000);
+    expect(shortageTags(yong, 'YONG')).not.toContain('粮草紧张');
+
+    const hun = newGame('HUN');
+    expect(shortageTags(hun, 'HUN')).toContain('粮草紧张');
+  });
+
+  it('NPC 在真实储粮阈值以下才生成征粮命令', () => {
+    const state = newGame('HUN');
+    state.factions.YONG.resources.grain = 250_000;
+    const orders = generateNpcOrders(state, ctx);
+    expect(orders.some((order) => order.orderId.startsWith('npc-YONG') && order.kind === 'levy_grain')).toBe(false);
   });
 });
 
