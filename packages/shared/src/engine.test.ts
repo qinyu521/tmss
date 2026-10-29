@@ -731,6 +731,56 @@ describe('将领倒戈与挽回', () => {
     }
   });
 
+  it('旧部连锁动摇只影响最多三名明确旧部，并排除敌对关系', () => {
+    const state = newGame('CHU', 'ruler', 'defection-ripple-cap-and-hostility');
+    state.diplomacy['HUN|CHU'] = -100;
+    const chuArmies = state.armies.filter((item) => item.faction === 'CHU');
+    const defectingArmy = chuArmies[0]!;
+    const defectorId = defectingArmy.commanderId;
+    const followers = chuArmies.filter((item) => item.commanderId !== defectorId);
+    const rivalRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    const previous = ctx.seed.relationships;
+    const extra = followers.map((army, index) => ({
+      faction: '大楚',
+      source_person_id: army.commanderId,
+      source_name: ctx.charactersById[army.commanderId]!.name,
+      relation: index === 0 ? '旧部效忠' : '部属追随',
+      target_person_id: defectorId,
+      target_name: ctx.charactersById[defectorId]!.name,
+      strength: '强',
+      notes: index === 0 ? '明确旧部关系，但同时存在敌对与不和' : '明确旧部、主从与效忠关系',
+    }));
+    ctx.seed.relationships = [
+      ...previous,
+      {
+        faction: '大楚—匈奴',
+        source_person_id: defectorId,
+        source_name: ctx.charactersById[defectorId]!.name,
+        relation: '旧主恩情',
+        target_person_id: rivalRuler.person_id,
+        target_name: rivalRuler.name,
+        strength: '强',
+        notes: '昔日主从、效忠与知遇之恩',
+      },
+      ...extra,
+    ];
+    state.characters[defectorId].militaryLoyalty = 10;
+    for (const army of followers) state.characters[army.commanderId].militaryLoyalty = 40;
+    try {
+      resolveCommanderDefectionThreats(state, ctx, []);
+      state.date.turn += 1;
+      const events: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, events);
+      const rippleEvents = events.filter((event) => event.title.includes('旧部动摇'));
+      expect(defectingArmy.faction).toBe('HUN');
+      expect(rippleEvents).toHaveLength(3);
+      expect(state.characters[followers[0]!.commanderId].militaryLoyalty).toBe(40);
+      expect(followers.slice(1).filter((army) => state.characters[army.commanderId].militaryLoyalty === 34)).toHaveLength(3);
+    } finally {
+      ctx.seed.relationships = previous;
+    }
+  });
+
   it('低忠诚将领先收到一旬预警；若无人挽回，会携军献城并改变势力归属', () => {
     const state = newGame('CHU', 'ruler', 'defection-resolution');
     const army = state.armies.find((item) => item.faction === 'CHU')!;
