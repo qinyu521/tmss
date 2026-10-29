@@ -87,7 +87,7 @@
 
 ### 5.1 战报回放
 
-- 回放**不是重新结算**：`buildBattleReplay(event)` 只读取 battle 事件已持久化的 `payload`（种子、兵力比、地形、城防、双方统兵官与计谋加成）与 `before/after`（双方兵力、伤亡、胜负），把真实结算结果**确定性展开**为 3-6 个阶段。
+- 回放**不是重新结算**：`buildBattleReplay(event)` 只读取 battle 事件已持久化的 `payload`（种子、兵力比、地形、城防、双方统兵官与计谋加成）与 `before/after`（双方兵力、伤亡、胜负），把真实结算结果**确定性展开**为 3-6 个阶段。前端再把阶段播放为 Three.js 战场视图，按兵力比例显示双方阵列、地形、接战/迂回/相持/决胜和溃退；不再通过动画计算伤亡或改变胜负。WebGL 不可用时回退为二维阵列演出。
 - 阶段编排：佯攻（如有 `diversionBonus`）→ 接战 → 伏兵（如有 `ambushBonus`）→ 骑兵迂回（如有 `maneuverBonus`）→ 相持 → 决胜。
 - 伤亡按阶段权重分摊并累计取整，各阶段兵力单调递减；**最终阶段兵力精确等于事件 `after.attackerRemaining / defenderRemaining`**，伤亡总数与胜负不得与事件矛盾。
 - 随机只来自 `mulberry32(payload.seed)`；同一事件多次构建结果完全相同，可用于校验与前端分镜播放。
