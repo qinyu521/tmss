@@ -85,6 +85,9 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   // 0.5) 盟约到期在本回合命令提交前结算；历史条约保留为 expired。
   expireDiplomaticTreaties(state, events);
 
+  // 0.75) 己方行政州府掌握的战略节点自然恢复少量储备；孤立前线据点不自动补库。
+  replenishHomeNodeSupply(state);
+
   // 1) 玩家命令：先校验，再按提交顺序结算
   for (const order of state.pendingOrders) {
     const check = validateOrder(state, ctx, order);
@@ -466,6 +469,15 @@ function processMapMovement(state: GameState, ctx: DerivedContext, events: GameE
         );
       }
     }
+  }
+}
+
+/** 后方节点由同一势力掌握州府行政权时可恢复少量储备；敌境里的孤立前哨不会凭空补库。 */
+function replenishHomeNodeSupply(state: GameState): void {
+  for (const node of Object.values(state.mapNodes ?? {})) {
+    const region = state.regions[node.regionId];
+    if (!region || node.faction !== region.faction || node.supplyLevel >= 100) continue;
+    node.supplyLevel = clamp(node.supplyLevel + BALANCE.mapNodeLogistics.homeSupplyLevelRecovery);
   }
 }
 
