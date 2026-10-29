@@ -161,6 +161,39 @@ describe('API 集成', () => {
     expect(turnBody.report.chronicle.length).toBeGreaterThan(0);
   });
 
+  it('朝议议案通过 API 提交，并在结束本旬后生成投票事件', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'YONG', playerRole: 'ruler', seed: 20261029 },
+    });
+    expect(created.statusCode).toBe(200);
+    const gid = created.json().gameId as string;
+    const submit = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: {
+        orders: [{
+          orderId: 'court-api-test',
+          kind: 'court_debate',
+          topic: 'factions',
+          resolution: 'balance',
+        }],
+      },
+    });
+    expect(submit.statusCode).toBe(200);
+    expect(submit.json().accepted).toHaveLength(1);
+
+    const turn = await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
+    expect(turn.statusCode).toBe(200);
+    const debate = turn.json().report.events.find((event: any) => event.title.startsWith('朝议·派系与朝局议案'));
+    expect(debate).toBeTruthy();
+    expect(debate.type).toBe('politics');
+    expect(typeof debate.after.passed).toBe('boolean');
+    expect(Array.isArray(debate.payload.supporters)).toBe(true);
+    expect(Array.isArray(debate.payload.opponents)).toBe(true);
+  });
+
   it('分兵/州兵/计谋可通过 API 下达并结算', async () => {
     const created = await app.inject({
       method: 'POST',

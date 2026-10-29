@@ -579,12 +579,16 @@ export type OrderKind =
   | 'appease_tribe'
   | 'balance_princes'
   | 'negotiate_house'
+  | 'court_debate'
   | 'appoint'
   | 'rest_army'
   | 'scout'
   | 'scheme';
 
 export type SchemeKind = 'fire' | 'cut_supply' | 'sow_discord' | 'ambush' | 'feint';
+
+export type CourtTopic = 'military' | 'taxation' | 'factions';
+export type CourtResolution = 'mobilize' | 'consolidate' | 'raise' | 'relieve' | 'balance' | 'patronize';
 
 export type Order =
   | {
@@ -621,6 +625,7 @@ export type Order =
   | { orderId: string; kind: 'appease_tribe'; tribeId: string; amount: number }
   | { orderId: string; kind: 'balance_princes'; amount: number }
   | { orderId: string; kind: 'negotiate_house'; houseId: string; amount: number }
+  | { orderId: string; kind: 'court_debate'; topic: CourtTopic; resolution: CourtResolution }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }

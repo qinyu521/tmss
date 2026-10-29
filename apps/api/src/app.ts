@@ -117,6 +117,12 @@ const orderSchema = z.discriminatedUnion('kind', [
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('appease_tribe'), tribeId: z.string().min(1), amount: z.number().finite() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('balance_princes'), amount: z.number().finite() }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('negotiate_house'), houseId: z.string().min(1), amount: z.number().finite() }),
+  z.object({
+    orderId: z.string().min(1).max(80),
+    kind: z.literal('court_debate'),
+    topic: z.enum(['military', 'taxation', 'factions']),
+    resolution: z.enum(['mobilize', 'consolidate', 'raise', 'relieve', 'balance', 'patronize']),
+  }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('appoint'), personId: z.string().min(1), regionId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('rest_army'), armyId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('scout'), regionId: z.string().min(1) }),

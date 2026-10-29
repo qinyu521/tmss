@@ -12,6 +12,7 @@ import {
   runTurn,
   validateOrder,
   type GameState,
+  type Order,
   type SeedRoster,
 } from './index.js';
 
@@ -131,6 +132,58 @@ describe('命令权限', () => {
     const res = validateOrder(state, ctx, { orderId: 'o5', kind: 'recruit', amount: 10_000 });
     expect(res.ok).toBe(false);
     expect(res.issues[0].code).toBe('NO_CASH');
+  });
+});
+
+describe('正式朝议', () => {
+  it('朝议使用确定性投票，记录表态、票数与政策前后状态', () => {
+    const state = newGame('YONG', 'ruler', 'court-debate');
+    const order: Order = {
+      orderId: 'court-balance-1',
+      kind: 'court_debate',
+      topic: 'factions',
+      resolution: 'balance',
+    };
+    const validation = validateOrder(state, ctx, order);
+    expect(validation.ok).toBe(true);
+    expect(validation.preview).toContain('列席官员');
+    const submitted = clone(state);
+    submitted.pendingOrders.push(order);
+
+    const first = runTurn(submitted, ctx);
+    const second = runTurn(submitted, ctx);
+    const event = first.report.events.find((item) => item.title.startsWith('朝议·派系与朝局议案'));
+    const repeated = second.report.events.find((item) => item.title.startsWith('朝议·派系与朝局议案'));
+    expect(event).toBeTruthy();
+    expect(event?.type).toBe('politics');
+    expect(event?.before?.politicalMetric).toBeTypeOf('number');
+    expect(event?.after?.passed).toBeTypeOf('boolean');
+    expect(event?.payload?.supportVotes).toBeTypeOf('number');
+    expect(event?.payload?.opposeVotes).toBeTypeOf('number');
+    expect(event?.payload?.supporters).toBeInstanceOf(Array);
+    expect(event?.payload?.opponents).toBeInstanceOf(Array);
+    expect(repeated?.payload).toEqual(event?.payload);
+    expect(repeated?.after).toEqual(event?.after);
+  });
+
+  it('朝议不接受不匹配的议题与裁决，并校验政策资源成本', () => {
+    const state = newGame('HUN');
+    const invalid: Order = {
+      orderId: 'court-invalid-pair',
+      kind: 'court_debate',
+      topic: 'factions',
+      resolution: 'mobilize',
+    };
+    expect(validateOrder(state, ctx, invalid).issues[0].code).toBe('BAD_DEBATE');
+
+    state.factions.HUN.resources.grain = 0;
+    const tooExpensive: Order = {
+      orderId: 'court-no-grain',
+      kind: 'court_debate',
+      topic: 'military',
+      resolution: 'mobilize',
+    };
+    expect(validateOrder(state, ctx, tooExpensive).issues[0].code).toBe('NO_GRAIN');
   });
 });
 
