@@ -22,7 +22,7 @@
 | noble_titles | 24 | rank_id | 爵位与持有者 |
 | relationships | 183 | 组合 | 人物关系（配偶/亲属/僚属等） |
 | map_nodes | 72 | node_id | 州府主城、关隘、港口、粮仓、矿场等 |
-| map_edges | 31 | edge_id | 原始道路连接、类型与移动成本 |
+| map_edges | 31 | edge_id | 原始道路连接、基础移动成本、道路类型与通行容量 |
 | military_units | 22 | unit_id | 特殊兵种名称、定位、强弱与限制 |
 | national_force_allocations | 18 | allocation_id | 每国 6 个军区的初始兵力 |
 | prototype_affinity_audit | 336 | person_id | 原型归属审计 |
@@ -49,6 +49,7 @@
 | `data/derived/map_extra.json` | 派生地图边（本版 0 条） | 31 条原始边已使 24 州府完全连通；若扩充需写 `derived_reason` |
 | `data/derived/map_art.json` | 河流、湖泊、山脉、森林、海岸线、首都标记 | 原创架空地理，仅视觉表现，不改变道路与控制 |
 | `packages/shared/src/unitProfiles.ts` | 22 兵种攻防/远程/机动/补给/地形/克制/初始编制/全国上限/招募 | 名称与描述来自种子，数值与编制为原创平衡 |
+| `packages/shared/src/engine/movement.ts` | 道路容量倍率与有效行军成本 | 从 `map_edges.throughput` 读取，不改写权威种子；影响路线选择及实际行军耗时 |
 | `packages/shared/src/dataset.ts` | 州府人口/产出/地形推导 | 由 `regional_profile`、`key_locations` 关键词 + 势力修正；公式固定可审查 |
 | `packages/shared/src/dataset.ts` | 军区驻地映射 | 军区名称与防区语义（别名表 `DISTRICT_REGION_ALIASES`）；未改种子 |
 | `apps/web/src/three/mapScene.ts` | 州府显示偏移 | 原始种子中赤河州（HUN）与辽东州（YONG）同为 `(5,2)`；仅前端将后出现的辽东州及其节点/部队偏移 `(+0.38,+0.42)`，避免显示重叠。原始 JSON 与引擎坐标不变。 |

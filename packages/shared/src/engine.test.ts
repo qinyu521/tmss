@@ -14,7 +14,10 @@ import {
   buildAdjacency,
   buildMapAdjacency,
   capitalMapNodeId,
+  dayCostsFor,
   findMapPath,
+  findPath,
+  routeCapacityMultiplier,
   migrateState,
   buildPlayerView,
   createGame,
@@ -330,6 +333,75 @@ describe('正式朝议', () => {
       resolution: 'mobilize',
     };
     expect(validateOrder(state, ctx, tooExpensive).issues[0].code).toBe('NO_GRAIN');
+  });
+});
+
+describe('道路通行能力与大军寻路', () => {
+  it('按容量标签和兵力阈值稳定计算通行倍率', () => {
+    expect(routeCapacityMultiplier(10_000, '高')).toBe(1);
+    expect(routeCapacityMultiplier(10_000, '低')).toBe(1);
+    expect(routeCapacityMultiplier(25_000, '低')).toBe(1.18);
+    expect(routeCapacityMultiplier(49_999, '低')).toBe(1.18);
+    expect(routeCapacityMultiplier(50_000, '低')).toBe(1.4);
+    expect(routeCapacityMultiplier(24_999, '争议')).toBe(1.1);
+    expect(routeCapacityMultiplier(25_000, '争议')).toBe(1.3);
+    expect(routeCapacityMultiplier(50_000, '中低')).toBe(1.6);
+    expect(routeCapacityMultiplier(50_000, '中')).toBe(1.1);
+    expect(routeCapacityMultiplier(60_000, '未标注')).toBe(1);
+  });
+
+  it('小部队走短支路，大军改走高容量官道（州府图和72节点地图）', () => {
+    const routingCtx = clone(ctx);
+    const [origin, middle, destination] = ctx.territories.slice(0, 3);
+    if (!origin || !middle || !destination || !routingCtx.edges[0]) throw new Error('测试州府或道路种子缺失。');
+    const makeEdge = (edgeId: string, from: typeof origin, to: typeof middle, cost: number, throughput: string) => ({
+      ...routingCtx.edges[0],
+      edge_id: edgeId,
+      from_region: from.region,
+      to_region: to.region,
+      base_movement_cost: cost,
+      route_type: throughput === '高' ? '官道' : '山道/支路',
+      throughput,
+    });
+    routingCtx.edges = [
+      makeEdge('TEST-A-B-LOW', origin, middle, 2, '低'),
+      makeEdge('TEST-B-C-LOW', middle, destination, 2, '低'),
+      makeEdge('TEST-A-C-HIGH', origin, destination, 5, '高'),
+    ];
+
+    const state = newGame('HUN', 'ruler', 'road-capacity-routing');
+    for (const region of Object.values(state.regions)) region.faction = 'HUN';
+    for (const node of Object.values(state.mapNodes ?? {})) node.faction = 'HUN';
+
+    const smallRegionPath = findPath(state, routingCtx, 'HUN', origin.region_id, destination.region_id, { troops: 10_000 });
+    const largeRegionPath = findPath(state, routingCtx, 'HUN', origin.region_id, destination.region_id, { troops: 60_000 });
+    expect(smallRegionPath.ok).toBe(true);
+    expect(largeRegionPath.ok).toBe(true);
+    expect(smallRegionPath.path).toEqual([middle.region_id, destination.region_id]);
+    expect(largeRegionPath.path).toEqual([destination.region_id]);
+    expect(largeRegionPath.totalDays).toBe(5);
+    expect(smallRegionPath.totalDays).toBe(4);
+
+    const originNode = capitalMapNodeId(routingCtx, origin.region_id);
+    const middleNode = capitalMapNodeId(routingCtx, middle.region_id);
+    const destinationNode = capitalMapNodeId(routingCtx, destination.region_id);
+    if (!originNode || !middleNode || !destinationNode) throw new Error('测试州府缺少主城节点。');
+    const smallMapPath = findMapPath(state, routingCtx, 'HUN', originNode, destinationNode, { troops: 10_000 });
+    const largeMapPath = findMapPath(state, routingCtx, 'HUN', originNode, destinationNode, { troops: 60_000 });
+    expect(smallMapPath.ok).toBe(true);
+    expect(largeMapPath.ok).toBe(true);
+    expect(smallMapPath.path).toEqual([middleNode, destinationNode]);
+    expect(largeMapPath.path).toEqual([destinationNode]);
+
+    const sampleArmy = {
+      ...state.armies.find((army) => army.faction === 'HUN')!,
+      troops: 60_000,
+      levies: 60_000,
+      units: [],
+    };
+    expect(dayCostsFor(sampleArmy, [1], { season: 'spring' })).toEqual([1]);
+    // 如果逐段四舍五入，1.4 / 当前速度很可能仍只有 1 天；容量成本累计后至少落实为额外整日。
+    expect(dayCostsFor(sampleArmy, [1.4], { season: 'spring' })).toEqual([2]);
   });
 });
 
