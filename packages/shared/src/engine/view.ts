@@ -221,7 +221,9 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
       stance: army.stance,
       path: own ? army.path : [],
       targetRegionId: own ? army.targetRegionId : null,
-      progress: own && army.marchDaysTotal > 0 ? 1 - army.marchDaysLeft / army.marchDaysTotal : 0,
+      progress: own && army.path.length > 0 && (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 0) > 0
+        ? Math.max(0, Math.min(1, 1 - (army.hopCosts[0] ?? 0) / (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 1)))
+        : 0,
       troops: own ? army.troops : undefined,
       troopsLabel: own
         ? `${fmt(army.troops)}人`
