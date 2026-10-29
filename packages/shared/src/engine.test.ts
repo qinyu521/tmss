@@ -1763,7 +1763,16 @@ describe('回合结算', () => {
     state.factions.HUN.resources.salt = 0;
     state.factions.HUN.resources.iron = 0;
     state.regions['YONG-REG03'].garrison = 220_000;
-    state.pendingOrders = [{ orderId: 'aftermath-case-move', kind: 'move_army', armyId: attacker.armyId, targetRegionId: 'YONG-REG03' }];
+    // 本测试聚焦惨败后的政治案件，不测试寻路耗时；预先设置一条可在本旬抵达的行军路段。
+    attacker.path = ['YONG-REG03'];
+    attacker.hopCosts = [5];
+    attacker.targetRegionId = 'YONG-REG03';
+    attacker.stance = 'march';
+    attacker.status = 'marching';
+    attacker.marchDaysTotal = 5;
+    attacker.marchDaysLeft = 5;
+    attacker.currentHopDaysTotal = 5;
+    state.pendingOrders = [];
     const result = runTurn(state, ctx);
     const battle = result.report.events.find((event) => event.type === 'battle');
     expect(battle).toBeTruthy();
