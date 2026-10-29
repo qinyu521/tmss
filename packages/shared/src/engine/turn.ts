@@ -330,7 +330,7 @@ export function resolveCommanderDefectionThreats(
     );
     const runtime = state.characters[army.commanderId];
     if (!runtime) continue;
-    const returningToOriginalFaction = Boolean(runtime.allegianceFaction && targetFaction === commander.faction_key);
+    const returningToOriginalFaction = Boolean(runtime.allegianceFaction && targetFaction === ctx.charactersById[army.commanderId]?.faction_key);
     const before = {
       armyFaction: oldFaction,
       regionFaction: region.faction,
