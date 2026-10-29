@@ -497,10 +497,10 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         }
         const fromMapNodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
         if (!fromMapNodeId) return issues('MAP_NODE_MISSING', '部队当前所在州府没有对应的战略地图节点。');
-        path = findMapPath(state, ctx, army.faction, fromMapNodeId, targetMapNodeId);
+        path = findMapPath(state, ctx, army.faction, fromMapNodeId, targetMapNodeId, { troops: order.amount ?? army.troops });
         pathNames = path.path.map((id) => mapNodeNameById(ctx, id)).join(' → ');
       } else {
-        path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+        path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId, { troops: order.amount ?? army.troops });
         pathNames = path.path.map((id) => regionNameById(ctx, id)).join(' → ');
       }
       if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
@@ -721,7 +721,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         return issues('BAD_AMOUNT', `${region.name}州兵仅 ${region.garrison.toLocaleString()} 人，无法调出 ${order.amount.toLocaleString()} 人。`);
       }
       if (order.regionId === order.targetRegionId) return issues('BAD_TARGET', '州兵已在目标州府，无须调遣。');
-      const path = findPath(state, ctx, state.factionKey, order.regionId, order.targetRegionId);
+      const path = findPath(state, ctx, state.factionKey, order.regionId, order.targetRegionId, { troops: order.amount });
       if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
       let commanderId = order.commanderId;
       if (commanderId) {
@@ -804,9 +804,9 @@ export function applyOrder(
       if (useMapRoute && targetMapNodeId) {
         const fromMapNodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
         if (!fromMapNodeId || mapNodeRegionId(ctx, targetMapNodeId) !== order.targetRegionId) return;
-        path = findMapPath(state, ctx, army.faction, fromMapNodeId, targetMapNodeId);
+        path = findMapPath(state, ctx, army.faction, fromMapNodeId, targetMapNodeId, { troops: order.amount ?? army.troops });
       } else {
-        path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+        path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId, { troops: order.amount ?? army.troops });
       }
       if (!path.ok) return;
       const amount = order.amount ?? army.troops;
@@ -1267,7 +1267,7 @@ export function applyOrder(
       if (!region) return;
       const amount = Math.min(Math.round(order.amount), region.garrison);
       if (amount < 60) return;
-      const path = findPath(state, ctx, fk, region.regionId, order.targetRegionId);
+      const path = findPath(state, ctx, fk, region.regionId, order.targetRegionId, { troops: amount });
       if (!path.ok) return;
       const commander =
         commanderOf(ctx, order.commanderId) ??
