@@ -12,6 +12,7 @@ export * from './engine/replay.js';
 export * from './engine/economy.js';
 export * from './engine/politics.js';
 export * from './engine/lifecycle.js';
+export * from './engine/goals.js';
 export * from './engine/orders.js';
 export * from './engine/npc.js';
 export * from './engine/chronicle.js';

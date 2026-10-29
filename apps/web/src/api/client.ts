@@ -1,5 +1,6 @@
 import type {
   BattleReplay,
+  CharacterGoalType,
   ChronicleEntry,
   GameEvent,
   Order,
@@ -110,6 +111,11 @@ export interface CharacterSummary {
   /** 携带 gameId 查询时返回：该局生死与死因 */
   alive?: boolean;
   deathCause?: string;
+  /** 仅自己的势力可见；敌方人物不会返回目标字段。 */
+  goal?: CharacterGoalType;
+  goalTargetId?: string;
+  goalSinceTurn?: number;
+  goalReason?: string;
 }
 
 export interface GameListItem {

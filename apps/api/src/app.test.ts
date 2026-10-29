@@ -194,6 +194,30 @@ describe('API 集成', () => {
     expect(Array.isArray(debate.payload.opponents)).toBe(true);
   });
 
+  it('人物 API 只向玩家暴露本势力目标，不泄露敌方目标', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'HUN', playerRole: 'ruler', seed: 3030 },
+    });
+    expect(created.statusCode).toBe(200);
+    const gid = created.json().gameId as string;
+
+    const own = await app.inject({ method: 'GET', url: `/api/characters?faction=HUN&pageSize=5&gameId=${gid}` });
+    const enemy = await app.inject({ method: 'GET', url: `/api/characters?faction=YONG&pageSize=5&gameId=${gid}` });
+    expect(own.statusCode).toBe(200);
+    expect(enemy.statusCode).toBe(200);
+    expect(own.json().items[0].goal).toBe('idle');
+    expect(Object.prototype.hasOwnProperty.call(enemy.json().items[0], 'goal')).toBe(false);
+
+    const enemyDetail = await app.inject({
+      method: 'GET',
+      url: `/api/characters/${enemy.json().items[0].person_id}?gameId=${gid}`,
+    });
+    expect(enemyDetail.statusCode).toBe(200);
+    expect(Object.prototype.hasOwnProperty.call(enemyDetail.json().runtime ?? {}, 'goal')).toBe(false);
+  });
+
   it('API 可直接向 72 节点中的附属据点下达行军命令', async () => {
     const created = await app.inject({
       method: 'POST',

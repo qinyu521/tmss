@@ -673,7 +673,16 @@ export interface OrderIssue {
   message: string;
 }
 
-/** 人物运行时状态：生死/死因/成长记录；种子属性只读，成长增量存于 attrs。 */
+export type CharacterGoalType =
+  | 'idle'
+  | 'restore_readiness'
+  | 'press_frontier'
+  | 'stabilize_region'
+  | 'demand_patronage'
+  | 'consolidate_power'
+  | 'protect_house';
+
+/** 人物运行时状态：生死、成长与有冷却的自主目标；种子属性只读。 */
 export interface CharacterRuntime {
   personId: string;
   alive: boolean;
@@ -684,6 +693,16 @@ export interface CharacterRuntime {
   growthNote?: string;
   /** 成长带来的属性增量覆盖值（绝对值，非增量）；键为 governance/command/strategy/intrigue/commerce */
   attrs?: Partial<Record<'governance' | 'command' | 'strategy' | 'intrigue' | 'commerce', number>>;
+  /** 当前自主目标；idle 表示暂时没有高优先级事务。 */
+  goal?: CharacterGoalType;
+  /** 当前目标关联的军团/州府/集团/人物 ID。 */
+  goalTargetId?: string;
+  /** 目标开始的回合，用于跨回合保持动机，不每回合重掷。 */
+  goalSinceTurn?: number;
+  /** 上次执行自主行动的回合；至少间隔 4 回合再次执行。 */
+  goalLastActionTurn?: number;
+  /** 目标成立的规则原因摘要，供人物详情/事件审计使用。 */
+  goalReason?: string;
 }
 
 export interface OrderValidation {
