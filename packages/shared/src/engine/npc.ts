@@ -123,8 +123,7 @@ function generateNpcDefectionProtection(
       const runtime = state.characters[army.commanderId];
       const region = state.regions[army.nodeId];
       if (!commander || !runtime || !region ||
-        runtime.allegianceFaction ||
-        commander.faction_key !== factionKey ||
+        currentFactionOfCharacter(state, ctx, commander.person_id) !== factionKey ||
         region.faction !== factionKey ||
         runtime.defectionWarningTurn === undefined ||
         runtime.defectionWarningTurn >= state.date.turn) return null;
@@ -144,6 +143,7 @@ function generateNpcDefectionProtection(
         (personId, targetFaction) =>
           state.characters[personId]?.alive !== false &&
           isAtWar(state.diplomacy, factionKey, targetFaction),
+        runtime.defectionTargetFaction,
       );
       if (!target || target.targetFaction !== runtime.defectionTargetFaction) return null;
       return { army, personId: commander.person_id, loyalty, warningTurn: runtime.defectionWarningTurn };
