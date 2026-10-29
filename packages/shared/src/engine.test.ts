@@ -462,6 +462,48 @@ describe('正式外交行动', () => {
   });
 });
 
+describe('NPC 外交自主决策', () => {
+  it('同一状态重复生成外交意图完全一致，战事与国库压力会触发议和', () => {
+    const state = newGame('HUN', 'ruler', 'npc-diplomacy-determinism');
+    state.date.turn = 3;
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|YONG'] = -30;
+    state.factions.YONG.resources.cash = 100_000;
+    state.factions.YONG.resources.grain = 10_000;
+
+    const first = generateNpcOrders(state, ctx).filter((order) => order.kind === 'diplomatic_action');
+    const second = generateNpcOrders(clone(state), ctx).filter((order) => order.kind === 'diplomatic_action');
+    expect(first).toEqual(second);
+    expect(first).toContainEqual(expect.objectContaining({
+      orderId: expect.stringMatching(/^npc-YONG-/),
+      kind: 'diplomatic_action',
+      action: 'offer_peace',
+      targetFaction: 'HUN',
+    }));
+  });
+
+  it('NPC 向玩家提出议和时，规则会结算停战并让外交结果可见', () => {
+    const state = newGame('HUN', 'ruler', 'npc-diplomacy-visible');
+    state.date.turn = 3;
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|YONG'] = -30;
+    state.factions.YONG.resources.cash = 100_000;
+    state.factions.YONG.resources.grain = 10_000;
+
+    const result = runTurn(state, ctx);
+    expect(result.state.diplomacy['HUN|YONG']).toBeGreaterThan(-25);
+    const event = result.report.events.find((item) =>
+      item.source === 'npc_ai' &&
+      item.type === 'diplomacy' &&
+      item.payload?.action === 'offer_peace' &&
+      item.factionKey === 'YONG' &&
+      item.targetId === 'HUN',
+    );
+    expect(event).toBeTruthy();
+    expect(event?.visibleToPlayer).toBe(true);
+  });
+});
+
 describe('人物目标与自主行动', () => {
   it('地方主官会付出银钱整饬低秩序地区，并记录行动前后事实', () => {
     const state = newGame('HUN', 'ruler', 'goal-governor');

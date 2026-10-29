@@ -1,7 +1,7 @@
 import type { FactionKey, GameState, Order } from '../types.js';
 import { FACTION_KEYS } from '../types.js';
 import type { DerivedContext } from '../dataset.js';
-import { isAtWar } from '../dataset.js';
+import { diplomacyKey, isAtWar } from '../dataset.js';
 import { hashString, mulberry32 } from '../dataset.js';
 import { BALANCE, grainDemandForTroops, perThousandDemand } from '../balance.js';
 import { buildAdjacency, findPath } from './movement.js';
@@ -118,6 +118,71 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
       if (targetHouse && needsNegotiation && res.cash > Math.max(35_000, BALANCE.negotiateHouse.cashCost * 2.5)) {
         orders.push({ orderId: oid(), kind: 'negotiate_house', houseId: targetHouse.houseId, amount: 1 });
       }
+    }
+
+    // 6) 外交 AI：每三回合评估一次，避免高频重复派使团；每个 NPC 势力每次最多一项外交行动。
+    if (state.date.turn % 3 === 0) {
+      const targets = FACTION_KEYS.filter((other) => other !== key && !isAtWar(state.diplomacy, key, other));
+      const wars = FACTION_KEYS.filter((other) => other !== key && isAtWar(state.diplomacy, key, other));
+      const activeTreaty = (other: FactionKey) => (state.treaties ?? []).some((treaty) =>
+        treaty.kind === 'alliance' &&
+        treaty.status === 'active' &&
+        state.date.turn <= treaty.endTurn &&
+        ((treaty.a === key && treaty.b === other) || (treaty.b === key && treaty.a === other)),
+      );
+      const relation = (other: FactionKey) => state.diplomacy[diplomacyKey(key, other)] ?? 0;
+      const regionCount = (other: FactionKey) => Object.values(state.regions).filter((region) => region.faction === other).length;
+      const targetHasShortage = (other: FactionKey) =>
+        state.factions[other].resources.cash < 15_000 || state.factions[other].resources.grain < 40_000;
+      let diplomaticOrder: Order | undefined;
+
+      // 战线拉长、国库/军粮吃紧时优先议和；否则关系已不再敌对的战事不贸然停战。
+      const peaceTarget = wars
+        .filter((other) => relation(other) > -75)
+        .sort((a, b) =>
+          (relation(b) + (8 - regionCount(b)) * 10 + (targetHasShortage(b) ? 12 : 0)) -
+          (relation(a) + (8 - regionCount(a)) * 10 + (targetHasShortage(a) ? 12 : 0)) ||
+          a.localeCompare(b),
+        )[0];
+      if (peaceTarget && res.cash >= 5_000 &&
+          (relation(peaceTarget) > -40 || regionCount(key) <= 4 || res.grain < grainDemandForTroops(troops, 1.5))) {
+        diplomaticOrder = {
+          orderId: oid(), kind: 'diplomatic_action', action: 'offer_peace', targetFaction: peaceTarget,
+        };
+      }
+
+      // 对共同敌人形成牵制：只有无现存盟友、关系过门槛且使团预算充足时才尝试缔盟。
+      if (!diplomaticOrder && !FACTION_KEYS.some((other) => other !== key && activeTreaty(other)) && res.cash >= 50_000) {
+        const allianceTarget = targets
+          .filter((other) =>
+            !activeTreaty(other) &&
+            relation(other) >= 25 &&
+            FACTION_KEYS.some((third) =>
+              third !== key && third !== other &&
+              isAtWar(state.diplomacy, key, third) &&
+              isAtWar(state.diplomacy, other, third),
+            ),
+          )
+          .sort((a, b) => relation(b) - relation(a) || a.localeCompare(b))[0];
+        if (allianceTarget) {
+          diplomaticOrder = {
+            orderId: oid(), kind: 'diplomatic_action', action: 'propose_alliance', targetFaction: allianceTarget,
+          };
+        }
+      }
+
+      // 无战争、无盟友时偶尔改善邦交；仅对较冷淡且有预算的目标行动。
+      if (!diplomaticOrder && !wars.length && !FACTION_KEYS.some((other) => other !== key && activeTreaty(other)) && res.cash >= 60_000) {
+        const improveTarget = targets
+          .filter((other) => !activeTreaty(other) && relation(other) < 65)
+          .sort((a, b) => relation(a) - relation(b) || a.localeCompare(b))[0];
+        if (improveTarget && relation(improveTarget) < 45) {
+          diplomaticOrder = {
+            orderId: oid(), kind: 'diplomatic_action', action: 'improve_relations', targetFaction: improveTarget,
+          };
+        }
+      }
+      if (diplomaticOrder) orders.push(diplomaticOrder);
     }
   }
   return orders;

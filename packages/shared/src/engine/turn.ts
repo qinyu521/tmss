@@ -123,7 +123,10 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   // NPC 的内部命令默认不可见；玩家只能通过斥候、烽燧与战报获知。
   for (let i = npcEventStart; i < events.length; i++) {
     if (events[i].source === 'npc_ai' && events[i].factionKey !== state.factionKey) {
-      events[i].visibleToPlayer = false;
+      // 对玩家公开的外交使团/停战/宣战结果必须可见；其他 NPC 内政与军令仍受战争迷雾保护。
+      const diplomacyTouchesPlayer = events[i].type === 'diplomacy' &&
+        (events[i].factionKey === state.factionKey || events[i].targetId === state.factionKey);
+      if (!diplomacyTouchesPlayer) events[i].visibleToPlayer = false;
     }
   }
 
@@ -195,6 +198,11 @@ function npcAffordable(state: GameState, order: Order): boolean {
       return res.cash >= BALANCE.balancePrinces.cashCost;
     case 'negotiate_house':
       return res.cash >= BALANCE.negotiateHouse.cashCost;
+    case 'diplomatic_action':
+      if (order.action === 'improve_relations') return res.cash >= 12_000;
+      if (order.action === 'offer_peace') return res.cash >= 5_000;
+      if (order.action === 'propose_alliance') return res.cash >= 25_000;
+      return true;
     case 'levy_grain':
       return Object.values(state.regions)
         .filter((r) => r.faction === factionKey)
