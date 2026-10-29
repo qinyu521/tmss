@@ -241,18 +241,25 @@ export function buildInitialArmies(ctx: DerivedContext): Army[] {
       let allocated = 0;
       // 特种部队按数千至上万人的成建制兵团配置，而非只配几百名点缀兵；
       // 兵种上限仍由 capPerFaction 控制，普通征集兵补足每军团总兵额。
+      // 先按军区轮转分配主力精锐，再从未承担主力配额的兵种池补充大军。
+      // 这可避免旧算法在前两个军团消耗完兵种上限，导致后续军团没有成建制精锐。
+      const minimumFormation = 8_000;
+      const primaryProfile = profiles[di % profiles.length];
+      const secondaryPool = profiles.slice(Math.min(districts.length, profiles.length));
+      const secondaryProfile = secondaryPool.length ? secondaryPool[di % secondaryPool.length] : undefined;
       const slots = [
-        { profile: profiles[(di * 2) % profiles.length], ratio: 0.12 },
-        { profile: profiles[(di * 2 + 1) % profiles.length], ratio: 0.10 },
+        { profile: primaryProfile, ratio: 0.16, primary: true },
+        { profile: secondaryProfile, ratio: 0.10, primary: false },
       ];
       for (const slot of slots) {
         if (!slot.profile) continue;
         const remaining = remainingCap.get(slot.profile.unitId) ?? 0;
-        const requested = Math.round((allocation.initial_force_count * slot.ratio) / 100) * 100;
-        // 不为同一兵种的剩余上限拆出几百人的零碎小队；这种余量留给后续招募补齐。
-        if (remaining < 1_500) continue;
+        const requestedBase = Math.round((allocation.initial_force_count * slot.ratio) / 100) * 100;
+        const requested = slot.primary ? Math.max(minimumFormation, requestedBase) : requestedBase;
+        // 主力精锐至少按 8000 人成建制配置；辅助精锐也不能拆成不足 8000 人的零碎小队。
+        if (remaining < minimumFormation || requested < minimumFormation) continue;
         const desired = Math.min(remaining, requested);
-        if (desired <= 0) continue;
+        if (desired < minimumFormation) continue;
         remainingCap.set(slot.profile.unitId, remaining - desired);
         units.push({
           unitId: slot.profile.unitId,
