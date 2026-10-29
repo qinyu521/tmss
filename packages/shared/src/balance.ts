@@ -92,7 +92,8 @@ export const BALANCE = {
     ironShortageEquipment: 0.8,
     horseShortageMobility: 0.85,
     supplyShortageBattlePenalty: 0.8,
-    manpowerRegenRate: 0.012,
+    /** 每回合按辖区人口恢复兵员的比例；季节修正另行相乘。 */
+    manpowerRegenPerPopulation: 0.0007,
     horsesPerCavalryRatio: { HUN: 0.52, YONG: 0.16, CHU: 0.11 } as Record<string, number>,
   },
 
@@ -201,6 +202,28 @@ export const BALANCE = {
 
   warThreshold: -25,
 } as const;
+
+/**
+ * 将“每千人每周”的配置系数换算为实际部队规模对应的消耗。
+ * 保留原账本的整数四舍五入行为，供账本、短缺阈值和 NPC 决策共用。
+ */
+export function perThousandDemand(
+  troops: number,
+  amountPerThousand: number,
+  weeks = 1,
+  modifier = 1,
+): number {
+  const safeTroops = Number.isFinite(troops) ? Math.max(0, troops) : 0;
+  const safeAmount = Number.isFinite(amountPerThousand) ? Math.max(0, amountPerThousand) : 0;
+  const safeWeeks = Number.isFinite(weeks) ? Math.max(0, weeks) : 0;
+  const safeModifier = Number.isFinite(modifier) ? Math.max(0, modifier) : 0;
+  return Math.round((safeTroops * safeAmount * safeWeeks * safeModifier) / 1_000);
+}
+
+/** 粮食需求；BALANCE 中 120 表示每千人每周 120 石，即每人每周 0.12 石。 */
+export function grainDemandForTroops(troops: number, weeks = 1, modifier = 1): number {
+  return perThousandDemand(troops, BALANCE.grainPerThousandPerWeek, weeks, modifier);
+}
 
 /** 初始库存（按国情刻意制造短缺：匈奴缺粮盐铁、大雍缺盐马、大楚缺马铁） */
 export const INITIAL_RESOURCES: Record<string, { grain: number; salt: number; iron: number; horses: number; cash: number; manpower: number }> = {

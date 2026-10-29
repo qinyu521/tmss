@@ -3,7 +3,7 @@ import { FACTION_KEYS } from '../types.js';
 import type { DerivedContext } from '../dataset.js';
 import { isAtWar } from '../dataset.js';
 import { hashString, mulberry32 } from '../dataset.js';
-import { BALANCE } from '../balance.js';
+import { BALANCE, grainDemandForTroops, perThousandDemand } from '../balance.js';
 import { buildAdjacency, findPath } from './movement.js';
 import type { Army, RegionState } from '../types.js';
 import { factionTroops } from './economy.js';
@@ -25,7 +25,7 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     const oid = () => `npc-${key}-T${state.date.turn}-${++seq}`;
 
     // 1) 粮食与财政自保
-    if (res.grain < (troops * BALANCE.grainPerThousandPerWeek * 2.5) / 1_000) {
+    if (res.grain < grainDemandForTroops(troops, 2.5)) {
       const stores = Object.values(state.regions)
         .filter((r) => r.faction === key)
         .reduce((s, r) => s + r.foodStore, 0);
@@ -33,13 +33,13 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
         orders.push({ orderId: oid(), kind: 'levy_grain', amount: rng() > 0.4 ? 2 : 1 });
       }
     }
-    if (res.cash < troops * 0.06 * 2 && rng() > 0.3) {
+    if (res.cash < troops * BALANCE.cashPerSoldierPerWeek * 2 && rng() > 0.3) {
       orders.push({ orderId: oid(), kind: 'levy_tax', amount: 1 });
     }
     // 2) 资源短板通过贸易缓解
-    if (res.salt < troops * 0.0015 * 3 && res.cash > 30_000) {
+    if (res.salt < perThousandDemand(troops, BALANCE.saltPerThousandPerWeek, 3) && res.cash > 30_000) {
       orders.push({ orderId: oid(), kind: 'trade', resource: 'salt', amount: 120 });
-    } else if (res.iron < troops * 0.0008 * 3 && res.cash > 40_000) {
+    } else if (res.iron < perThousandDemand(troops, BALANCE.ironPerThousandPerWeek, 3) && res.cash > 40_000) {
       orders.push({ orderId: oid(), kind: 'trade', resource: 'iron', amount: 120 });
     }
 
@@ -60,7 +60,7 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     if (key === 'HUN' && (state.special.HUN.cohesion ?? 55) < 42) attackChance -= 0.12;
     if (key === 'YONG' && state.flags.successionCrisis) attackChance -= 0.14;
     if (key === 'CHU' && state.flags.houseBoycott) attackChance -= 0.12;
-    if (res.grain < (troops * BALANCE.grainPerThousandPerWeek * 1.5) / 1_000) attackChance -= 0.12;
+    if (res.grain < grainDemandForTroops(troops, 1.5)) attackChance -= 0.12;
     attackChance = clamp(attackChance, 0.12, 0.92);
 
     if (attack && rng() < attackChance) {
