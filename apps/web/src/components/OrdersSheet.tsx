@@ -563,7 +563,7 @@ export default function OrdersSheet() {
               </>
             )}
 
-            {{action === 'appease_tribe' && (
+            {action === 'appease_tribe' && (
               <>
                 <div className="form-row">
                   <label>部落</label>
