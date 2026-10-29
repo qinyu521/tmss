@@ -1315,32 +1315,79 @@ describe('战后政治仇怨的自主反应', () => {
 });
 
 describe('回合结算', () => {
-  it('跨旬未走完的路段会保存剩余天数，不会每旬重走完整路段', () => {
+  it('跨旬行军按当前路段的剩余天数连续推进，不重复计算完整路段', () => {
     const state = newGame('YONG');
     const army = state.armies.find((a) => a.faction === 'YONG')!;
-    const destination = Object.values(state.regions).find(
+    const destinations = Object.values(state.regions).filter(
       (region) => region.faction === 'YONG' && region.regionId !== army.nodeId,
-    )!;
+    ).slice(0, 2);
+    expect(destinations).toHaveLength(2);
+    const [firstDestination, secondDestination] = destinations;
     const startNode = army.nodeId;
     const supplyBefore = army.supply;
     const fatigueBefore = army.fatigue;
-    army.path = [destination.regionId];
-    army.hopCosts = [10];
-    army.targetRegionId = destination.regionId;
+    army.path = [firstDestination.regionId, secondDestination.regionId];
+    army.hopCosts = [10, 5];
+    army.targetRegionId = secondDestination.regionId;
     army.stance = 'march';
     army.status = 'marching';
-    army.marchDaysTotal = 10;
-    army.marchDaysLeft = 10;
+    army.marchDaysTotal = 15;
+    army.marchDaysLeft = 15;
+    army.currentHopDaysTotal = 10;
 
-    const result = runTurn(state, ctx);
-    const marched = result.state.armies.find((a) => a.armyId === army.armyId)!;
-    expect(marched.nodeId).toBe(startNode);
-    expect(marched.path).toEqual([destination.regionId]);
-    expect(marched.hopCosts).toEqual([3]);
-    expect(marched.marchDaysLeft).toBe(3);
-    expect(marched.status).toBe('marching');
-    expect(marched.supply).toBeLessThan(supplyBefore);
-    expect(marched.fatigue).toBeGreaterThan(fatigueBefore);
+    const firstTurn = runTurn(state, ctx);
+    const afterFirst = firstTurn.state.armies.find((a) => a.armyId === army.armyId)!;
+    expect(afterFirst.nodeId).toBe(startNode);
+    expect(afterFirst.path).toEqual([firstDestination.regionId, secondDestination.regionId]);
+    expect(afterFirst.hopCosts).toEqual([3, 5]);
+    expect(afterFirst.marchDaysLeft).toBe(8);
+    expect(afterFirst.currentHopDaysTotal).toBe(10);
+    expect(buildPlayerView(firstTurn.state, ctx).armies.find((a) => a.armyId === army.armyId)!.progress).toBeCloseTo(0.7);
+    expect(afterFirst.supply).toBeLessThan(supplyBefore);
+    expect(afterFirst.fatigue).toBeGreaterThan(fatigueBefore);
+
+    // 下一旬先用 3 天走完当前路段，再用剩余 4 天推进下一段。
+    const secondTurn = runTurn(firstTurn.state, ctx);
+    const afterSecond = secondTurn.state.armies.find((a) => a.armyId === army.armyId)!;
+    expect(afterSecond.nodeId).toBe(firstDestination.regionId);
+    expect(afterSecond.path).toEqual([secondDestination.regionId]);
+    expect(afterSecond.hopCosts).toEqual([1]);
+    expect(afterSecond.marchDaysLeft).toBe(1);
+    expect(afterSecond.currentHopDaysTotal).toBe(5);
+    expect(buildPlayerView(secondTurn.state, ctx).armies.find((a) => a.armyId === army.armyId)!.progress).toBeCloseTo(0.8);
+
+    // 第三旬只需剩余 1 天即可到达终点。
+    const thirdTurn = runTurn(secondTurn.state, ctx);
+    const arrived = thirdTurn.state.armies.find((a) => a.armyId === army.armyId)!;
+    expect(arrived.nodeId).toBe(secondDestination.regionId);
+    expect(arrived.path).toEqual([]);
+    expect(arrived.status).toBe('idle');
+    expect(arrived.currentHopDaysTotal).toBe(0);
+  });
+
+  it('旧存档会把当前路段已消耗时间迁移为剩余路程', () => {
+    const state = newGame('YONG');
+    const army = state.armies.find((a) => a.faction === 'YONG')!;
+    const destinations = Object.values(state.regions).filter(
+      (region) => region.faction === 'YONG' && region.regionId !== army.nodeId,
+    ).slice(0, 2);
+    expect(destinations).toHaveLength(2);
+    state.schemaVersion = 4;
+    army.path = destinations.map((region) => region.regionId);
+    army.hopCosts = [10, 5];
+    army.targetRegionId = destinations[1].regionId;
+    army.stance = 'march';
+    army.status = 'marching';
+    army.marchDaysTotal = 15;
+    army.marchDaysLeft = 8; // 旧版本已用 7 天，但 hopCosts 尚未扣减。
+    army.currentHopDaysTotal = undefined;
+
+    const migrated = migrateState(state, ctx.seed.characters);
+    const repaired = migrated.armies.find((a) => a.armyId === army.armyId)!;
+    expect(migrated.schemaVersion).toBe(5);
+    expect(repaired.currentHopDaysTotal).toBe(10);
+    expect(repaired.hopCosts).toEqual([3, 5]);
+    expect(repaired.marchDaysLeft).toBe(8);
   });
 
   it('低忠诚统将对同势力人物积怨未消时会消极执行行军军令', () => {
