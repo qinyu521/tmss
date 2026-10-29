@@ -506,8 +506,8 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
         events.push(
           emitEvent(state, {
             type: 'army_move',
-            title: \`${army.name}推进至道路中段\`,
-            summary: \`${army.name}已沿\${edge?.route_type ?? '道路'}推进至中途节点，仍需 \${army.marchDaysLeft} 日抵达目标州府。\`,
+            title: `${army.name}推进至道路中段`,
+            summary: `${army.name}已沿${edge?.route_type ?? '道路'}推进至中途节点，仍需 ${army.marchDaysLeft} 日抵达目标州府。`,
             actorId: army.commanderId,
             actorName: army.commanderName,
             factionKey: army.faction,

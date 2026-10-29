@@ -394,7 +394,7 @@ function routeNodeLabel(ctx: DerivedContext, nodeId: string): string {
   if (isRouteWaypointId(nodeId)) {
     const edgeId = nodeId.slice(ROUTE_WAYPOINT_PREFIX.length);
     const edge = ctx.edges.find((item) => item.edge_id === edgeId);
-    return edge ? \${edge.route_type}中途 : '道路中途';
+    return edge ? `${edge.route_type}中途` : '道路中途';
   }
   return regionNameById(ctx, nodeId);
 }
@@ -1203,8 +1203,8 @@ export function applyOrder(
       events.push(
         emitEvent(state, {
           type: 'army_move',
-          title: \`${mover.name}奉命开拔\`,
-          summary: \`兵力 \${mover.troops.toLocaleString()}，路线 \${expandedRoute.path.map((id) => routeNodeLabel(ctx, id)).join(' → ')}，行程 \${expandedRoute.dayCosts.reduce((s, d) => s + d, 0)} 日。\`,
+          title: `${mover.name}奉命开拔`,
+          summary: `兵力 ${mover.troops.toLocaleString()}，路线 ${expandedRoute.path.map((id) => routeNodeLabel(ctx, id)).join(' → ')}，行程 ${expandedRoute.dayCosts.reduce((s, d) => s + d, 0)} 日。`,
           actorId,
           actorName,
           factionKey: mover.faction,

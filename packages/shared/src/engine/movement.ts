@@ -161,7 +161,7 @@ export function findPath(
     }
   }
   if (dist[to] === undefined) {
-    return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '没有可用道路抵达目标（可能被中立州府阻隔）。' };
+    return { ok: false, path: [], edgeIds: [], costs: [], routeTypes: [], totalDays: 0, error: '没有可用道路抵达目标（可能被中立州府阻隔）。' };
   }
   const path: string[] = [];
   const edgeIds: string[] = [];
