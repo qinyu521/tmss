@@ -11,7 +11,9 @@ import {
   UNIT_PROFILES,
   applyUnitNames,
   buildContext,
+  buildAdjacency,
   buildMapAdjacency,
+  capitalMapNodeId,
   findMapPath,
   migrateState,
   buildPlayerView,
@@ -443,6 +445,97 @@ describe('正式外交行动', () => {
     expect(result.state.diplomacy['HUN|YONG']).toBeLessThanOrEqual(-25);
     expect(result.state.diplomacy['HUN|CHU']).toBeLessThanOrEqual(-25);
     expect(result.report.events.some((item) => item.payload?.action === 'defensive_call_to_arms' && item.targetId === 'CHU')).toBe(true);
+  });
+
+  it('防御盟约召援会让盟友同回合真实下达并执行反击行军', () => {
+    const state = newGame('HUN', 'ruler', 'diplomacy-alliance-mobilization');
+    state.date.turn = 2;
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 0;
+    state.diplomacy['CHU|YONG'] = 50;
+    state.treaties = [{
+      treatyId: 'treaty-yong-chu-mobilization',
+      kind: 'alliance',
+      a: 'YONG',
+      b: 'CHU',
+      startTurn: 1,
+      endTurn: 8,
+      status: 'active',
+    }];
+
+    // 用真实道路图中的一条边构造最小战线：唯一可达敌州不依赖种子里三国的初始接壤关系。
+    const edge = Object.entries(buildAdjacency(ctx))
+      .flatMap(([from, links]) => links.map((link) => [from, link.to] as const))[0];
+    expect(edge).toBeDefined();
+    const [homeRegionId, targetRegionId] = edge!;
+    for (const region of Object.values(state.regions)) {
+      region.faction = region.regionId === homeRegionId
+        ? 'CHU'
+        : region.regionId === targetRegionId
+          ? 'HUN'
+          : 'YONG';
+    }
+    state.regions[targetRegionId].garrison = 0;
+    state.regions[targetRegionId].fortification = 0;
+    state.regions[targetRegionId].loyalty = 50;
+
+    const homeNodeId = capitalMapNodeId(ctx, homeRegionId);
+    const targetNodeId = capitalMapNodeId(ctx, targetRegionId);
+    if (!homeNodeId || !targetNodeId || !state.mapNodes) {
+      throw new Error('测试战线缺少对应州府主城节点。');
+    }
+    for (const [nodeId, node] of Object.entries(state.mapNodes)) {
+      const seedNode = ctx.seed.map_nodes.find((item) => item.node_id === nodeId);
+      const regionId = ctx.territories.find((item) => item.region === seedNode?.region)?.region_id;
+      node.faction = regionId === homeRegionId ? 'CHU' : regionId === targetRegionId ? 'HUN' : 'YONG';
+    }
+
+    const safeRegionId = Object.values(state.regions)
+      .find((region) => region.regionId !== targetRegionId && region.regionId !== homeRegionId)?.regionId;
+    if (!safeRegionId) throw new Error('测试地图缺少可安置后方军团的州府。');
+    state.armies = state.armies.map((army) => {
+      if (army.faction === 'CHU') {
+        return {
+          ...army,
+          nodeId: homeRegionId,
+          mapNodeId: homeNodeId,
+          status: 'idle',
+          supply: 100,
+          fatigue: 0,
+          morale: 100,
+          training: 100,
+          path: [],
+          hopCosts: [],
+          mapPath: [],
+          mapHopCosts: [],
+          targetRegionId: null,
+          targetMapNodeId: null,
+          marchDaysTotal: 0,
+          marchDaysLeft: 0,
+        };
+      }
+      if (army.faction === 'HUN' && army.nodeId === targetRegionId) {
+        return { ...army, nodeId: safeRegionId, mapNodeId: capitalMapNodeId(ctx, safeRegionId) };
+      }
+      return army;
+    });
+
+    state.pendingOrders = [{
+      orderId: 'diplomacy-alliance-mobilization-declare-war',
+      kind: 'diplomatic_action',
+      action: 'declare_war',
+      targetFaction: 'YONG',
+    }];
+    const result = runTurn(state, ctx);
+
+    expect(result.state.diplomacy['HUN|YONG']).toBeLessThanOrEqual(-25);
+    expect(result.state.diplomacy['HUN|CHU']).toBeLessThanOrEqual(-25);
+    const counterMarch = result.report.events.find((event) =>
+      event.type === 'army_move' &&
+      event.factionKey === 'CHU' &&
+      event.source === 'npc_ai' &&
+      event.after?.target === targetRegionId,
+    );
+    expect(counterMarch).toBeDefined();
   });
 
   it('非君主不能下达正式外交，且同回合不能排队两项外交', () => {
