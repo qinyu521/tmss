@@ -11,6 +11,7 @@ import {
   UNIT_PROFILES,
   applyUnitNames,
   buildContext,
+  buildPlayerView,
   createGame,
   resolveBattle,
   runTurn,
@@ -474,12 +475,63 @@ describe('存档快照', () => {
     expect(restored.date.label).toBe(result.state.date.label);
     expect(restored.armies.length).toBe(result.state.armies.length);
     expect(restored.factions.YONG.resources).toEqual(result.state.factions.YONG.resources);
-    expect(restored.schemaVersion).toBe(2);
+    expect(restored.schemaVersion).toBe(3);
   });
 });
 
 describe('平衡常量', () => {
   it('一回合固定为 7 天', () => {
     expect(BALANCE.turnDays).toBe(7);
+  });
+});
+
+
+describe('跨回合行军与当前路段进度', () => {
+  it('10 天路段在 7 天回合末保留 3 天，下一回合再走 3 天抵达，地图显示 70% 进度', () => {
+    let state = newGame('HUN', 'ruler', 'cross-turn-march');
+    // 隔离测试变量：其他部队静止，外交全为和平，避免 NPC 战局影响目标节点。
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.armies = state.armies.map((a) => ({
+      ...a,
+      path: [],
+      hopCosts: [],
+      targetRegionId: null,
+      marchDaysTotal: 0,
+      marchDaysLeft: 0,
+      currentHopDaysTotal: 0,
+      status: 'idle' as const,
+      stance: 'defend' as const,
+    }));
+    const army = state.armies.find((a) => a.faction === 'HUN')!;
+    const source = army.nodeId;
+    const target = Object.values(state.regions).find(
+      (region) => region.faction === 'HUN' && region.regionId !== source,
+    )!;
+    const armyId = army.armyId;
+    army.path = [target.regionId];
+    army.hopCosts = [10];
+    army.targetRegionId = target.regionId;
+    army.marchDaysTotal = 10;
+    army.marchDaysLeft = 10;
+    army.currentHopDaysTotal = 10;
+    army.status = 'marching';
+    army.stance = 'march';
+
+    const first = runTurn(state, ctx).state;
+    const afterFirst = first.armies.find((a) => a.armyId === armyId)!;
+    expect(afterFirst.nodeId).toBe(source);
+    expect(afterFirst.hopCosts).toEqual([3]);
+    expect(afterFirst.marchDaysLeft).toBe(3);
+    expect(afterFirst.currentHopDaysTotal).toBe(10);
+    const armyView = buildPlayerView(first, ctx).armies.find((a) => a.armyId === armyId)!;
+    expect(armyView.progress).toBeCloseTo(0.7, 5);
+
+    const second = runTurn(first, ctx).state;
+    const afterSecond = second.armies.find((a) => a.armyId === armyId)!;
+    expect(afterSecond.nodeId).toBe(target.regionId);
+    expect(afterSecond.path).toHaveLength(0);
+    expect(afterSecond.status).toBe('idle');
+    expect(afterSecond.marchDaysLeft).toBe(0);
+    expect(afterSecond.currentHopDaysTotal).toBe(0);
   });
 });

@@ -477,6 +477,8 @@ export interface Army {
   targetRegionId: string | null;
   marchDaysTotal: number;
   marchDaysLeft: number;
+  /** 当前路段的完整行军天数；hopCosts[0] 保存当前路段尚未消耗的天数 */
+  currentHopDaysTotal?: number;
   lastBattleTurn: number | null;
   originRegionId: string;
   /** 分遣队（由主力或州兵拆分） */

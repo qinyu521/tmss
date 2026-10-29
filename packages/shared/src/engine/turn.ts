@@ -41,7 +41,7 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   // 季节：由当月月份推导（3-5 春 / 6-8 夏 / 9-11 秋 / 12-2 冬）
   const season = seasonOf(state.date.month);
   const seasonInfo = SEASON_LABELS[season];
-  // 跨季的第一旬（月份进入 3/6/9/12 的第一回合）额外发一条时令事件
+  // 跨季的第一回合（月份进入 3/6/9/12 的第一回合）额外发一条时令事件
   const prevSeason = state.date.turn <= 1 ? null : seasonOf(makeDate(state.date.dayIndex - TURN_DAYS, state.date.turn - 1).month);
   if (prevSeason === null || prevSeason !== season) {
     events.push(
@@ -63,7 +63,7 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   events.push(
     emitEvent(state, {
       type: 'turn_start',
-      title: `${turnLabel} · 旬始`,
+      title: `${turnLabel} · 回合始`,
       summary: `${seasonInfo.desc}，${seasonInfo.hint}。各势力在同一回合内提交命令，按规则统一结算；玩家不能无限抢先行动。`,
       actorId: 'system',
       actorName: '史官',
@@ -146,7 +146,7 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   const battles = events.filter((e) => e.type === 'battle');
   const summary =
     `${turnLabel}结算：事件 ${events.length} 条，战斗 ${battles.length} 次，` +
-    `驳回命令 ${rejected.length} 条；新旬为 ${state.date.label}。`;
+    `驳回命令 ${rejected.length} 条；新回合为 ${state.date.label}。`;
   const report: TurnReport = {
     turn,
     dateLabel: turnLabel,
@@ -196,14 +196,24 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
     let remainingDays = TURN_DAYS;
     while (remainingDays > 0 && army.path.length > 0) {
       const hop = Math.max(1, army.hopCosts[0] ?? 1);
+      // 旧档或测试构造的行军状态可能没有当前路段总时长；首次进入时以剩余值兜底。
+      army.currentHopDaysTotal ??= hop;
       if (remainingDays < hop) {
-        army.marchDaysLeft = Math.max(0, army.marchDaysLeft - remainingDays);
+        const traveledDays = remainingDays;
+        // hopCosts[0] 永远表示当前路段尚未消耗的天数，不能在下一回合重走完整路段。
+        army.hopCosts[0] = Math.max(1, hop - traveledDays);
+        army.marchDaysLeft = army.hopCosts.reduce((s, d) => s + d, 0);
+        army.supply = clamp(army.supply - traveledDays * BALANCE.army.marchSupplyDrainPerDay);
+        army.fatigue = clamp(
+          army.fatigue + traveledDays * BALANCE.army.fatigueMarchPerDay * marchFatigueSeasonFactor(season, army.faction),
+        );
         remainingDays = 0;
         break;
       }
       remainingDays -= hop;
       const nextRegionId = army.path.shift() as string;
       army.hopCosts.shift();
+      army.currentHopDaysTotal = army.hopCosts[0] ?? 0;
       army.marchDaysLeft = army.hopCosts.reduce((s, d) => s + d, 0);
       const previous = army.nodeId;
       army.nodeId = nextRegionId;
@@ -256,7 +266,7 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
         );
       }
     }
-    // 旬末补给与疲劳
+    // 回合末补给与疲劳
     if (army.status === 'marching') {
       army.supply = clamp(army.supply - 5);
       army.fatigue = clamp(army.fatigue + 6);
@@ -314,7 +324,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     garrison: region.garrison,
   };
   const outcome = resolveBattle(state, ctx, attacker, defender ?? null, region, seed);
-  // 记录本旬参战主将，生命周期据此追加战死概率
+  // 记录本回合参战主将，生命周期据此追加战死概率
   attacker.lastBattleTurn = state.date.turn;
   if (defender) defender.lastBattleTurn = state.date.turn;
   state.statistics.battles += 1;
