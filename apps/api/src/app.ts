@@ -364,9 +364,15 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     const gameId = (req.query as Record<string, string | undefined>).gameId;
     const runtimeState = gameId ? getGameState(db, gameId, seed.characters, seed) : null;
     const rawRuntime = runtimeState?.characters?.[id] ?? null;
-    const runtime = rawRuntime && runtimeState && character.faction_key !== runtimeState.factionKey
-      ? (({ goal: _goal, goalTargetId: _target, goalSinceTurn: _since, goalLastActionTurn: _last, goalReason: _reason, ...publicFields }) => publicFields)(rawRuntime)
-      : rawRuntime;
+    let runtime = rawRuntime;
+    if (rawRuntime && runtimeState && character.faction_key !== runtimeState.factionKey) {
+      runtime = { ...rawRuntime };
+      delete runtime.goal;
+      delete runtime.goalTargetId;
+      delete runtime.goalSinceTurn;
+      delete runtime.goalLastActionTurn;
+      delete runtime.goalReason;
+    }
     return {
       character,
       runtime,
