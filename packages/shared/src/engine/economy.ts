@@ -1,14 +1,13 @@
 import type { Army, FactionKey, GameEvent, GameState } from '../types.js';
 import { FACTION_KEYS } from '../types.js';
 import type { DerivedContext } from '../dataset.js';
-import { BALANCE } from '../balance.js';
+import { BALANCE, grainDemandForTroops, perThousandDemand } from '../balance.js';
 import { FACTION_SHORT, signed } from '../constants.js';
 import { emitEvent } from './events.js';
 import { clamp, cohesionFactor, housesCompliance } from './state.js';
 import { expeditionPenalty } from './movement.js';
 import { seasonOf } from './season.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
-import { BALANCE as B } from '../balance.js';
 
 export interface FactionEconomyTotals {
   troops: number;
@@ -46,9 +45,9 @@ export function shortageTags(state: GameState, key: FactionKey): string[] {
   const f = state.factions[key];
   const troops = Math.max(1, factionTroops(state, key));
   const tags: string[] = [];
-  if (f.resources.grain < troops * BALANCE.grainPerThousandPerWeek * 3) tags.push('粮草紧张');
-  if (f.resources.salt < troops * 0.0015 * 3) tags.push('缺盐');
-  if (f.resources.iron < troops * 0.0008 * 3) tags.push('铁料不足');
+  if (f.resources.grain < grainDemandForTroops(troops, 3)) tags.push('粮草紧张');
+  if (f.resources.salt < perThousandDemand(troops, BALANCE.saltPerThousandPerWeek, 3)) tags.push('缺盐');
+  if (f.resources.iron < perThousandDemand(troops, BALANCE.ironPerThousandPerWeek, 3)) tags.push('铁料不足');
   if (f.resources.horses < troops * 0.02) tags.push('缺战马');
   if (f.resources.cash < troops * 0.06 * 2) tags.push('军饷紧张');
   return tags;
@@ -72,10 +71,12 @@ export function computeEconomy(state: GameState, ctx: DerivedContext): Record<Fa
     const expedition = expeditionPenalty(state, ctx, key);
     // 冬季匈奴远征草料难继，全军粮耗上浮
     const winterGrain = season === 'winter' && key === 'HUN' ? BALANCE.seasons.winter.hunGrainUse : 1;
-    const grainUsed = Math.round(troops * 0.12 * (1 + expedition) * winterGrain);
-    const saltUsed = Math.round(troops * 0.0015);
-    const ironUsed = Math.round(troops * 0.0008 + state.armies.filter((a) => a.faction === key && a.status === 'marching').length * 90);
-    const horseUsed = Math.round(mounted * 0.0024 + (key === 'HUN' ? 40 : 10));
+    const grainUsed = grainDemandForTroops(troops, 1, (1 + expedition) * winterGrain);
+    const saltUsed = perThousandDemand(troops, BALANCE.saltPerThousandPerWeek);
+    const ironUsed =
+      perThousandDemand(troops, BALANCE.ironPerThousandPerWeek) +
+      state.armies.filter((a) => a.faction === key && a.status === 'marching').length * 90;
+    const horseUsed = perThousandDemand(mounted, BALANCE.horsePerThousandCavalry) + (key === 'HUN' ? 40 : 10);
     let compliance = f.taxCompliance;
     if (key === 'HUN') compliance = 0.5 + (state.special.HUN.cohesion ?? 55) / 200;
     if (key === 'CHU') compliance = housesCompliance(state) * 0.95;
@@ -94,7 +95,7 @@ export function computeEconomy(state: GameState, ctx: DerivedContext): Record<Fa
         0,
       ) * compliance,
     );
-    const armyPay = Math.round(troops * 0.06 + regions.reduce((s, r) => s + r.garrison * 0.004, 0));
+    const armyPay = Math.round(troops * BALANCE.cashPerSoldierPerWeek + regions.reduce((s, r) => s + r.garrison * 0.004, 0));
     result[key] = {
       troops,
       mountedTroops: mounted,
@@ -190,7 +191,11 @@ export function runEconomy(state: GameState, ctx: DerivedContext, events: GameEv
     const manpowerRegen = BALANCE.seasons[seasonOf(state.date.month)].manpowerRegen;
     res.manpower = Math.min(
       f.nominalTroops * 0.6,
-      res.manpower + Math.round(Object.values(state.regions).filter((r) => r.faction === key).reduce((s, r) => s + r.population, 0) * 0.0007 * manpowerRegen),
+      res.manpower + Math.round(
+        Object.values(state.regions).filter((r) => r.faction === key).reduce((s, r) => s + r.population, 0) *
+          BALANCE.economy.manpowerRegenPerPopulation *
+          manpowerRegen,
+      ),
     );
     // 州府库存与治安自然恢复
     for (const r of Object.values(state.regions).filter((x) => x.faction === key)) {
