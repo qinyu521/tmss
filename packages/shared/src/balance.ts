@@ -10,6 +10,11 @@ export const BALANCE = {
     rewardGain: 25,
     defectionThreshold: 15,
     minimumDefectionTroops: 5_000,
+    /** 将领亲率军团战败后，基础军令忠诚损失。 */
+    battleLossPenalty: 5,
+    /** 战前兵力损失达到阈值时追加的忠诚惩罚。 */
+    heavyCasualtyPenalty: 3,
+    heavyCasualtyRate: 0.2,
   },
   /** 每千人每周粮耗（石） */
   grainPerThousandPerWeek: 120,
