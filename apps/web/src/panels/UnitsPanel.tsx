@@ -59,7 +59,8 @@ export default function UnitsPanel() {
             <div className="small muted" style={{ marginTop: 8, lineHeight: 1.65 }}>
               <div>优势：{seed.strengths}</div>
               <div>弱点：{seed.weaknesses}</div>
-              <div>补给权重 ×{profile?.supplyCost ?? 1} · 招募门槛：训练 {profile?.recruit?.minTraining ?? '—'} · 全国上限 {fmt(profile?.capPerFaction ?? 0)}</div>
+              <div>初始成建制编制 {fmt(profile?.initialFormationSize ?? 0)} 人 · 全国同时部署上限 {fmt(profile?.capPerFaction ?? 0)}</div>
+              <div>补给权重 ×{profile?.supplyCost ?? 1} · 招募门槛：训练 {profile?.recruit?.minTraining ?? '—'}</div>
               <div>克制：{(profile?.counters ?? []).map((c: string) => CATEGORY_LABELS[c] ?? c).join('、') || '无'}</div>
               <div>被克：{(profile?.counteredBy ?? []).map((c: string) => CATEGORY_LABELS[c] ?? c).join('、') || '无'}</div>
               <div>资源约束：{seed.resource_constraints}</div>
