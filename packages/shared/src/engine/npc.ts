@@ -19,6 +19,8 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     if (key === state.factionKey) continue;
     const rng = mulberry32(hashString(`${state.seed}-${state.date.turn}-${key}`));
     const faction = state.factions[key];
+    // 若有效盟约使本方被卷入盟友的战争，记录需要优先回应的共同敌人。
+    const defensiveWarTargets = defensiveAllianceWarTargets(state, key);
     const troops = Math.max(1, factionTroops(state, key));
     const res = faction.resources;
     let seq = 0;
@@ -53,7 +55,7 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
       .filter((army) => army.faction === key && army.status === 'idle' && army.troops > 4_000 && army.supply > 35)
       .sort((a, b) => armyReadiness(b, ctx) - armyReadiness(a, ctx));
     const frontierGoalArmies = idleArmies.filter((army) => state.characters[army.commanderId]?.goal === 'press_frontier');
-    const attack = (frontierGoalArmies.length ? pickEnemyAttack(state, ctx, key, frontierGoalArmies) : null) ?? pickEnemyAttack(state, ctx, key, idleArmies);
+    const attack = (frontierGoalArmies.length ? pickEnemyAttack(state, ctx, key, frontierGoalArmies, defensiveWarTargets) : null) ?? pickEnemyAttack(state, ctx, key, idleArmies, defensiveWarTargets);
     const commander = attack ? ctx.charactersById[attack.army.commanderId] : undefined;
     const command = commander?.command ?? 50;
     const strategy = commander?.strategy ?? 50;
@@ -66,7 +68,9 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     if (attack && state.characters[attack.army.commanderId]?.goal === 'restore_readiness') attackChance -= 0.22;
     attackChance = clamp(attackChance, 0.12, 0.92);
 
-    if (attack && rng() < attackChance) {
+    // 防御盟约召援优先级高于普通进攻意愿：有可行目标便下达军令，而非只等待概率判定。
+    const mustAnswerAllianceWar = Boolean(attack && defensiveWarTargets.has(attack.region.faction));
+    if (attack && (mustAnswerAllianceWar || rng() < attackChance)) {
       orders.push({
         orderId: oid(),
         kind: 'move_army',
@@ -188,6 +192,24 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
   return orders;
 }
 
+function defensiveAllianceWarTargets(state: GameState, factionKey: FactionKey): Set<FactionKey> {
+  const targets = new Set<FactionKey>();
+  for (const treaty of state.treaties ?? []) {
+    if (treaty.kind !== 'alliance' || treaty.status !== 'active' ||
+        state.date.turn < treaty.startTurn || state.date.turn > treaty.endTurn) continue;
+    const partner = treaty.a === factionKey ? treaty.b : treaty.b === factionKey ? treaty.a : undefined;
+    if (!partner) continue;
+    for (const enemy of FACTION_KEYS) {
+      if (enemy === factionKey || enemy === partner) continue;
+      // 两方均已与共同敌人交战，且盟约仍有效，视为需回应的防御战线。
+      if (isAtWar(state.diplomacy, factionKey, enemy) && isAtWar(state.diplomacy, partner, enemy)) {
+        targets.add(enemy);
+      }
+    }
+  }
+  return targets;
+}
+
 interface AttackCandidate {
   army: Army;
   region: RegionState;
@@ -218,6 +240,7 @@ function pickEnemyAttack(
   ctx: DerivedContext,
   factionKey: FactionKey,
   armies: Army[],
+  defensiveWarTargets: ReadonlySet<FactionKey> = new Set(),
 ): AttackCandidate | null {
   if (armies.length === 0) return null;
   const adjacency = buildAdjacency(ctx);
@@ -262,6 +285,7 @@ function pickEnemyAttack(
 
   candidates.sort(
     (a, b) =>
+      Number(defensiveWarTargets.has(b.region.faction)) - Number(defensiveWarTargets.has(a.region.faction)) ||
       a.score - b.score ||
       b.army.troops - a.army.troops ||
       a.region.regionId.localeCompare(b.region.regionId),
