@@ -4,6 +4,8 @@ import type {
   FactionKey,
   GameEvent,
   GameState,
+  MapNodeState,
+  MapNodeSiegeState,
   Order,
   OrderIssue,
   TurnReport,
@@ -19,6 +21,7 @@ import { generateNpcOrders } from './npc.js';
 import {
   clearMarch,
   buildAdjacency,
+  buildMapAdjacency,
   capitalMapNodeId,
   mapNodeNameById,
   retreatMapNode,
@@ -138,6 +141,7 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
 
   // 3) 行军与战斗
   processMovement(state, ctx, events);
+  processSieges(state, ctx, events);
 
   // 3.5) 低忠诚且与交战敌方存在强关系的军团可能倒戈；先给君主一整回合应对。
   resolveCommanderDefectionThreats(state, ctx, events);
@@ -399,6 +403,8 @@ function processMapMovement(state: GameState, ctx: DerivedContext, events: GameE
 
       if (node.faction !== army.faction) {
         if (isAtWar(state.diplomacy, army.faction, node.faction)) {
+          if (node.nodeType === '州府/主城' &&
+              beginOrJoinCapitalSiege(state, ctx, army, node, previousMapNodeId, previousRegionId, events)) break;
           const battleEvents = node.nodeType === '州府/主城'
             ? handleBattle(state, ctx, army, node.regionId, node.nodeId)
             : handleStrategicNodeBattle(state, ctx, army, node.nodeId);
@@ -476,7 +482,7 @@ function processMapMovement(state: GameState, ctx: DerivedContext, events: GameE
 function replenishHomeNodeSupply(state: GameState): void {
   for (const node of Object.values(state.mapNodes ?? {})) {
     const region = state.regions[node.regionId];
-    if (!region || node.faction !== region.faction || node.supplyLevel >= 100) continue;
+    if (!region || node.siege || node.faction !== region.faction || node.supplyLevel >= 100) continue;
     node.supplyLevel = clamp(node.supplyLevel + BALANCE.mapNodeLogistics.homeSupplyLevelRecovery);
   }
 }
@@ -506,6 +512,220 @@ function mapNodeRestSupply(node: NonNullable<GameState['mapNodes']>[string]): Ma
     };
   }
   return { bonus: 0, stockCost: 0, facility: '' };
+}
+
+function beginOrJoinCapitalSiege(
+  state: GameState,
+  ctx: DerivedContext,
+  army: Army,
+  node: MapNodeState,
+  previousMapNodeId: string | undefined,
+  previousRegionId: string,
+  events: GameEvent[],
+): boolean {
+  if (node.nodeType !== '州府/主城') return false;
+  const region = state.regions[node.regionId];
+  if (!region) return false;
+  const siege = node.siege;
+  if (siege && siege.besiegerFaction !== army.faction) return false;
+  const joining = Boolean(siege);
+  const defenderInField = state.armies.some((candidate) =>
+    candidate.faction === node.faction && candidate.troops >= 60 &&
+    candidate.armyId !== army.armyId &&
+    (candidate.mapNodeId ? candidate.mapNodeId === node.nodeId : candidate.nodeId === node.regionId),
+  );
+  if (defenderInField) return false;
+  if (!joining &&
+      region.fortification < BALANCE.siege.minimumCapitalFortification &&
+      region.garrison < BALANCE.siege.minimumCapitalGarrison) return false;
+
+  if (!siege) {
+    node.siege = {
+      besiegerFaction: army.faction,
+      besiegerArmyIds: [],
+      startedTurn: state.date.turn,
+      progress: 0,
+      turns: 0,
+    };
+  }
+  const activeSiege = node.siege;
+  if (!activeSiege) return false;
+  if (!activeSiege.besiegerArmyIds.includes(army.armyId)) activeSiege.besiegerArmyIds.push(army.armyId);
+
+  army.mapNodeId = previousMapNodeId ?? capitalMapNodeId(ctx, previousRegionId);
+  army.nodeId = previousRegionId;
+  clearMarch(army);
+  army.stance = 'siege';
+  army.targetMapNodeId = node.nodeId;
+  army.targetRegionId = node.regionId;
+  events.push(emitEvent(state, {
+    type: 'army_move',
+    title: joining ? `${army.name}加入围困` : `围城开始：${node.name}`,
+    summary: joining
+      ? `${army.name}加入${node.name}外围合围，围城军团共 ${activeSiege.besiegerArmyIds.length} 支。`
+      : `${army.name}停驻于${node.name}城外，开始围困。城防、守军与城内储备将逐回合消耗；强攻胜负仍由规则引擎结算。`,
+    actorId: army.commanderId,
+    actorName: army.commanderName,
+    factionKey: army.faction,
+    targetId: node.nodeId,
+    targetLabel: node.name,
+    before: { owner: node.faction, fortification: region.fortification, garrison: region.garrison },
+    after: { besiegerFaction: activeSiege.besiegerFaction, progress: activeSiege.progress, besiegerArmyIds: [...activeSiege.besiegerArmyIds] },
+    payload: { action: joining ? 'siege_joined' : 'siege_started', mapNodeId: node.nodeId, besiegerArmyId: army.armyId },
+    evidence: '有城防/守军的主城建立多回合围城；军团留在城外，不在抵达时直接自动攻陷。',
+    source: 'engine',
+    visibleToPlayer: state.factionKey === army.faction || state.factionKey === node.faction,
+  }));
+  return true;
+}
+
+function releaseSiegeOrders(state: GameState, nodeId: string, siege: MapNodeSiegeState): void {
+  for (const id of siege.besiegerArmyIds) {
+    const army = state.armies.find((item) => item.armyId === id);
+    if (!army || army.stance !== 'siege' || army.targetMapNodeId !== nodeId) continue;
+    army.stance = 'defend';
+    army.targetMapNodeId = null;
+    army.targetRegionId = null;
+  }
+}
+
+/** 围城推进：解围军团到达即接战；否则城防、守军、库存按回合损耗。 */
+function processSieges(state: GameState, ctx: DerivedContext, events: GameEvent[]): void {
+  if (!state.mapNodes) return;
+  const adjacency = buildMapAdjacency(ctx);
+  for (const node of Object.values(state.mapNodes)) {
+    const siege = node.siege;
+    if (!siege) continue;
+    const owner = node.faction;
+    const region = state.regions[node.regionId];
+    if (!region || owner === siege.besiegerFaction) {
+      node.siege = null;
+      releaseSiegeOrders(state, node.nodeId, siege);
+      continue;
+    }
+
+    const besiegers = siege.besiegerArmyIds
+      .map((id) => state.armies.find((army) => army.armyId === id))
+      .filter((army): army is Army => {
+        if (!army || army.faction !== siege.besiegerFaction || army.status !== 'idle' ||
+            army.stance !== 'siege' || army.targetMapNodeId !== node.nodeId || army.troops < 60) return false;
+        const at = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
+        return Boolean(at && (adjacency[at] ?? []).some((edge) => edge.to === node.nodeId));
+      });
+    siege.besiegerArmyIds = besiegers.map((army) => army.armyId);
+    if (besiegers.length === 0) {
+      node.siege = null;
+      releaseSiegeOrders(state, node.nodeId, siege);
+      events.push(emitEvent(state, {
+        type: 'army_move',
+        title: `围城解除：${node.name}`,
+        summary: `${node.name}外围已无有效围城军团，攻城行动中止；已损耗的城防与守军不会恢复。`,
+        actorId: 'siege-ledger',
+        actorName: '军务簿吏',
+        factionKey: owner,
+        targetId: node.nodeId,
+        targetLabel: node.name,
+        payload: { action: 'siege_lifted', reason: 'no_besiegers', mapNodeId: node.nodeId },
+        evidence: '持续围城必须关联仍然有效、位于目标相邻节点的真实军团',
+        source: 'engine',
+        visibleToPlayer: state.factionKey === owner || state.factionKey === siege.besiegerFaction,
+      }));
+      continue;
+    }
+
+    const relief = state.armies.find((army) =>
+      army.faction === owner && army.troops >= 60 &&
+      (army.mapNodeId ? army.mapNodeId === node.nodeId : army.nodeId === node.regionId),
+    );
+    if (relief) {
+      const stormer = [...besiegers].sort((a, b) => b.troops - a.troops || a.armyId.localeCompare(b.armyId))[0];
+      node.siege = null;
+      releaseSiegeOrders(state, node.nodeId, siege);
+      events.push(emitEvent(state, {
+        type: 'army_move',
+        title: `${node.name}爆发解围战`,
+        summary: `${relief.name}进入被围主城，围城军与守方援军接战。`,
+        actorId: relief.commanderId,
+        actorName: relief.commanderName,
+        factionKey: owner,
+        targetId: node.nodeId,
+        targetLabel: node.name,
+        payload: { action: 'siege_relief', mapNodeId: node.nodeId, reliefArmyId: relief.armyId, besiegerArmyId: stormer.armyId },
+        evidence: '守方野战军团进入被围主城时，以既有确定性战斗规则结算解围战',
+        source: 'engine',
+        visibleToPlayer: state.factionKey === owner || state.factionKey === siege.besiegerFaction,
+      }));
+      events.push(...handleBattle(state, ctx, stormer, node.regionId, node.nodeId));
+      if (state.armies.some((army) => army.armyId === relief.armyId)) clearMarch(relief);
+      continue;
+    }
+    if (state.date.turn <= siege.startedTurn) continue;
+
+    const besiegerTroops = besiegers.reduce((sum, army) => sum + army.troops, 0);
+    const fortBefore = region.fortification;
+    const garrisonBefore = region.garrison;
+    const supplyBefore = node.supplyLevel;
+    const supplied = node.supplyLevel > 0;
+    const troopBonus = Math.min(BALANCE.siege.maxTroopBonus, Math.floor(besiegerTroops / 20_000)) * BALANCE.siege.troopBonusPer20k;
+    const progressGain = Math.max(
+      BALANCE.siege.minProgressPerTurn,
+      Math.min(
+        BALANCE.siege.maxProgressPerTurn,
+        Math.round(BALANCE.siege.baseProgressPerTurn + troopBonus -
+          fortBefore * BALANCE.siege.fortificationProgressPenaltyPerPoint + (supplied ? 0 : 2)),
+      ),
+    );
+    const garrisonRate = supplied ? BALANCE.siege.garrisonLossRateSupplied : BALANCE.siege.garrisonLossRateStarved;
+    const losses = garrisonBefore > 0 ? Math.min(garrisonBefore, Math.max(1, Math.round(garrisonBefore * garrisonRate))) : 0;
+    const fortLoss = Math.min(region.fortification, BALANCE.siege.fortificationDamagePerTurn);
+
+    siege.turns += 1;
+    siege.progress = clamp(siege.progress + progressGain);
+    region.garrison = Math.max(0, region.garrison - losses);
+    region.garrisoned = region.garrison > 0;
+    region.fortification = Math.max(0, region.fortification - fortLoss);
+    node.garrison = region.garrison;
+    node.fortification = region.fortification;
+    node.supplyLevel = Math.max(0, node.supplyLevel - BALANCE.siege.supplyDrainPerTurn);
+
+    events.push(emitEvent(state, {
+      type: 'army_move',
+      title: `${node.name}围城推进（第 ${siege.turns} 回合）`,
+      summary: `围城进度 ${Math.round(siege.progress)}%；城防损耗 ${fortLoss}，守军损耗 ${losses}，城内储备由 ${Math.round(supplyBefore)} 降至 ${Math.round(node.supplyLevel)}。`,
+      actorId: besiegers[0].commanderId,
+      actorName: besiegers[0].commanderName,
+      factionKey: siege.besiegerFaction,
+      targetId: node.nodeId,
+      targetLabel: node.name,
+      before: { progress: Math.round(siege.progress - progressGain), fortification: fortBefore, garrison: garrisonBefore, supplyLevel: supplyBefore },
+      after: { progress: Math.round(siege.progress), fortification: region.fortification, garrison: region.garrison, supplyLevel: node.supplyLevel },
+      payload: { action: 'siege_progress', mapNodeId: node.nodeId, turns: siege.turns, progressGain, garrisonLosses: losses, fortificationLoss: fortLoss, besiegerTroops },
+      evidence: '围城进度由攻城兵力、城防与城内补给确定性结算；库存、城防和守军只会被实际消耗',
+      source: 'engine',
+      visibleToPlayer: state.factionKey === owner || state.factionKey === siege.besiegerFaction,
+    }));
+
+    if (siege.progress >= 100) {
+      const stormer = [...besiegers].sort((a, b) => b.troops - a.troops || a.armyId.localeCompare(b.armyId))[0];
+      node.siege = null;
+      releaseSiegeOrders(state, node.nodeId, siege);
+      events.push(emitEvent(state, {
+        type: 'army_move',
+        title: `围城突破：${node.name}`,
+        summary: `围城已持续 ${siege.turns} 回合，城防防线被攻破；${stormer.name}发起强攻，最终胜负仍由战斗规则决定。`,
+        actorId: stormer.commanderId,
+        actorName: stormer.commanderName,
+        factionKey: siege.besiegerFaction,
+        targetId: node.nodeId,
+        targetLabel: node.name,
+        payload: { action: 'siege_assault', mapNodeId: node.nodeId, turns: siege.turns, progress: siege.progress },
+        evidence: '围城进度到达 100 后调用既有战斗结算，不直接强制占领',
+        source: 'engine',
+        visibleToPlayer: state.factionKey === owner || state.factionKey === siege.besiegerFaction,
+      }));
+      events.push(...handleBattle(state, ctx, stormer, node.regionId, node.nodeId));
+    }
+  }
 }
 
 /** 次级据点战斗：结算只改变该节点的控制权，不吞并所属整州。 */
