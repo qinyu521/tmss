@@ -1047,6 +1047,19 @@ describe('回合结算', () => {
     expect((battleA!.after as any).attackerWon).toBe((battleB!.after as any).attackerWon);
     expect((battleA!.payload as any).seed).toBe((battleB!.payload as any).seed);
     expect((battleA!.after as any).totalLosses).toBe((battleB!.after as any).totalLosses);
+    
+    const outcome = (battleA!.after as any).attackerWon as boolean;
+    const payload = battleA!.payload as any;
+    const defeatedCommanderId = outcome ? payload.defenderCommander?.id : payload.attackerCommander?.id;
+    expect(defeatedCommanderId).toBeTruthy();
+    const defeatedSeed = ctx.charactersById[defeatedCommanderId];
+    const loyaltyBefore = base.characters[defeatedCommanderId].militaryLoyalty ?? defeatedSeed?.loyalty ?? 50;
+    expect(a.state.characters[defeatedCommanderId].militaryLoyalty).toBeLessThan(loyaltyBefore);
+    expect(a.report.events.some((event) =>
+      event.type === 'politics' &&
+      event.title.includes('战败失威') &&
+      event.actorId === defeatedCommanderId,
+    )).toBe(true);
   });
 
   it('匈奴部落忠诚过低时拒绝出兵', () => {
