@@ -2,7 +2,8 @@ import type { GameEvent, GameState } from '../types.js';
 import type { DerivedContext } from '../dataset.js';
 import { BALANCE } from '../balance.js';
 import { emitEvent } from './events.js';
-import { clamp } from './state.js';
+import { clamp, isCharacterAlive } from './state.js';
+import { successionNetworkInfluence } from './relationships.js';
 
 /** 三国国情机制：匈奴部落协调、大雍皇子争储、大楚世家掣肘。 */
 export function runPolitics(state: GameState, ctx: DerivedContext, events: GameEvent[]): void {
@@ -34,7 +35,10 @@ export function runPolitics(state: GameState, ctx: DerivedContext, events: GameE
       }
     }
     const avg = hun.tribes.reduce((s, t) => s + t.loyalty, 0) / hun.tribes.length;
-    hun.cohesion = clamp(BALANCE.politics.hun.baseCohesion + (avg - 55) * 0.7);
+    const cohesionFromLoyalty = BALANCE.politics.hun.baseCohesion + (avg - 55) * 0.7;
+    // 联盟协调度可被王庭议事直接改变；部落忠诚是重要输入，但不能每旬将政治决策完全覆盖。
+    const currentCohesion = hun.cohesion ?? cohesionFromLoyalty;
+    hun.cohesion = clamp(currentCohesion * 0.8 + cohesionFromLoyalty * 0.2);
     const refusal = hun.tribes.some((t) => t.stance === 'refusing');
     if (refusal !== state.flags.tribalRefusal) {
       state.flags.tribalRefusal = refusal;
@@ -61,7 +65,20 @@ export function runPolitics(state: GameState, ctx: DerivedContext, events: GameE
   const yong = state.special.YONG;
   if (yong.princes && yong.princes.length > 0) {
     for (const p of yong.princes) {
-      p.influence = clamp(p.influence + (p.ambition - 45) / 22 - (p.trust - 55) / 60 + BALANCE.politics.yong.princeInfluenceDrift);
+      const networkInfluence = state.flags.successionCrisis
+        ? successionNetworkInfluence(
+            ctx.seed.relationships,
+            p.personId,
+            (personId) => ctx.charactersById[personId]?.faction_key === 'YONG' && isCharacterAlive(state, personId),
+          )
+        : 0;
+      p.influence = clamp(
+        p.influence +
+          (p.ambition - 45) / 22 -
+          (p.trust - 55) / 60 +
+          BALANCE.politics.yong.princeInfluenceDrift +
+          networkInfluence,
+      );
       p.trust = clamp(p.trust + (p.isCrownPrince ? 0.8 : -0.2) - (state.flags.successionCrisis ? 1.5 : 0));
     }
     const sorted = [...yong.princes].sort((a, b) => b.influence - a.influence);
@@ -104,8 +121,13 @@ export function runPolitics(state: GameState, ctx: DerivedContext, events: GameE
       h.taxCompliance = Math.round((0.6 + h.support / 250) * 100) / 100;
       h.privateForce = Math.round(3_000 + h.support * BALANCE.politics.chu.privateForcePerSupport);
     }
-    chu.centralAuthority = Math.round(chu.houses.reduce((s, h) => s + h.support, 0) / chu.houses.length);
-    const boycott = (chu.centralAuthority ?? 55) < BALANCE.politics.chu.boycottThreshold;
+    const averageHouseSupport = chu.houses.reduce((sum, house) => sum + house.support, 0) / chu.houses.length;
+    // 中枢权威是独立政治资本，不应每旬被世家平均支持度直接覆盖；支持度变化以 20% 权重缓慢传导。
+    const currentAuthority = chu.centralAuthority ?? averageHouseSupport;
+    chu.centralAuthority = Math.round(clamp(currentAuthority * 0.8 + averageHouseSupport * 0.2));
+    // 世家平均支持跌破阈值会直接触发集体抵制；中枢权威另作独立政治资本缓慢演变。
+    const boycott = averageHouseSupport < BALANCE.politics.chu.boycottThreshold ||
+      (chu.centralAuthority ?? 55) < BALANCE.politics.chu.boycottThreshold;
     if (boycott !== state.flags.houseBoycott) {
       state.flags.houseBoycott = boycott;
       events.push(
@@ -191,8 +213,129 @@ export function runPolitics(state: GameState, ctx: DerivedContext, events: GameE
       }
     }
   }
+
+  // 战后政治仇怨会在后续旬期转化为一次有代价的反击，并设冷却防止事件刷屏。
+  resolvePoliticalGrudgeResponses(state, ctx, events);
 }
 
+function resolvePoliticalGrudgeResponses(
+  state: GameState,
+  ctx: DerivedContext,
+  events: GameEvent[],
+): void {
+  const turn = state.date.turn;
+  for (const [actorId, actorRuntime] of Object.entries(state.characters)) {
+    const actor = ctx.charactersById[actorId];
+    if (!actor || !actorRuntime.alive || !actorRuntime.politicalGrudges) continue;
+    const grudges = { ...actorRuntime.politicalGrudges };
+    const nextResponses = { ...(actorRuntime.politicalGrudgeNextResponseTurn ?? {}) };
+    // 与尚未包含冷却字段的存档兼容：先安排到下一旬，不在加载后的同一旬立刻反击。
+    for (const [targetId, score] of Object.entries(grudges)) {
+      if (score >= 10 && !Number.isFinite(nextResponses[targetId])) {
+        nextResponses[targetId] = turn + 1;
+      }
+    }
+    actorRuntime.politicalGrudgeNextResponseTurn = nextResponses;
+    state.characters[actorId] = actorRuntime;
+    const candidates = Object.entries(grudges)
+      .filter(([targetId, score]) => {
+        const target = ctx.charactersById[targetId];
+        return score >= 10 &&
+          !!target &&
+          target.faction_key === actor.faction_key &&
+          (nextResponses[targetId] ?? Number.POSITIVE_INFINITY) <= turn &&
+          isCharacterAlive(state, targetId);
+      })
+      .sort(([idA, scoreA], [idB, scoreB]) => scoreB - scoreA || idA.localeCompare(idB));
+    const candidate = candidates[0];
+    if (!candidate) continue;
+
+    const [targetId, scoreBefore] = candidate;
+    const target = ctx.charactersById[targetId];
+    if (!target) continue;
+    const before: Record<string, unknown> = { grudge: scoreBefore };
+    const after: Record<string, unknown> = {};
+    let effect = '';
+    if (actor.faction_key === 'YONG') {
+      const prince = (state.special.YONG.princes ?? []).find((item) => item.personId === targetId);
+      if (prince) {
+        before.influence = Math.round(prince.influence * 100) / 100;
+        prince.influence = clamp(prince.influence - 2);
+        after.influence = Math.round(prince.influence * 100) / 100;
+        const stabilityBefore = state.special.YONG.courtStability ?? 50;
+        before.courtStability = Math.round(stabilityBefore * 100) / 100;
+        state.special.YONG.courtStability = clamp(stabilityBefore - 1);
+        after.courtStability = Math.round((state.special.YONG.courtStability ?? 50) * 100) / 100;
+        effect = '其影响力下降 2，朝局稳定下降 1。';
+      }
+    } else if (actor.faction_key === 'HUN') {
+      const tribe = (state.special.HUN.tribes ?? []).find((item) => item.chiefId === targetId);
+      if (tribe) {
+        before.loyalty = Math.round(tribe.loyalty * 100) / 100;
+        tribe.loyalty = clamp(tribe.loyalty - 2);
+        after.loyalty = Math.round(tribe.loyalty * 100) / 100;
+        const cohesionBefore = state.special.HUN.cohesion ?? 50;
+        before.cohesion = Math.round(cohesionBefore * 100) / 100;
+        state.special.HUN.cohesion = clamp(cohesionBefore - 1);
+        after.cohesion = Math.round((state.special.HUN.cohesion ?? 50) * 100) / 100;
+        effect = '其部落忠诚下降 2，联盟协调度下降 1。';
+      }
+    } else if (actor.faction_key === 'CHU') {
+      const house = (state.special.CHU.houses ?? []).find((item) => item.patriarchId === targetId);
+      if (house) {
+        before.support = Math.round(house.support * 100) / 100;
+        house.support = clamp(house.support - 2);
+        after.support = Math.round(house.support * 100) / 100;
+        const authorityBefore = state.special.CHU.centralAuthority ?? 50;
+        before.centralAuthority = Math.round(authorityBefore * 100) / 100;
+        state.special.CHU.centralAuthority = clamp(authorityBefore + 1);
+        after.centralAuthority = Math.round((state.special.CHU.centralAuthority ?? 50) * 100) / 100;
+        effect = '该世家支持下降 2，中枢权威上升 1。';
+      }
+    }
+    if (!effect) {
+      const targetRuntime = state.characters[targetId] ?? {
+        personId: targetId,
+        alive: true,
+        ageBand: target.age_band,
+      };
+      const standingBefore = targetRuntime.courtStanding ?? 50;
+      before.courtStanding = standingBefore;
+      targetRuntime.courtStanding = clamp(standingBefore - 2);
+      after.courtStanding = targetRuntime.courtStanding;
+      state.characters[targetId] = targetRuntime;
+      effect = '其在朝声望下降 2。';
+    }
+
+    // 反击会消耗一部分积怨；仍然强烈的仇怨最早四旬后再升级一次。
+    const scoreAfter = Math.max(0, scoreBefore - 3);
+    grudges[targetId] = scoreAfter;
+    nextResponses[targetId] = turn + 4;
+    actorRuntime.politicalGrudges = grudges;
+    actorRuntime.politicalGrudgeNextResponseTurn = nextResponses;
+    state.characters[actorId] = actorRuntime;
+
+    events.push(emitEvent(state, {
+      type: 'politics',
+      title: actor.faction_key === 'YONG'
+        ? `大雍·旧怨翻涌·${actor.name}向${target.name}发难`
+        : actor.faction_key === 'HUN'
+          ? `匈奴·旧怨牵动部落·${actor.name}向${target.name}发难`
+          : `大楚·旧怨引发朝争·${actor.name}向${target.name}发难`,
+      summary: `${actor.name}因战后裁决对${target.name}积怨已久，终于在本旬发动政治反击；${effect}仇怨由 ${scoreBefore} 降至 ${scoreAfter}，若仍未化解，至少四旬后才可能再次升级。`,
+      actorId,
+      actorName: actor.name,
+      factionKey: actor.faction_key,
+      targetId,
+      targetLabel: target.name,
+      before,
+      after: { ...after, grudge: scoreAfter, nextResponseTurn: turn + 4 },
+      evidence: '战后裁决留下的显式人物仇怨达到 10；每名人物每旬最多反击一次，反击后设四旬冷却并消耗 3 点仇怨',
+      source: 'npc_ai',
+      visibleToPlayer: state.factionKey === actor.faction_key,
+    }));
+  }
+}
 function mulberryFrom(seed: number): () => number {
   let a = seed >>> 0;
   return () => {

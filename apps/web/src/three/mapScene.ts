@@ -30,6 +30,7 @@ interface ArmyMarker {
   icon: THREE.Sprite | null;
   label: HTMLDivElement;
   position: THREE.Vector3;
+  targetPosition: THREE.Vector3;
   route: THREE.Line | null;
   isOwn: boolean;
 }
@@ -179,6 +180,7 @@ export class MapScene {
   private heightAt: (x: number, z: number) => number = () => 0;
   private animations: { ring: number; time: number } = { ring: 0, time: 0 };
   private frame = 0;
+  private lastFrameTime = 0;
   private disposed = false;
   private dragging = false;
   private dragMode: 'pan' | 'rotate' = 'pan';
@@ -238,7 +240,7 @@ export class MapScene {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.bindPointer();
-    this.animate();
+    this.animate(0);
   }
 
   setMap(map: MapData): void {
@@ -937,6 +939,8 @@ export class MapScene {
   }
 
   private rebuildArmies(): void {
+    // 保留旧位置，视图刷新后让军队标记平滑移动到新位置，而不是瞬间跳点。
+    const previousPositions = new Map(this.armyMarkers.map((marker) => [marker.armyId, marker.group.position.clone()]));
     for (const marker of this.armyMarkers) {
       this.scene.remove(marker.group);
       marker.label.remove();
@@ -1020,12 +1024,18 @@ export class MapScene {
           );
           routeLine.computeLineDistances();
           this.scene.add(routeLine);
-          const routePoint = pointAlong(routePoints, army.progress);
+          // 进度只属于当前路段，因此标记只在首段道路的起终点间插值；路线线条仍显示完整剩余路径。
+          const routePoint = routePoints[0].clone().lerp(
+            routePoints[1],
+            THREE.MathUtils.clamp(army.progress, 0, 1),
+          );
           position.set(routePoint.x, routePoint.y + 4, routePoint.z);
         }
       }
 
-      group.position.copy(position);
+      const targetPosition = position.clone();
+      const previousPosition = previousPositions.get(army.armyId);
+      group.position.copy(previousPosition ?? targetPosition);
       group.scale.setScalar(1.3);
       group.userData = { type: 'army', armyId: army.armyId };
       this.scene.add(group);
@@ -1046,7 +1056,8 @@ export class MapScene {
         detailed,
         icon,
         label,
-        position: position.clone(),
+        position: (previousPosition ?? targetPosition).clone(),
+        targetPosition,
         route: routeLine,
         isOwn: army.own,
       });
@@ -1217,10 +1228,16 @@ export class MapScene {
     });
   }
 
-  private animate = (): void => {
+  private animate = (timestamp: number): void => {
     if (this.disposed) return;
     this.frame = requestAnimationFrame(this.animate);
-    this.animations.time += 0.016;
+    // 用真实帧间隔计算插值，避免 30fps 与 144fps 机器上的军队移动速度不同。
+    const deltaSeconds = this.lastFrameTime > 0
+      ? Math.min(0.05, Math.max(0, (timestamp - this.lastFrameTime) / 1000))
+      : 1 / 60;
+    this.lastFrameTime = timestamp;
+    const movementAlpha = 1 - Math.exp(-3.4 * deltaSeconds);
+    this.animations.time += deltaSeconds;
     this.target.lerp(this.desiredTarget, 0.075);
     this.distance += (this.desiredDistance - this.distance) * 0.08;
     const cosPitch = Math.cos(this.pitch);
@@ -1238,6 +1255,11 @@ export class MapScene {
     if (this.decorGroup) this.decorGroup.visible = this.distance < 640 && this.quality === 'high';
 
     for (const marker of this.armyMarkers) {
+      // 每帧插值只负责表现层；权威位置、路线与耗时仍由规则引擎决定。
+      marker.group.position.lerp(marker.targetPosition, movementAlpha);
+      if (marker.group.position.distanceToSquared(marker.targetPosition) < 0.16) {
+        marker.group.position.copy(marker.targetPosition);
+      }
       const dist = this.camera.position.distanceTo(marker.group.position);
       const detailed = dist < 750;
       marker.detailed.visible = detailed;
@@ -1309,25 +1331,6 @@ function defaultUnitFor(faction: FactionKey): string {
 function formatTroops(n: number): string {
   if (n >= 10_000) return `${(n / 10_000).toFixed(n >= 100_000 ? 0 : 1)}万`;
   return n.toLocaleString();
-}
-
-function pointAlong(points: THREE.Vector3[], t: number): THREE.Vector3 {
-  if (points.length === 1) return points[0].clone();
-  const lengths: number[] = [];
-  let total = 0;
-  for (let i = 0; i < points.length - 1; i++) {
-    const len = points[i].distanceTo(points[i + 1]);
-    lengths.push(len);
-    total += len;
-  }
-  let remaining = THREE.MathUtils.clamp(t, 0, 1) * total;
-  for (let i = 0; i < lengths.length; i++) {
-    if (remaining <= lengths[i]) {
-      return points[i].clone().lerp(points[i + 1], remaining / (lengths[i] || 1));
-    }
-    remaining -= lengths[i];
-  }
-  return points[points.length - 1].clone();
 }
 
 /** 22 个兵种的低多边形剪影：按兵种模板改变马匹、武器、甲胄与旗帜。 */

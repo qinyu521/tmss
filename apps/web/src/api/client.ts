@@ -88,7 +88,15 @@ export interface ConfigData {
 
 export interface CharacterSummary {
   person_id: string;
+  /** 未携带 gameId 时为种子归属；携带 gameId 时为本局当前效忠势力。 */
   faction_key: string;
+  /** 本局发生倒戈时保留的原始种子势力。 */
+  originalFactionKey?: string;
+  /** 本局运行时效忠势力；仅在人物倒戈后设置。 */
+  allegianceFaction?: string;
+  /** 当前倒戈风险的预警回合与目标势力。 */
+  defectionWarningTurn?: number;
+  defectionTargetFaction?: string;
   name: string;
   gender: string;
   age_band: string;
@@ -101,6 +109,7 @@ export interface CharacterSummary {
   archetype_trait: string;
   governance: number;
   command: number;
+  commandPenalty?: number;
   strategy: number;
   intrigue: number;
   commerce: number;
@@ -110,6 +119,16 @@ export interface CharacterSummary {
   /** 携带 gameId 查询时返回：该局生死与死因 */
   alive?: boolean;
   deathCause?: string;
+  /** 本局廷议声望（0-100）；未加载运行时数据时为空 */
+  courtStanding?: number;
+  /** 本局军令忠诚度（0-100）；未加载运行时数据时默认为人物种子忠诚 */
+  militaryLoyalty?: number;
+  lastBattleTurn?: number;
+  lastBattleOutcome?: 'victory' | 'defeat';
+  lastBattleLossRate?: number;
+  pendingBattleSettlement?: boolean;
+  pendingBattleCase?: 'transfer_request' | 'impeachment';
+  battlePoliticalOpponentId?: string;
 }
 
 export interface GameListItem {

@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, type BuiltApp } from './app.js';
+import { createGame } from '@tianming/shared';
+import { saveGameState } from './gameRepo.js';
 import type { LlmFetcher } from './llm.js';
 
 let built: BuiltApp;
@@ -100,6 +102,58 @@ describe('API 集成', () => {
     expect(after.json().runtime).toBeTruthy();
   });
 
+  it('携带 gameId 查询势力名册时会按倒戈后的本局效忠归属重新筛选和分页', async () => {
+    const gameId = 'api-runtime-defection-roster';
+    const state = createGame(built.seed, {
+      gameId,
+      factionKey: 'CHU',
+      playerRole: 'ruler',
+      seed: 20261028,
+    });
+    const defectingArmy = state.armies.find((army) => army.faction === 'CHU')!;
+    const commanderId = defectingArmy.commanderId;
+    state.characters[commanderId].allegianceFaction = 'HUN';
+    state.characters[commanderId].defectionWarningTurn = 1;
+    state.characters[commanderId].defectionTargetFaction = 'HUN';
+    saveGameState(built.db, state);
+
+    const hunRoster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=HUN&pageSize=80&gameId=${gameId}`,
+    });
+    expect(hunRoster.statusCode).toBe(200);
+    const hunBody = hunRoster.json();
+    expect(hunBody.total).toBe(113);
+    const hunPageTwo = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=HUN&page=2&pageSize=80&gameId=${gameId}`,
+    });
+    const hunItems = [...hunBody.items, ...hunPageTwo.json().items];
+    const defected = hunItems.find((person: any) => person.person_id === commanderId);
+    expect(defected).toBeTruthy();
+    expect(defected.faction_key).toBe('HUN');
+    expect(defected.originalFactionKey).toBe('CHU');
+    expect(defected.allegianceFaction).toBe('HUN');
+    expect(defected.defectionWarningTurn).toBe(1);
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/characters/${commanderId}?gameId=${gameId}`,
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().currentFactionKey).toBe('HUN');
+    expect(detail.json().originalFactionKey).toBe('CHU');
+    expect(detail.json().runtime.allegianceFaction).toBe('HUN');
+
+    const chuRoster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=CHU&pageSize=80&gameId=${gameId}`,
+    });
+    expect(chuRoster.statusCode).toBe(200);
+    expect(chuRoster.json().total).toBe(111);
+    expect(chuRoster.json().items.some((person: any) => person.person_id === commanderId)).toBe(false);
+  });
+
   it('22 个兵种含派生数值档案', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/units' });
     expect(res.statusCode).toBe(200);
@@ -159,6 +213,102 @@ describe('API 集成', () => {
     expect(turnBody.view.date.turn).toBe(2);
     expect(turnBody.report.events.length).toBeGreaterThan(0);
     expect(turnBody.report.chronicle.length).toBeGreaterThan(0);
+  });
+
+  it('API 接受廷议议案，并在结算后返回真实政治事件', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'YONG', playerRole: 'ruler', seed: 20261028 },
+    });
+    expect(created.statusCode).toBe(200);
+    const gid = created.json().gameId as string;
+    const roster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=YONG&pageSize=8&gameId=${gid}`,
+    });
+    const officials = roster.json().items.filter((person: any) => person.alive !== false);
+    expect(officials.length).toBeGreaterThanOrEqual(2);
+    expect(typeof officials[0].courtStanding).toBe('number');
+    const speakerStandingBefore = officials[0].courtStanding;
+    const oppositionStandingBefore = officials[1].courtStanding;
+    const order = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: {
+        orders: [{
+          orderId: 'court-api',
+          kind: 'hold_court',
+          agenda: 'succession',
+          decision: 'assertive',
+          resolution: 'compromise',
+          speakerPersonId: officials[0].person_id,
+          oppositionPersonId: officials[1].person_id,
+        }],
+      },
+    });
+    expect(order.statusCode).toBe(200);
+    expect(order.json().accepted).toHaveLength(1);
+    expect(order.json().view.pendingOrders[0].kind).toBe('hold_court');
+
+    const turn = await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
+    expect(turn.statusCode).toBe(200);
+    const body = turn.json();
+    const court = body.report.events.find((event: any) => event.type === 'politics' && event.title.includes('皇嗣与储位'));
+    expect(court).toBeTruthy();
+    expect(court.after.courtStability).toBeGreaterThan(0);
+    expect(court.after.speakerPersonId).toBe(officials[0].person_id);
+    expect(court.after.oppositionPersonId).toBe(officials[1].person_id);
+    expect(court.after.resolution).toBe('compromise');
+    expect(court.after.decision).toBe('balanced');
+    expect(court.after.speakerStandingAfter).toBe(speakerStandingBefore + 1);
+    expect(court.after.oppositionStandingAfter).toBe(oppositionStandingBefore + 1);
+    expect(court.summary).toContain(officials[0].name);
+    const updatedRoster = await app.inject({ method: 'GET', url: `/api/characters?faction=YONG&pageSize=8&gameId=${gid}` });
+    const updatedSpeaker = updatedRoster.json().items.find((person: any) => person.person_id === officials[0].person_id);
+    expect(updatedSpeaker.courtStanding).toBe(speakerStandingBefore + 1);
+    expect(body.view.special.courtStability).toBeGreaterThan(0);
+  });
+
+  it('API 允许君主赏赐将领并持久化本局军令忠诚', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'YONG', playerRole: 'ruler', seed: 20261029 },
+    });
+    expect(created.statusCode).toBe(200);
+    const gid = created.json().gameId as string;
+    const army = created.json().view.armies.find((item: any) => item.own);
+    expect(army).toBeTruthy();
+    const personId = army.commanderId as string;
+    const beforeRoster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=YONG&pageSize=100&gameId=${gid}`,
+    });
+    const commander = beforeRoster.json().items.find((person: any) => person.person_id === personId);
+    expect(commander).toBeTruthy();
+    const before = commander.militaryLoyalty as number;
+
+    const order = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: { orders: [{ orderId: 'reward-api', kind: 'reward_commander', personId, amount: 5_000 }] },
+    });
+    expect(order.statusCode).toBe(200);
+    expect(order.json().accepted).toHaveLength(1);
+
+    const turn = await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
+    expect(turn.statusCode).toBe(200);
+    const event = turn.json().report.events.find((item: any) => item.title === `君主赏赐将领·${commander.name}`);
+    expect(event).toBeTruthy();
+    expect(event.after.militaryLoyalty).toBe(Math.min(100, before + 5));
+
+    const afterRoster = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=YONG&pageSize=100&gameId=${gid}`,
+    });
+    const updated = afterRoster.json().items.find((person: any) => person.person_id === personId);
+    expect(updated.militaryLoyalty).toBe(Math.min(100, before + 5));
   });
 
   it('分兵/州兵/计谋可通过 API 下达并结算', async () => {
@@ -273,13 +423,18 @@ describe('API 集成', () => {
       payload: { factionKey: 'HUN', playerRole: 'ruler', seed: 424242 },
     });
     const gid = created.json().gameId;
-    const order = await app.inject({
-      method: 'POST',
-      url: `/api/games/${gid}/orders`,
-      payload: { orders: [{ orderId: 'rb1', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' }] },
-    });
-    expect(order.statusCode).toBe(200);
-    expect(order.json().accepted).toHaveLength(1);
+    // 回放 API 的测试固定一个当旬可抵达的在途军团；行军耗时由引擎路线测试独立覆盖。
+    const battleState = createGame(built.seed, { gameId: gid, factionKey: 'HUN', playerRole: 'ruler', seed: 424242 });
+    const attacker = battleState.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
+    attacker.path = ['YONG-REG03'];
+    attacker.hopCosts = [5];
+    attacker.targetRegionId = 'YONG-REG03';
+    attacker.stance = 'march';
+    attacker.status = 'marching';
+    attacker.marchDaysTotal = 5;
+    attacker.marchDaysLeft = 5;
+    attacker.currentHopDaysTotal = 5;
+    saveGameState(built.db, battleState);
     await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
 
     const events = (await app.inject({ method: 'GET', url: `/api/games/${gid}/events` })).json().items;

@@ -10,20 +10,49 @@ export interface AdjacentRegion {
   cost: number;
   edgeId: string;
   routeType: string;
+  throughput: string;
+}
+
+/**
+ * 大军通过低容量道路时需为辎重、队列展开和交通拥堵付出额外时间。
+ * 小部队通常无需承担该惩罚；这些是行军成本修正，不是道路封锁判定。
+ */
+export function routeCapacityMultiplier(troops: number, throughput: string): number {
+  const size = Math.max(0, troops);
+  if (/高/.test(throughput)) return 1;
+  if (/争议/.test(throughput)) {
+    if (size >= 50_000) return 1.6;
+    if (size >= 25_000) return 1.3;
+    return 1.1;
+  }
+  if (/低/.test(throughput)) {
+    if (size >= 50_000) return 1.4;
+    if (size >= 25_000) return 1.18;
+    return 1;
+  }
+  if (/中/.test(throughput)) return size >= 50_000 ? 1.1 : 1;
+  return 1;
 }
 
 export function buildAdjacency(ctx: DerivedContext): Record<string, AdjacentRegion[]> {
   const adj: Record<string, AdjacentRegion[]> = {};
   const idByName = new Map(ctx.territories.map((t) => [t.region, t.region_id]));
-  const add = (from: string, to: string, edgeId: string, cost: number, routeType: string) => {
+  const add = (
+    from: string,
+    to: string,
+    edgeId: string,
+    cost: number,
+    routeType: string,
+    throughput: string,
+  ) => {
     adj[from] ??= [];
-    adj[from].push({ to, cost, edgeId, routeType });
+    adj[from].push({ to, cost, edgeId, routeType, throughput });
   };
   for (const edge of ctx.edges) {
     const from = idByName.get(edge.from_region) ?? edge.from_region;
     const to = idByName.get(edge.to_region) ?? edge.to_region;
-    add(from, to, edge.edge_id, edge.base_movement_cost, edge.route_type);
-    add(to, from, edge.edge_id, edge.base_movement_cost, edge.route_type);
+    add(from, to, edge.edge_id, edge.base_movement_cost, edge.route_type, edge.throughput);
+    add(to, from, edge.edge_id, edge.base_movement_cost, edge.route_type, edge.throughput);
   }
   return adj;
 }
@@ -54,7 +83,7 @@ export interface PathResult {
   error?: string;
 }
 
-export function armyMobility(army: Army): number {
+export function armyMobility(army: Pick<Army, 'troops' | 'levies' | 'units'>): number {
   const total = army.troops || 1;
   const elite = army.units.reduce((s, u) => s + u.count, 0);
   const eliteMobility = army.units.reduce(
@@ -66,7 +95,7 @@ export function armyMobility(army: Army): number {
 }
 
 /** 重甲与疲劳会拖慢行军；骑兵与轻装则更快。 */
-export function marchSpeedMultiplier(army: Army): number {
+export function marchSpeedMultiplier(army: Pick<Army, 'troops' | 'levies' | 'units' | 'fatigue'>): number {
   const mobility = armyMobility(army);
   const fatigue = 1 + army.fatigue / 220;
   return Math.max(0.55, Math.min(1.45, (0.72 + mobility / 130) / fatigue));
@@ -78,6 +107,7 @@ export function findPath(
   faction: FactionKey,
   from: string,
   to: string,
+  options: { troops?: number } = {},
 ): PathResult {
   if (from === to) return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '部队已在该州府。' };
   if (!state.regions[from] || !state.regions[to]) {
@@ -107,10 +137,12 @@ export function findPath(
     if (node === to) break;
     for (const link of adj[node] ?? []) {
       if (!visited.has(link.to) && !canTraverse(state, ctx, faction, link.to)) continue;
-      const candidate = dist[node] + link.cost;
+      const effectiveCost =
+        Math.round(link.cost * routeCapacityMultiplier(options.troops ?? 0, link.throughput) * 100) / 100;
+      const candidate = dist[node] + effectiveCost;
       if (dist[link.to] === undefined || candidate < dist[link.to]) {
         dist[link.to] = candidate;
-        prev[link.to] = { node, cost: link.cost, routeType: link.routeType };
+        prev[link.to] = { node, cost: effectiveCost, routeType: link.routeType };
         queue.push(link.to);
       }
     }
@@ -132,7 +164,7 @@ export function findPath(
 }
 
 /** 骑兵是否占全军半数以上（冬季涉渡封冻河面的前提） */
-export function cavalryDominant(army: Army): boolean {
+export function cavalryDominant(army: Pick<Army, 'faction' | 'troops' | 'levies' | 'units'>): boolean {
   const total = Math.max(1, army.troops);
   let mounted = army.levies * (BALANCE.economy.horsesPerCavalryRatio[army.faction] ?? 0.1);
   for (const u of army.units) {
@@ -146,8 +178,10 @@ export function cavalryDominant(army: Army): boolean {
  * 季节修正（可选，保持纯函数与确定性）：冬季匈奴骑兵为主的部队
  * 行经河网/水路边的成本 ×0.8（河流封冻可涉渡，南下窗口），系数在 balance.seasons。
  */
+export type MarchProfile = Pick<Army, 'faction' | 'troops' | 'levies' | 'units' | 'fatigue'>;
+
 export function dayCostsFor(
-  army: Army,
+  army: MarchProfile,
   costs: number[],
   opts?: { routeTypes?: string[]; season?: Season },
 ): number[] {
@@ -159,8 +193,18 @@ export function dayCostsFor(
   return costs.map((c, i) => {
     const routeType = opts?.routeTypes?.[i] ?? '';
     const seasonal = frozenFord !== 1 && isRiverRoute(routeType) ? frozenFord : 1;
-    return Math.max(1, Math.round((c * seasonal) / speed));
+    return Math.max(1, Math.round((c * BALANCE.army.movementCostDayScale * seasonal) / speed));
   });
+}
+
+/** 将容量修正后的路线成本换算为包含机动性与季节影响的实际行军日。 */
+export function estimatePathDays(
+  army: MarchProfile,
+  path: Pick<PathResult, 'costs' | 'routeTypes'>,
+  season: Season,
+): number {
+  return dayCostsFor(army, path.costs, { routeTypes: path.routeTypes, season })
+    .reduce((sum, days) => sum + days, 0);
 }
 
 export function assignMarch(army: Army, path: string[], dayCosts: number[], targetRegionId: string): void {
@@ -171,6 +215,7 @@ export function assignMarch(army: Army, path: string[], dayCosts: number[], targ
   army.status = 'marching';
   army.marchDaysTotal = dayCosts.reduce((s, d) => s + d, 0);
   army.marchDaysLeft = army.marchDaysTotal;
+  army.currentHopDaysTotal = dayCosts[0] ?? 0;
 }
 
 export function clearMarch(army: Army): void {
@@ -179,6 +224,7 @@ export function clearMarch(army: Army): void {
   army.targetRegionId = null;
   army.marchDaysLeft = 0;
   army.marchDaysTotal = 0;
+  army.currentHopDaysTotal = 0;
   army.stance = 'defend';
   army.status = 'idle';
 }

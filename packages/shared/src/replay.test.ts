@@ -23,9 +23,15 @@ const ctx = buildContext(seed);
 /** 用固定种子真实结算一场战斗，取回 battle 事件 */
 function realBattleEvent(): GameEvent {
   const state = createGame(seed, { gameId: 'replay-test', factionKey: 'HUN', playerRole: 'ruler', seed: 424242 });
-  state.pendingOrders = [
-    { orderId: 'b1', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' },
-  ];
+  const attacker = state.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
+  attacker.path = ['YONG-REG03'];
+  attacker.hopCosts = [5];
+  attacker.targetRegionId = 'YONG-REG03';
+  attacker.stance = 'march';
+  attacker.status = 'marching';
+  attacker.marchDaysTotal = 5;
+  attacker.marchDaysLeft = 5;
+  attacker.currentHopDaysTotal = 5;
   const result = runTurn(state, ctx);
   const ev = result.report.events.find((e) => e.type === 'battle');
   if (!ev) throw new Error('固定种子下未产生战斗事件');

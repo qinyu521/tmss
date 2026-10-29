@@ -49,7 +49,18 @@ export default function CharactersPanel() {
 
   if (!view) return null;
   const c = detail?.character;
-  const runtime = detail?.runtime as { alive?: boolean; deathCause?: string; growthNote?: string } | null | undefined;
+  const runtime = detail?.runtime as {
+    alive?: boolean;
+    deathCause?: string;
+    growthNote?: string;
+    militaryLoyalty?: number;
+    defectionWarningTurn?: number;
+    defectionTargetFaction?: string;
+    allegianceFaction?: string;
+  } | null | undefined;
+  const currentFactionKey = (detail?.currentFactionKey ?? c?.faction_key ?? 'HUN') as 'HUN' | 'YONG' | 'CHU';
+  const currentFactionVisual = FACTION_VISUALS[currentFactionKey];
+  const originalFactionKey = detail?.originalFactionKey as string | undefined;
 
   return (
     <Modal
@@ -87,12 +98,25 @@ export default function CharactersPanel() {
                 <div style={{ minWidth: 0 }}>
                   <div className="cc-name">
                     {it.name}
+                    {it.defectionWarningTurn !== undefined && it.defectionTargetFaction && (
+                      <span style={{ marginLeft: 6, fontSize: 11, padding: '1px 6px', border: '1px solid var(--danger)', borderRadius: 3, color: 'var(--danger)' }}>
+                        {it.allegianceFaction ? '归附动摇' : '倒戈预警'}
+                      </span>
+                    )}
+                    {it.originalFactionKey && it.allegianceFaction && (
+                      <span style={{ marginLeft: 6, fontSize: 11, padding: '1px 6px', border: '1px solid var(--gold)', borderRadius: 3, color: 'var(--gold)' }}>
+                        已倒戈
+                      </span>
+                    )}
                     {it.alive === false && (
                       <span style={{ marginLeft: 6, fontSize: 11, padding: '1px 6px', border: '1px solid var(--line)', borderRadius: 3, opacity: 0.75 }}>已故{it.deathCause ? `·${it.deathCause}` : ''}</span>
                     )}
                   </div>
                   <div className="cc-pos">{it.current_position_standard}</div>
-                  <div className="cc-meta">{it.identity_type} · {it.region} · 忠诚 {it.loyalty}</div>
+                  <div className="cc-meta">
+                    {it.identity_type} · {it.region} · 忠诚 {it.loyalty}
+                    {it.militaryLoyalty !== undefined ? ` · 军令忠诚 ${Math.round(it.militaryLoyalty)}` : ''}
+                  </div>
                 </div>
               </button>
             ))}
@@ -115,9 +139,24 @@ export default function CharactersPanel() {
                     <span style={{ marginLeft: 8, fontSize: 12, padding: '1px 8px', border: '1px solid var(--line)', borderRadius: 3, opacity: 0.8 }}>已故{runtime.deathCause ? ` · ${runtime.deathCause}` : ''}</span>
                   )}
                 </div>
-                <div className="small" style={{ color: FACTION_VISUALS[c.faction_key as 'HUN'].mapBorder }}>
-                  {FACTION_VISUALS[c.faction_key as 'HUN'].shortName} · {c.status}
+                <div className="small" style={{ color: currentFactionVisual.mapBorder }}>
+                  {currentFactionVisual.shortName} · 当前效忠 · {c.status}
                 </div>
+                {originalFactionKey && originalFactionKey !== currentFactionKey && (
+                  <div className="small" style={{ color: 'var(--gold)', marginTop: 4 }}>
+                    原归属：{FACTION_VISUALS[originalFactionKey as 'HUN' | 'YONG' | 'CHU']?.shortName ?? originalFactionKey}
+                    {' → '}现效忠：{currentFactionVisual.shortName}
+                  </div>
+                )}
+                {runtime?.defectionWarningTurn !== undefined && !runtime.allegianceFaction && (
+                  <div className="card small" style={{ marginTop: 8, borderColor: 'var(--danger)', color: 'var(--danger)', lineHeight: 1.65 }}>
+                    倒戈风险预警：军令忠诚 {Math.round(runtime.militaryLoyalty ?? c.loyalty)}。
+                    {runtime.defectionTargetFaction
+                      ? `与敌对势力 ${FACTION_VISUALS[runtime.defectionTargetFaction as 'HUN' | 'YONG' | 'CHU']?.shortName ?? runtime.defectionTargetFaction} 存在强关系。`
+                      : '存在明确的敌对势力关系。'}
+                    请在下一旬前赏赐将领或更换统将。
+                  </div>
+                )}
                 <div className="small muted" style={{ marginTop: 6, lineHeight: 1.7 }}>
                   {c.identity_type}<br />
                   {c.current_position_standard}<br />

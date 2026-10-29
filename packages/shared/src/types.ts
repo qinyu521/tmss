@@ -475,6 +475,8 @@ export interface Army {
   targetRegionId: string | null;
   marchDaysTotal: number;
   marchDaysLeft: number;
+  /** 当前路段的原始行军天数；用于计算本路段内的地图显示进度 */
+  currentHopDaysTotal?: number;
   lastBattleTurn: number | null;
   originRegionId: string;
   /** 分遣队（由主力或州兵拆分） */
@@ -579,12 +581,24 @@ export type OrderKind =
   | 'appease_tribe'
   | 'balance_princes'
   | 'negotiate_house'
+  | 'hold_court'
+  | 'reward_commander'
+  | 'offer_defector_amnesty'
+  | 'replace_warned_commander'
+  | 'settle_defeated_commander'
   | 'appoint'
   | 'rest_army'
   | 'scout'
   | 'scheme';
 
 export type SchemeKind = 'fire' | 'cut_supply' | 'sow_discord' | 'ambush' | 'feint';
+
+/** 廷议议题：军事议事通用；其余对应三国的结构性政治矛盾。 */
+export type CourtAgenda = 'war_council' | 'succession' | 'tribal_alliance' | 'clan_relations';
+/** 决策倾向：强硬、折中、怀柔；议题不同，实际政治代价不同。 */
+export type CourtDecision = 'assertive' | 'balanced' | 'conciliatory';
+/** 君主如何处理争论双方的意见。 */
+export type CourtResolution = 'adopt_speaker' | 'adopt_opposition' | 'compromise';
 
 export type Order =
   | {
@@ -621,6 +635,30 @@ export type Order =
   | { orderId: string; kind: 'appease_tribe'; tribeId: string; amount: number }
   | { orderId: string; kind: 'balance_princes'; amount: number }
   | { orderId: string; kind: 'negotiate_house'; houseId: string; amount: number }
+  | {
+      orderId: string;
+      kind: 'hold_court';
+      agenda: CourtAgenda;
+      decision: CourtDecision;
+      /** 主议臣：以其相关能力决定议案论证效果 */
+      speakerPersonId?: string;
+      /** 反对臣：能力越强，主议效果越容易被制衡 */
+      oppositionPersonId?: string;
+      /** 君主裁定：采纳主议臣、采纳反对臣或折中；缺省保留旧版直接指定 decision 的行为 */
+      resolution?: CourtResolution;
+    }
+  | { orderId: string; kind: 'reward_commander'; personId: string; amount: number }
+  | { orderId: string; kind: 'offer_defector_amnesty'; personId: string; amount: number }
+  | { orderId: string; kind: 'replace_warned_commander'; armyId: string; replacementPersonId: string }
+  | {
+      orderId: string;
+      kind: 'settle_defeated_commander';
+      personId: string;
+      action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial';
+      replacementPersonId?: string;
+      /** 仅由 NPC 规则生成，用于解释自动裁决依据；玩家提交的该字段不会用于规则判定 */
+      npcRulingNote?: string;
+    }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }
@@ -644,6 +682,34 @@ export interface CharacterRuntime {
   personId: string;
   alive: boolean;
   ageBand: string;
+  /** 受君主采纳/驳回意见影响的在朝声望，0-100；旧档迁移时默认 50 */
+  courtStanding?: number;
+  /** 本局军令忠诚度（0-100）；赏赐可以提升，旧档按种子忠诚度迁移 */
+  militaryLoyalty?: number;
+  /** 人物实际效忠势力；未设置时沿用种子势力，叛变后用于后续军团、任命与赏赐判定 */
+  allegianceFaction?: FactionKey;
+  /** 将领倒戈风险首次预警的回合；需留出至少一整回合供君主挽回 */
+  defectionWarningTurn?: number;
+  /** 预警时明确依附的敌对势力；关系变化或停战后会重新评估 */
+  defectionTargetFaction?: FactionKey;
+  /** 战后降职/公开审判造成的统率惩罚，参与后续战斗计算；恢复任命可逐步清除 */
+  commandPenalty?: number;
+  /** 最近一场战斗发生的回合；处置命令只允许在下一回合使用 */
+  lastBattleTurn?: number;
+  /** 最近一场战斗结果 */
+  lastBattleOutcome?: 'victory' | 'defeat';
+  /** 最近一场战斗的本方伤亡比例，0-1 */
+  lastBattleLossRate?: number;
+  /** 战败后尚未处置；下一场战斗会覆盖该状态 */
+  pendingBattleSettlement?: boolean;
+  /** 大败后的政治案件：低军令忠诚引发请调，或显式敌对关系推动弹劾 */
+  pendingBattleCase?: 'transfer_request' | 'impeachment';
+  /** 发起弹劾/政治施压的人物，仅记录种子关系明确连接者 */
+  battlePoliticalOpponentId?: string;
+  /** 战后裁决积累的人物仇怨；键为被记恨者 ID、值为 0-20；未记录时按无仇怨处理 */
+  politicalGrudges?: Record<string, number>;
+  /** 针对每名仇家的下次政治反应回合；用于延后首轮反应并控制重复频率 */
+  politicalGrudgeNextResponseTurn?: Record<string, number>;
   deathTurn?: number;
   deathCause?: string;
   /** 成长提示（仅人物视图展示，不发事件刷屏） */

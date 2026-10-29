@@ -11,6 +11,8 @@ export * from './engine/battle.js';
 export * from './engine/replay.js';
 export * from './engine/economy.js';
 export * from './engine/politics.js';
+export * from './engine/court.js';
+export * from './engine/relationships.js';
 export * from './engine/lifecycle.js';
 export * from './engine/orders.js';
 export * from './engine/npc.js';

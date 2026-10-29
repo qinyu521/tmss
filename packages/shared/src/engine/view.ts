@@ -221,7 +221,10 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
       stance: army.stance,
       path: own ? army.path : [],
       targetRegionId: own ? army.targetRegionId : null,
-      progress: own && army.marchDaysTotal > 0 ? 1 - army.marchDaysLeft / army.marchDaysTotal : 0,
+      // path 每抵达一州就会缩短，因此进度必须只表示当前路段，不能用全程进度套在剩余路线。
+      progress: own && (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 0) > 0
+        ? 1 - (army.hopCosts[0] ?? 0) / (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 1)
+        : 0,
       troops: own ? army.troops : undefined,
       troopsLabel: own
         ? `${fmt(army.troops)}人`

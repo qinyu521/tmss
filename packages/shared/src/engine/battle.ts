@@ -89,7 +89,8 @@ function armyPower(
   const supply = 0.55 + army.supply / 150;
   const fatigue = Math.max(0.7, 1 - army.fatigue / 240);
   // 统兵官的统率/谋略权重提高，名将与庸将差距显著
-  const command = 0.72 + ((commander?.command ?? 55) * 0.72 + (commander?.strategy ?? 55) * 0.28) / 145;
+  const commandScore = Math.max(1, (commander?.command ?? 55) - (state.characters[army.commanderId]?.commandPenalty ?? 0));
+  const command = 0.72 + (commandScore * 0.72 + (commander?.strategy ?? 55) * 0.28) / 145;
   const cohesion = army.faction === 'HUN' ? Math.max(0.7, 0.72 + (state.special.HUN.cohesion ?? 55) / 320) : 1;
   const saltPenalty =
     state.factions[army.faction].resources.salt <= 0 ? 1 - BALANCE.economy.saltShortageMorale / 100 : 1;

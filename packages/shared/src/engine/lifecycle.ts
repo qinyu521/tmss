@@ -314,7 +314,8 @@ const ATTR_LABEL = {
 function ensureRuntime(state: GameState, char: CharacterSeed) {
   if (!state.characters) state.characters = {};
   if (!state.characters[char.person_id]) {
-    state.characters[char.person_id] = { personId: char.person_id, alive: true, ageBand: char.age_band };
+    state.characters[char.person_id] = { personId: char.person_id, alive: true, ageBand: char.age_band, courtStanding: 50, militaryLoyalty: char.loyalty };
   }
+  state.characters[char.person_id].militaryLoyalty ??= char.loyalty;
   return state.characters[char.person_id];
 }

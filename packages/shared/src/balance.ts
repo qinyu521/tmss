@@ -56,6 +56,8 @@ export const BALANCE = {
     baseMorale: 62,
     baseTraining: 55,
     maxSupply: 100,
+    /** 道路成本抽象单位换算为行军日：基础成本每单位约 2.5 天，再按机动与季节修正。 */
+    movementCostDayScale: 2.5,
     marchSupplyDrainPerDay: 1.4,
     restSupplyGainPerDay: 4.5,
     restMoraleGain: 4,

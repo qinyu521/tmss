@@ -8,25 +8,379 @@ import type {
   OrderIssue,
   OrderKind,
   OrderValidation,
+  CourtAgenda,
+  CourtDecision,
   PlayerRole,
   FactionKey,
   RegionState,
   SchemeKind,
 } from '../types.js';
 import type { DerivedContext } from '../dataset.js';
-import { hashString } from '../dataset.js';
+import { hashString, isAtWar } from '../dataset.js';
 import { BALANCE } from '../balance.js';
 import { FACTION_SHORT, ROLE_ALLOWED_ORDERS, ROLE_LABEL, SCHEME_LABELS } from '../constants.js';
 import { emitEvent } from './events.js';
 import { clamp, isCharacterAlive } from './state.js';
-import { assignMarch, dayCostsFor, findPath, regionNameById } from './movement.js';
+import { assignMarch, dayCostsFor, estimatePathDays, findPath, regionNameById } from './movement.js';
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
+import { courtCost, courtDecisionForResolution, courtOpinion, courtRelationshipAffinity, courtSkill, politicalGrudgeCourtPenalty } from './court.js';
+import { appointmentRelationshipEffect, findDefectionAllegiance, successionCommandRisk } from './relationships.js';
+
+function currentFactionOfCharacter(state: GameState, ctx: DerivedContext, personId: string): FactionKey | undefined {
+  return state.characters[personId]?.allegianceFaction ?? ctx.charactersById[personId]?.faction_key;
+}
 
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
 
 const TRADE_LIMITS: Record<string, number> = { grain: 20_000, salt: 500, iron: 500, horses: 200 };
+
+const COURT_AGENDA_LABEL: Record<CourtAgenda, string> = {
+  war_council: '军务与边防',
+  succession: '皇嗣与储位',
+  tribal_alliance: '部落盟约',
+  clan_relations: '世家与中枢',
+};
+const COURT_DECISION_LABEL: Record<CourtDecision, string> = {
+  assertive: '强硬推进',
+  balanced: '折中调和',
+  conciliatory: '怀柔让步',
+};
+
+function courtDebateEdge(
+  state: GameState,
+  ctx: DerivedContext,
+  agenda: CourtAgenda,
+  speakerPersonId?: string,
+  oppositionPersonId?: string,
+): {
+  edge: number;
+  speaker?: CharacterSeed;
+  opposition?: CharacterSeed;
+  speakerScore: number;
+  oppositionScore: number;
+  speakerStanding: number;
+  oppositionStanding: number;
+} {
+  const speaker = speakerPersonId ? ctx.charactersById[speakerPersonId] : undefined;
+  const opposition = oppositionPersonId ? ctx.charactersById[oppositionPersonId] : undefined;
+  const speakerStanding = speakerPersonId ? (state.characters[speakerPersonId]?.courtStanding ?? 50) : 50;
+  const oppositionStanding = oppositionPersonId ? (state.characters[oppositionPersonId]?.courtStanding ?? 50) : 50;
+  const factionKey = (speakerPersonId ? currentFactionOfCharacter(state, ctx, speakerPersonId) : undefined)
+    ?? (oppositionPersonId ? currentFactionOfCharacter(state, ctx, oppositionPersonId) : undefined)
+    ?? speaker?.faction_key
+    ?? opposition?.faction_key
+    ?? state.factionKey;
+  const politicalTargetIds = agenda === 'succession'
+    ? (state.special.YONG.princes ?? []).map((prince) => prince.personId)
+    : agenda === 'tribal_alliance'
+      ? (state.special.HUN.tribes ?? []).map((tribe) => tribe.chiefId)
+      : agenda === 'clan_relations'
+        ? (state.special.CHU.houses ?? []).map((house) => house.patriarchId)
+        : state.armies.filter((army) => army.faction === factionKey).map((army) => army.commanderId);
+  const speakerGrudgePenalty = speakerPersonId
+    ? politicalGrudgeCourtPenalty(state.characters[speakerPersonId]?.politicalGrudges, politicalTargetIds)
+    : 0;
+  const oppositionGrudgePenalty = oppositionPersonId
+    ? politicalGrudgeCourtPenalty(state.characters[oppositionPersonId]?.politicalGrudges, politicalTargetIds)
+    : 0;
+  const speakerScore = (courtSkill(speaker ? { ...speaker, courtStanding: speakerStanding } : undefined, agenda)
+    + (speakerPersonId ? courtRelationshipAffinity(ctx.seed.relationships, speakerPersonId, agenda, politicalTargetIds) : 0)
+    - speakerGrudgePenalty);
+  const oppositionScore = (courtSkill(opposition ? { ...opposition, courtStanding: oppositionStanding } : undefined, agenda)
+    + (oppositionPersonId ? courtRelationshipAffinity(ctx.seed.relationships, oppositionPersonId, agenda, politicalTargetIds) : 0)
+    - oppositionGrudgePenalty);
+  // 双方能力与声望差每 15 点改变 1 点议案效果，上下限为 3，避免人物属性压过君主裁决本身。
+  const edge = speaker && opposition ? Math.max(-3, Math.min(3, Math.round((speakerScore - oppositionScore) / 15))) : 0;
+  return {
+    edge,
+    speaker,
+    opposition,
+    speakerScore: Math.round(speakerScore),
+    oppositionScore: Math.round(oppositionScore),
+    speakerStanding,
+    oppositionStanding,
+  };
+}
+
+function warnedCommanderRefusal(
+  state: GameState,
+  ctx: DerivedContext,
+  army: Army,
+  targetRegionId: string,
+): { targetFaction: FactionKey; loyalty: number; commanderName: string } | null {
+  const runtime = state.characters[army.commanderId];
+  const commander = ctx.charactersById[army.commanderId];
+  const targetFaction = runtime?.defectionTargetFaction;
+  if (
+    !runtime ||
+    !commander ||
+    runtime.allegianceFaction ||
+    runtime.defectionWarningTurn === undefined ||
+    !targetFaction
+  ) return null;
+  const loyalty = runtime.militaryLoyalty ?? commander.loyalty ?? 50;
+  if (loyalty > 15) return null;
+  const targetRegion = state.regions[targetRegionId];
+  if (!targetRegion || targetRegion.faction !== targetFaction) return null;
+  if (!isAtWar(state.diplomacy, army.faction, targetFaction)) return null;
+  return { targetFaction, loyalty, commanderName: commander.name };
+}
+
+function commanderPoliticalExecutionDrag(
+  state: GameState,
+  ctx: DerivedContext,
+  commanderId: string,
+  factionKey: FactionKey,
+): { targetId: string; targetName: string; grudge: number; loyalty: number } | null {
+  const commander = ctx.charactersById[commanderId];
+  const runtime = state.characters[commanderId];
+  if (!commander || currentFactionOfCharacter(state, ctx, commanderId) !== factionKey || !runtime) return null;
+  const loyalty = runtime.militaryLoyalty ?? commander.loyalty ?? 50;
+  if (loyalty > 35) return null;
+
+  const strongestGrudge = Object.entries(runtime.politicalGrudges ?? {})
+    .filter(([targetId, grudge]) => {
+      const target = ctx.charactersById[targetId];
+      return grudge >= 10 &&
+        targetId !== commanderId &&
+        currentFactionOfCharacter(state, ctx, targetId) === factionKey &&
+        isCharacterAlive(state, targetId);
+    })
+    .sort(([idA, scoreA], [idB, scoreB]) => scoreB - scoreA || idA.localeCompare(idB))[0];
+  if (!strongestGrudge) return null;
+  const [targetId, grudge] = strongestGrudge;
+  return {
+    targetId,
+    targetName: ctx.charactersById[targetId]?.name ?? targetId,
+    grudge,
+    loyalty,
+  };
+}
+
+function adjustCourtStanding(state: GameState, ctx: DerivedContext, personId: string | undefined, delta: number): number | undefined {
+  if (!personId || !ctx.charactersById[personId]) return undefined;
+  const person = ctx.charactersById[personId];
+  const runtime = state.characters[personId] ?? {
+    personId,
+    alive: true,
+    ageBand: person.age_band,
+    courtStanding: 50,
+  };
+  runtime.courtStanding = clamp((runtime.courtStanding ?? 50) + delta);
+  state.characters[personId] = runtime;
+  return runtime.courtStanding;
+}
+
+function recordPoliticalGrudge(
+  state: GameState,
+  ctx: DerivedContext,
+  sourcePersonId: string,
+  targetPersonId: string,
+  amount: number,
+): number {
+  if (!sourcePersonId || !targetPersonId || sourcePersonId === targetPersonId || amount <= 0) return 0;
+  const person = ctx.charactersById[sourcePersonId];
+  if (!person) return 0;
+  const runtime = state.characters[sourcePersonId] ?? {
+    personId: sourcePersonId,
+    alive: true,
+    ageBand: person.age_band,
+  };
+  const grudges = { ...(runtime.politicalGrudges ?? {}) };
+  grudges[targetPersonId] = Math.min(20, Math.max(0, grudges[targetPersonId] ?? 0) + amount);
+  runtime.politicalGrudges = grudges;
+  const nextResponses = { ...(runtime.politicalGrudgeNextResponseTurn ?? {}) };
+  if (!Number.isFinite(nextResponses[targetPersonId])) {
+    // 首次积怨最早在下一旬反应，避免同一项裁决刚发生就立刻出现反噬。
+    nextResponses[targetPersonId] = state.date.turn + 1;
+  }
+  runtime.politicalGrudgeNextResponseTurn = nextResponses;
+  state.characters[sourcePersonId] = runtime;
+  return grudges[targetPersonId];
+}
+
+function applyPoliticalBlocReaction(
+  state: GameState,
+  ctx: DerivedContext,
+  commanderId: string,
+  opponentId: string,
+  action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial',
+  events: GameEvent[],
+  rulingSource: GameEvent['source'],
+): string {
+  const factionKey = currentFactionOfCharacter(state, ctx, commanderId);
+  if (!factionKey || currentFactionOfCharacter(state, ctx, opponentId) !== factionKey) return '';
+  const hostile = /竞争|制衡|敌对|不和|争夺/;
+  const collect = (anchorId: string): { personId: string; weight: number }[] => {
+    const candidates = new Map<string, number>();
+    for (const edge of ctx.seed.relationships) {
+      const otherId = edge.source_person_id === anchorId
+        ? edge.target_person_id
+        : edge.target_person_id === anchorId
+          ? edge.source_person_id
+          : '';
+      if (!otherId || otherId === commanderId || otherId === opponentId) continue;
+      const person = ctx.charactersById[otherId];
+      if (!person || currentFactionOfCharacter(state, ctx, otherId) !== factionKey || !isCharacterAlive(state, otherId)) continue;
+      if (hostile.test(`${edge.relation} ${edge.notes}`)) continue;
+      const weight = edge.strength === '强' ? 3 : edge.strength === '中' ? 2 : 1;
+      candidates.set(otherId, Math.max(candidates.get(otherId) ?? 0, weight));
+    }
+    return [...candidates.entries()]
+      .map(([personId, weight]) => ({ personId, weight }))
+      .sort((a, b) => b.weight - a.weight || a.personId.localeCompare(b.personId))
+      .slice(0, 3);
+  };
+  const commanderSupport = collect(commanderId);
+  const opponentSupport = collect(opponentId);
+  const commanderIds = new Set(commanderSupport.map((item) => item.personId));
+  const opponentIds = new Set(opponentSupport.map((item) => item.personId));
+  // 双方都连接的人物视为观望派，不在一次裁决中被重复奖惩。
+  const uniqueCommanderSupport = commanderSupport.filter((item) => !opponentIds.has(item.personId));
+  const uniqueOpponentSupport = opponentSupport.filter((item) => !commanderIds.has(item.personId));
+  const backsCommander = action === 'relieve';
+  const swing = action === 'trial' ? 2 : 1;
+  const changes: string[] = [];
+  const apply = (
+    members: { personId: string; weight: number }[],
+    delta: number,
+    side: string,
+    petitionTitle: string,
+    won: boolean,
+  ) => {
+    if (members.length === 0) return;
+    const details: { personId: string; name: string; before: number; after: number }[] = [];
+    for (const member of members) {
+      const before = state.characters[member.personId]?.courtStanding ?? 50;
+      const after = adjustCourtStanding(state, ctx, member.personId, delta) ?? before;
+      const name = ctx.charactersById[member.personId]?.name ?? member.personId;
+      details.push({ personId: member.personId, name, before, after });
+      if (after !== before) changes.push(`${name}（${side}）声望 ${Math.round(before)}→${Math.round(after)}`);
+    }
+    const names = details.map((item) => item.name).join('、');
+    const sideTarget = side === '败将一系'
+      ? ctx.charactersById[commanderId]
+      : ctx.charactersById[opponentId];
+    const consequence = won
+      ? `君主裁决采纳其主张，参与者在朝声望${delta >= 0 ? '+' : ''}${delta}。`
+      : `其主张未获采纳，参与者在朝声望${delta >= 0 ? '+' : ''}${delta}。`;
+    events.push(emitEvent(state, {
+      type: 'politics',
+      title: petitionTitle,
+      summary: `${names}依据与${sideTarget?.name ?? '相关人物'}的显式关系联名上疏，${side === '败将一系' ? '请求留用败将' : '支持弹劾问责'}。${consequence}`,
+      actorId: details[0].personId,
+      actorName: details[0].name,
+      factionKey,
+      targetId: side === '败将一系' ? commanderId : opponentId,
+      targetLabel: sideTarget?.name ?? (side === '败将一系' ? commanderId : opponentId),
+      before: { supporters: details.map(({ personId, name, before }) => ({ personId, name, courtStanding: before })) },
+      after: { supporters: details.map(({ personId, name, after }) => ({ personId, name, courtStanding: after })), rulingAccepted: won },
+      evidence: '关系网络中存在明确的同势力支持关系；竞争、制衡、敌对、不和与争夺关系不计入支持网络',
+      source: rulingSource === 'npc_ai' ? 'npc_ai' : 'engine',
+      visibleToPlayer: state.factionKey === factionKey,
+    }));
+  };
+  apply(uniqueCommanderSupport, backsCommander ? 1 : -swing, '败将一系', '联名求情·请求留用败将', backsCommander);
+  apply(uniqueOpponentSupport, backsCommander ? -1 : swing, '弹劾者一系', '联名弹劾·要求追责败将', !backsCommander);
+  if (changes.length === 0) return '未发现可区分的显式站队人物，未产生额外声望转移。';
+  return `派系站队：${changes.join('；')}。`;
+}
+
+function resolveBattleCasePolitics(
+  state: GameState,
+  ctx: DerivedContext,
+  commanderId: string,
+  action: 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial',
+  events: GameEvent[],
+  source: GameEvent['source'],
+): string {
+  const runtime = state.characters[commanderId];
+  const person = ctx.charactersById[commanderId];
+  const caseType = runtime?.pendingBattleCase;
+  const personFaction = currentFactionOfCharacter(state, ctx, commanderId) ?? person?.faction_key;
+  const opponentId = runtime?.battlePoliticalOpponentId;
+  if (!runtime || !person || !caseType) return '';
+
+  let outcome = '';
+  if (caseType === 'impeachment' && opponentId && ctx.charactersById[opponentId]) {
+    const backsCommander = action === 'relieve';
+    const commandStandingDelta = action === 'relieve' ? 3 : action === 'demote' ? -3 : action === 'trial' ? -10 : -5;
+    const opponentStandingDelta = action === 'relieve' ? -4 : action === 'demote' ? 2 : action === 'trial' ? 5 : 3;
+    adjustCourtStanding(state, ctx, commanderId, commandStandingDelta);
+    adjustCourtStanding(state, ctx, opponentId, opponentStandingDelta);
+    const mild = action === 'demote';
+    const publicTrial = action === 'trial';
+    if (personFaction === 'YONG') {
+      const prince = (state.special.YONG.princes ?? []).find((item) => item.personId === opponentId);
+      if (prince) {
+        prince.influence = clamp(prince.influence + (backsCommander ? -2 : mild ? 1 : publicTrial ? 4 : 2));
+        state.special.YONG.courtStability = clamp((state.special.YONG.courtStability ?? 50) + (backsCommander ? -2 : mild ? 0 : publicTrial ? -4 : 1));
+      }
+    } else if (personFaction === 'HUN') {
+      const tribe = (state.special.HUN.tribes ?? []).find((item) => item.chiefId === opponentId);
+      if (tribe) {
+        tribe.loyalty = clamp(tribe.loyalty + (backsCommander ? -4 : mild ? 2 : publicTrial ? 6 : 3));
+        state.special.HUN.cohesion = clamp((state.special.HUN.cohesion ?? 50) + (backsCommander ? -2 : mild ? 1 : publicTrial ? 3 : 1));
+      }
+    } else if (personFaction === 'CHU') {
+      const house = (state.special.CHU.houses ?? []).find((item) => item.patriarchId === opponentId);
+      if (house) {
+        house.support = clamp(house.support + (backsCommander ? -4 : mild ? 2 : publicTrial ? 7 : 3));
+        state.special.CHU.centralAuthority = clamp((state.special.CHU.centralAuthority ?? 50) + (backsCommander ? 2 : mild ? -1 : publicTrial ? -5 : -2));
+      }
+    }
+    outcome = backsCommander
+      ? '君主驳回' + ctx.charactersById[opponentId].name + '的弹劾，败将声望 +3、弹劾者声望 -4；相关派系因裁决出现反弹。'
+      : publicTrial
+        ? '君主公开审判' + person.name + '，败将声望 -10、弹劾者声望 +5；公开审判放大了' + ctx.charactersById[opponentId].name + '及其政治派系的影响，但也加剧了朝局震荡。'
+        : mild
+          ? '君主降职' + person.name + '，败将声望 -3、弹劾者声望 +2；朝廷部分采纳问责，但未完全站到弹劾一方。'
+          : '君主采纳' + ctx.charactersById[opponentId].name + '的弹劾，败将声望 -5、弹劾者声望 +3；相关政治派系获得回应。';
+    const grudgeSourceId = backsCommander ? opponentId : commanderId;
+    const grudgeTargetId = backsCommander ? commanderId : opponentId;
+    const grudgeAmount = backsCommander ? 8 : publicTrial ? 12 : mild ? 4 : 6;
+    const grudgeScore = recordPoliticalGrudge(state, ctx, grudgeSourceId, grudgeTargetId, grudgeAmount);
+    if (grudgeScore > 0) {
+      outcome += backsCommander
+        ? `因弹劾被驳，${ctx.charactersById[opponentId].name}对败将积怨（仇怨 ${grudgeScore}/20）；与其相关的后续廷议更难取信。`
+        : `${person.name}对${ctx.charactersById[opponentId].name}积怨至 ${grudgeScore}/20；与仇家相关的后续廷议将降低说服力。`;
+    }
+    outcome += applyPoliticalBlocReaction(state, ctx, commanderId, opponentId, action, events, source);
+  } else if (caseType === 'transfer_request') {
+    const delta = action === 'replace' ? 2 : action === 'relieve' ? 1 : action === 'demote' ? -5 : action === 'trial' ? -10 : -4;
+    adjustCourtStanding(state, ctx, commanderId, delta);
+    if (action === 'trial' && personFaction === 'YONG') {
+      state.special.YONG.courtStability = clamp((state.special.YONG.courtStability ?? 50) - 3);
+    } else if (action === 'trial' && personFaction === 'HUN') {
+      state.special.HUN.cohesion = clamp((state.special.HUN.cohesion ?? 50) - 3);
+    } else if (action === 'trial' && personFaction === 'CHU') {
+      state.special.CHU.centralAuthority = clamp((state.special.CHU.centralAuthority ?? 50) + 3);
+    }
+    outcome = action === 'replace'
+      ? '君主批准调离前线的请求，将领在朝声望 +2。'
+      : action === 'relieve'
+        ? '君主抚恤并决定留用该将领，其在朝声望 +1。'
+        : action === 'demote'
+          ? '君主驳回请调但予以降职，将领在朝声望 -5。'
+          : action === 'trial'
+            ? '君主决定公开审判该将领，其在朝声望 -10；公开审理也给国家政治秩序留下冲击。'
+            : '君主驳回调任请求并追责，将领在朝声望 -4。';
+  }
+  runtime.pendingBattleCase = undefined;
+  runtime.battlePoliticalOpponentId = undefined;
+  state.characters[commanderId] = runtime;
+  return outcome;
+}
+
+function courtAgendaAllowed(faction: FactionKey, agenda: CourtAgenda): boolean {
+  if (agenda === 'war_council') return true;
+  if (agenda === 'succession') return faction === 'YONG';
+  if (agenda === 'tribal_alliance') return faction === 'HUN';
+  if (agenda === 'clan_relations') return faction === 'CHU';
+  return false;
+}
 
 const SCHEME_COST: Record<SchemeKind, number> = {
   fire: 8_000,
@@ -91,7 +445,7 @@ function commanderTaken(state: GameState, commanderId: string, excludeOrderId: s
 
 function freeCommander(state: GameState, ctx: DerivedContext, faction: FactionKey, excludeIds: string[] = []): CharacterSeed | undefined {
   const candidates = ctx.seed.characters
-    .filter((c) => c.faction_key === faction)
+    .filter((c) => currentFactionOfCharacter(state, ctx, c.person_id) === faction)
     // 已故人物不可统兵
     .filter((c) => isCharacterAlive(state, c.person_id))
     .filter((c) => /将|军|帅|守|兵|禁军|武/.test(`${c.identity_type} ${c.current_position_standard}`))
@@ -174,6 +528,22 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       if (!commandable.some((a) => a.armyId === army.armyId)) {
         return issues('AUTH_SCOPE', `你的身份只能调动授权范围内的部队（${ROLE_LABEL[role]}）。`);
       }
+      if (army.faction === 'YONG' && state.flags.successionCrisis) {
+        const commander = ctx.charactersById[army.commanderId];
+        const risk = successionCommandRisk(
+          ctx.seed.relationships,
+          state.special.YONG.princes ?? [],
+          army.commanderId,
+          state.characters[army.commanderId]?.militaryLoyalty ?? commander?.loyalty ?? 50,
+          state.flags.successionCrisis,
+        );
+        if (risk) {
+          return issues(
+            'COMMANDER_POLITICAL_SPLIT',
+            `${army.commanderName}与${risk.rivalPrinceName}存在强关系网络，且其对朝廷忠诚不足；夺嫡危机中拒绝执行调兵令。请先稳定朝局或更换统将。`,
+          );
+        }
+      }
       if (state.factionKey === 'HUN') {
         const tribe = state.special.HUN.tribes?.find((t) => t.regionId === army.nodeId);
         if (tribe && tribe.stance === 'refusing') {
@@ -183,8 +553,12 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
           );
         }
       }
-      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId, { troops: order.amount ?? army.troops });
       if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
+      const warnedRefusal = warnedCommanderRefusal(state, ctx, army, order.targetRegionId);
+      const warnedRefusalNote = warnedRefusal
+        ? `；注意：${warnedRefusal.commanderName}已收到倒戈预警且忠诚仅${Math.round(warnedRefusal.loyalty)}，若本旬执行时仍未恢复忠诚，将拒绝攻击${state.factions[warnedRefusal.targetFaction].name}，可先赏赐或撤换统将`
+        : '';
 
       const amount = order.amount ?? army.troops;
       if (!Number.isFinite(amount) || amount < 1_000) return issues('BAD_AMOUNT', '调动兵力至少 1000 人。');
@@ -214,15 +588,33 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         if (!order.commanderId) return issues('COMMANDER_REQUIRED', '分兵需要指定一名统兵官（不能由原统兵官同时统领两军）。');
         if (order.commanderId === army.commanderId) return issues('COMMANDER_DUPLICATE', '分遣队必须另选统兵官。');
         const cmd = commanderOf(ctx, order.commanderId);
-        if (!cmd || cmd.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
+        if (!cmd || currentFactionOfCharacter(state, ctx, cmd.person_id) !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
         if (!isCharacterAlive(state, cmd.person_id)) return issues('COMMANDER_DEAD', '该将领已故，无法统兵。');
         if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
         commanderNote = `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）`;
       }
+      const previewArmy = isSplit
+        ? {
+            faction: army.faction,
+            troops: amount,
+            levies: amount - unitSum,
+            units: unitRequests.map((req) => {
+              const stack = army.units.find((unit) => unit.unitId === req.unitId);
+              return { ...stack!, count: req.count };
+            }),
+            fatigue: army.fatigue,
+          }
+        : army;
+      const estimatedDays = estimatePathDays(previewArmy, path, seasonOf(state.date.month));
+      const executionCommanderId = isSplit ? (order.commanderId ?? army.commanderId) : army.commanderId;
+      const executionDrag = commanderPoliticalExecutionDrag(state, ctx, executionCommanderId, army.faction);
+      const executionNote = executionDrag
+        ? `；注意：${ctx.charactersById[executionCommanderId]?.name ?? army.commanderName}因与${executionDrag.targetName}积怨（${executionDrag.grudge}），且军令忠诚仅${Math.round(executionDrag.loyalty)}，将消极执行（行军至少延误 1 天，士气 -3、疲劳 +5）`
+        : '';
       return {
         ok: true,
         issues: [],
-        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
+        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}${executionNote}${warnedRefusalNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${estimatedDays} 日（约 ${Math.ceil(estimatedDays / BALANCE.turnDays)} 回合）。`,
       };
     }
     case 'recruit': {
@@ -246,7 +638,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       if (!region || region.faction !== state.factionKey) return issues('REGION_INVALID', '征兵州府必须在本国控制下。');
       if (order.formNewArmy && order.commanderId) {
         const cmd = commanderOf(ctx, order.commanderId);
-        if (!cmd || cmd.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
+        if (!cmd || currentFactionOfCharacter(state, ctx, cmd.person_id) !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
         if (!isCharacterAlive(state, cmd.person_id)) return issues('COMMANDER_DEAD', '该将领已故，无法统兵。');
         if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
       }
@@ -327,10 +719,218 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         preview: `与 ${house.name} 协商，耗银 ${BALANCE.negotiateHouse.cashCost}，支持度 +${BALANCE.negotiateHouse.supportGain}。`,
       };
     }
+    case 'hold_court': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '召集廷议需君主权限。');
+      if (!courtAgendaAllowed(state.factionKey, order.agenda)) {
+        return issues('WRONG_FACTION', '该廷议议题不属于本势力的政制矛盾。');
+      }
+      if (!['assertive', 'balanced', 'conciliatory'].includes(order.decision)) {
+        return issues('BAD_DECISION', '未知廷议议案政策。');
+      }
+      if (order.resolution && !['adopt_speaker', 'adopt_opposition', 'compromise'].includes(order.resolution)) {
+        return issues('BAD_RESOLUTION', '未知君主裁定方式。');
+      }
+      if (Boolean(order.speakerPersonId) !== Boolean(order.oppositionPersonId)) {
+        return issues('COURT_PAIR_REQUIRED', '廷议须同时选择主议臣与反对臣，才能计算双方的论证效果。');
+      }
+      if (order.resolution && (!order.speakerPersonId || !order.oppositionPersonId)) {
+        return issues('COURT_PAIR_REQUIRED', '采纳或驳回某方意见前，必须指定主议臣与反对臣。');
+      }
+      for (const personId of [order.speakerPersonId, order.oppositionPersonId].filter((id): id is string => Boolean(id))) {
+        const person = ctx.charactersById[personId];
+        if (!person || currentFactionOfCharacter(state, ctx, person.person_id) !== state.factionKey) return issues('COURT_PERSON_INVALID', '主议臣与反对臣必须来自本势力。');
+        if (!isCharacterAlive(state, person.person_id)) return issues('COURT_PERSON_DEAD', `${person.name}已故，无法参与廷议。`);
+      }
+      if (order.speakerPersonId && order.speakerPersonId === order.oppositionPersonId) {
+        return issues('COURT_PAIR_DUPLICATE', '主议臣与反对臣不能由同一人担任。');
+      }
+      const debate = courtDebateEdge(state, ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
+      const decision = courtDecisionForResolution(order.agenda, order.resolution, debate.speaker, debate.opposition, order.decision);
+      const cost = courtCost(order.agenda, decision);
+      if (faction.resources.cash < cost) return issues('NO_CASH', `廷议与执行需银 ${cost.toLocaleString()} 两，现有 ${Math.round(faction.resources.cash).toLocaleString()}。`);
+      const speakerOpinion = debate.speaker ? courtOpinion(debate.speaker, order.agenda) : '廷臣依据议题共议，采用默认效果';
+      const oppositionOpinion = debate.opposition ? courtOpinion(debate.opposition, order.agenda) : '未指定反对臣';
+      const argument = order.agenda === 'war_council'
+        ? '兵部请整军备边，仓曹提醒军饷与军粮不可脱离国力'
+        : order.agenda === 'succession'
+          ? '太子一党要求明确储位，诸王宾客警告过度倾斜将激化争储'
+          : order.agenda === 'tribal_alliance'
+            ? '诸部首领要求兑现盟约，主战派则要求统一号令'
+            : '世家要求保全地方利益，台谏主张中枢不得失去征税与任官之权';
+      const resolutionLabel = order.resolution === 'adopt_speaker'
+        ? `采纳主议臣意见（${debate.speaker?.name ?? '主议臣'}）`
+        : order.resolution === 'adopt_opposition'
+          ? `驳回主议、采纳反对臣意见（${debate.opposition?.name ?? '反对臣'}）`
+          : order.resolution === 'compromise'
+            ? '折中调和双方意见'
+            : '君主直接裁定政策方向';
+      return {
+        ok: true,
+        issues: [],
+        preview: `廷议「${COURT_AGENDA_LABEL[order.agenda]}」：${argument}；${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」；双方议题能力 ${debate.speakerScore}/${debate.oppositionScore}，争辩修正 ${debate.edge > 0 ? '+' : ''}${debate.edge}。` : '未指定辩论人选时采用廷臣集议默认效果。'} 君主选择「${resolutionLabel}」，最终政策为「${COURT_DECISION_LABEL[decision]}」，执行成本 ${cost.toLocaleString()} 两。`,
+      };
+    }
+    case 'replace_warned_commander': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '撤换倒戈风险将领需君主权限。');
+      const army = state.armies.find((item) => item.armyId === order.armyId && item.faction === state.factionKey);
+      if (!army) return issues('ARMY_NOT_FOUND', '该军团不属于你的势力。');
+      const oldRuntime = state.characters[army.commanderId];
+      if (oldRuntime?.defectionWarningTurn === undefined || !oldRuntime.defectionTargetFaction) {
+        return issues('NO_DEFLECTION_WARNING', '该军团当前没有有效的倒戈预警，无需执行预防性撤换。');
+      }
+      if (oldRuntime.allegianceFaction && oldRuntime.allegianceFaction !== state.factionKey) return issues('ALREADY_DEFECTED', '该将领当前不归本势力管辖，不能撤换。');
+      const region = state.regions[army.nodeId];
+      if (!region || region.faction !== state.factionKey ||
+        state.armies.some((item) => item.armyId !== army.armyId && item.faction === state.factionKey && item.nodeId === army.nodeId)) {
+        return issues('DEFECTED_POSITION_LOST', '军团已不再独占本方驻地，倒戈预警条件已变化；请先重新评估局势。');
+      }
+      const replacement = ctx.charactersById[order.replacementPersonId];
+      if (!replacement || replacement.person_id === army.commanderId ||
+        currentFactionOfCharacter(state, ctx, order.replacementPersonId) !== state.factionKey) {
+        return issues('INVALID_REPLACEMENT', '接任人选必须是另一名本方人物。');
+      }
+      if (!isCharacterAlive(state, replacement.person_id)) return issues('PERSON_DEAD', '接任人选已故，不能统兵。');
+      const commandsArmy = state.armies.some((item) => item.faction === state.factionKey && item.commanderId === replacement.person_id);
+      const commandsGarrison = Object.values(state.regions).some((item) => item.faction === state.factionKey && item.garrisonCommanderId === replacement.person_id);
+      if (commandsArmy || commandsGarrison) {
+        return issues('COMMANDER_BUSY', '接任人选已统领其他军团或州兵，不能重复任命。');
+      }
+      return {
+        ok: true,
+        issues: [],
+        preview: `撤换${army.commanderName}，由${replacement.name}接掌${army.name}；不耗银，所部士气 -5，原统将军令忠诚 -5、在朝声望 -3，并清除本次倒戈预警。`,
+      };
+    }
+    case 'reward_commander': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '赏赐将领需君主权限。');
+      const person = ctx.charactersById[order.personId];
+      if (!person || currentFactionOfCharacter(state, ctx, person.person_id) !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
+      if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，不能受赏。');
+      const commandsArmy = state.armies.some((army) => army.faction === state.factionKey && army.commanderId === person.person_id);
+      const commandsGarrison = Object.values(state.regions).some((region) => region.faction === state.factionKey && region.garrisonCommanderId === person.person_id);
+      if (!commandsArmy && !commandsGarrison) return issues('NOT_COMMANDER', '只能赏赐当前统领军团或州兵的将领。');
+      if (![5_000, 10_000, 20_000].includes(order.amount)) return issues('BAD_AMOUNT', '赏赐金额只能选择 5000、10000 或 20000 两。');
+      if (faction.resources.cash < order.amount) return issues('NO_CASH', `赏赐需银 ${order.amount.toLocaleString()} 两。`);
+      const current = state.characters[person.person_id]?.militaryLoyalty ?? person.loyalty;
+      const gain = Math.min(100, current + order.amount / 1_000) - current;
+      return {
+        ok: true,
+        issues: [],
+        preview: `赏赐${person.name}白银 ${order.amount.toLocaleString()} 两，军令忠诚度 ${Math.round(current)} → ${Math.round(current + gain)}（+ ${Math.round(gain)}）。`,
+      };
+    }
+    case 'offer_defector_amnesty': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '招抚已倒戈旧将需君主权限。');
+      const person = ctx.charactersById[order.personId];
+      const runtime = state.characters[order.personId];
+      if (!person || person.faction_key !== state.factionKey || !runtime?.allegianceFaction || runtime.allegianceFaction === state.factionKey) {
+        return issues('NOT_DEFECTOR', '只能招抚原属本方、当前已倒戈到其他势力的人物。');
+      }
+      if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，不能招抚。');
+      const currentFaction = runtime.allegianceFaction;
+      const army = state.armies.find((item) => item.faction === currentFaction && item.commanderId === person.person_id);
+      if (!army || army.status !== 'idle') return issues('NO_ACTIVE_ARMY', '该旧将须仍统领归附势力的一支驻定军团，且军团不能正在行军或交战。');
+      const region = state.regions[army.nodeId];
+      if (!region || region.faction !== currentFaction ||
+        state.armies.some((item) => item.armyId !== army.armyId && item.faction === currentFaction && item.nodeId === army.nodeId)) {
+        return issues('NO_EXCLUSIVE_POSITION', '招抚要求该将领仍独占一处由归附势力控制的驻地。');
+      }
+      if (!isAtWar(state.diplomacy, state.factionKey, currentFaction)) {
+        return issues('NO_WAR', '需与旧将当前归附势力处于交战状态，才能发动军政招抚。');
+      }
+      if (![10_000, 20_000, 40_000].includes(order.amount)) return issues('BAD_AMOUNT', '招抚赏赐只能选择 10000、20000 或 40000 两。');
+      if (faction.resources.cash < order.amount) return issues('NO_CASH', `招抚需银 ${order.amount.toLocaleString()} 两。`);
+      const tie = findDefectionAllegiance(
+        ctx.seed.relationships,
+        ctx.charactersById,
+        person.person_id,
+        currentFaction,
+        (personId) => currentFactionOfCharacter(state, ctx, personId),
+        (personId, factionKey) => state.characters[personId]?.alive !== false && isAtWar(state.diplomacy, currentFaction, factionKey),
+        state.factionKey,
+      );
+      if (!tie) return issues('NO_OLD_TIE', '未发现该将领与本方在世人物之间明确、强且非敌对的关系，不能仅凭银钱无条件招抚。');
+      const loyalty = runtime.militaryLoyalty ?? person.loyalty;
+      const penalty = Math.round(order.amount / 2_500) + 2;
+      const after = clamp(loyalty - penalty);
+      return {
+        ok: true,
+        issues: [],
+        preview: `向旧将${person.name}发出招抚，耗银 ${order.amount.toLocaleString()} 两，军令忠诚 ${Math.round(loyalty)} → ${Math.round(after)}（-${Math.round(loyalty - after)}）。${after <= 15 ? '若归附方下一旬前未能挽回，将进入旧主归还预警。' : '忠诚虽下降，但尚未触发归还预警。'}`,
+      };
+    }
+    case 'settle_defeated_commander': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '战后处置败将需君主权限。');
+      const person = ctx.charactersById[order.personId];
+      if (!person || currentFactionOfCharacter(state, ctx, person.person_id) !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
+      if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，不能接受战后处置。');
+      const runtime = state.characters[person.person_id];
+      if (
+        runtime?.lastBattleOutcome !== 'defeat' ||
+        runtime.pendingBattleSettlement !== true
+      ) {
+        return issues('NO_RECENT_DEFEAT', '只能处置尚未善后的最近一场战败；不能重复追责旧战或凭空制造战败。');
+      }
+      const army = state.armies.find((item) => item.faction === state.factionKey && item.commanderId === person.person_id);
+      if (order.action === 'replace') {
+        if (!army) return issues('NO_ACTIVE_ARMY', '原军团已溃散或不复存在，无法在战后撤换统将。');
+        if (!order.replacementPersonId) return issues('REPLACEMENT_REQUIRED', '撤换统将必须指定接任人选。');
+        const replacement = ctx.charactersById[order.replacementPersonId];
+        if (
+          !replacement ||
+          currentFactionOfCharacter(state, ctx, replacement.person_id) !== state.factionKey ||
+          replacement.person_id === person.person_id
+        ) {
+          return issues('INVALID_REPLACEMENT', '接任人选必须是另一名本方人物。');
+        }
+        if (!isCharacterAlive(state, replacement.person_id)) {
+          return issues('PERSON_DEAD', '接任人选已故，不能统兵。');
+        }
+        const commandsArmy = state.armies.some(
+          (item) => item.faction === state.factionKey && item.commanderId === replacement.person_id,
+        );
+        const commandsGarrison = Object.values(state.regions).some(
+          (region) => region.faction === state.factionKey && region.garrisonCommanderId === replacement.person_id,
+        );
+        if (commandsArmy || commandsGarrison) {
+          return issues('COMMANDER_BUSY', '接任人选已统领其他军团或州兵，不能重复任命；请先选择未掌兵的将领。');
+        }
+        return {
+          ok: true,
+          issues: [],
+          preview: '撤换败将' + person.name + '，由' + replacement.name + '接掌' + army.name + '；不耗银，但旧将军令忠诚 -10，交接使所部士气 -5。',
+        };
+      }
+      if (order.action === 'demote') {
+        const current = runtime.militaryLoyalty ?? person.loyalty;
+        const effectiveCommand = Math.max(1, person.command - (runtime.commandPenalty ?? 0));
+        return { ok: true, issues: [], preview: '降职' + person.name + '：不耗银，军令忠诚 -6、有效统率 ' + effectiveCommand + ' → ' + Math.max(1, effectiveCommand - 8) + '，' + (army ? '所部训练 +2、士气 -2。' : '不改变已不存在军团的状态。') };
+      }
+      if (order.action === 'trial') {
+        const current = runtime.militaryLoyalty ?? person.loyalty;
+        const effectiveCommand = Math.max(1, person.command - (runtime.commandPenalty ?? 0));
+        return { ok: true, issues: [], preview: '公开审判' + person.name + '：不耗银，军令忠诚 ' + Math.round(current) + ' → ' + Math.max(0, Math.round(current) - 15) + '，有效统率 ' + effectiveCommand + ' → ' + Math.max(1, effectiveCommand - 12) + '，' + (army ? '所部士气 -5、训练 +3；政治声望将受到重创。' : '将领声望与统率受罚，原军团已不复存在。') };
+      }
+      if (order.action === 'relieve') {
+        if (faction.resources.cash < 12_000) return issues('NO_CASH', '抚恤败军需银 12000 两。');
+        const current = runtime.militaryLoyalty ?? person.loyalty;
+        return {
+          ok: true,
+          issues: [],
+          preview: `抚恤${person.name}及其败军，耗银 12000 两；军令忠诚 ${Math.round(current)} → ${Math.round(Math.min(100, current + 8))}，仍存部队士气${army ? ' +6' : '不变（军团已不存在）'}。`,
+        };
+      }
+      const current = runtime.militaryLoyalty ?? person.loyalty;
+      return {
+        ok: true,
+        issues: [],
+        preview: `追责${person.name}：不耗银，军令忠诚 ${Math.round(current)} → ${Math.round(Math.max(0, current - 8))}；仍存部队训练 +5、士气 -3。`,
+      };
+    }
     case 'appoint': {
       if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '任命官职需君主权限。');
       const person = ctx.charactersById[order.personId];
-      if (!person || person.faction_key !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
+      if (!person || currentFactionOfCharacter(state, ctx, person.person_id) !== state.factionKey) return issues('NOT_FOUND', '该人物不属于你的势力。');
       if (!isCharacterAlive(state, person.person_id)) return issues('PERSON_DEAD', '该人物已故，无法任命。');
       const region = state.regions[order.regionId];
       if (!region || region.faction !== state.factionKey) return issues('NOT_FOUND', '目标州府不在你的控制之下。');
@@ -373,12 +973,12 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         return issues('BAD_AMOUNT', `${region.name}州兵仅 ${region.garrison.toLocaleString()} 人，无法调出 ${order.amount.toLocaleString()} 人。`);
       }
       if (order.regionId === order.targetRegionId) return issues('BAD_TARGET', '州兵已在目标州府，无须调遣。');
-      const path = findPath(state, ctx, state.factionKey, order.regionId, order.targetRegionId);
+      const path = findPath(state, ctx, state.factionKey, order.regionId, order.targetRegionId, { troops: order.amount });
       if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
       let commanderId = order.commanderId;
       if (commanderId) {
         const cmd = commanderOf(ctx, commanderId);
-        if (!cmd || cmd.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
+        if (!cmd || currentFactionOfCharacter(state, ctx, cmd.person_id) !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
         if (!isCharacterAlive(state, cmd.person_id)) return issues('COMMANDER_DEAD', '该将领已故，无法统兵。');
         if (commanderTaken(state, commanderId, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
       } else {
@@ -399,7 +999,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       if (!cost) return issues('BAD_SCHEME', '未知计谋。');
       if (faction.resources.cash < cost) return issues('NO_CASH', `施展「${SCHEME_LABELS[order.scheme]}」需银 ${cost} 两。`);
       const strategist = commanderOf(ctx, order.strategistId ?? state.playerPersonId);
-      if (!strategist || strategist.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '施计者必须属于本国。');
+      if (!strategist || currentFactionOfCharacter(state, ctx, strategist.person_id) !== state.factionKey) return issues('COMMANDER_INVALID', '施计者必须属于本国。');
       const targetArmy = order.targetArmyId ? state.armies.find((a) => a.armyId === order.targetArmyId) : undefined;
       if (order.targetArmyId && !targetArmy) return issues('ARMY_NOT_FOUND', '目标部队不存在或已不在视野内。');
       const region = order.targetRegionId
@@ -442,13 +1042,66 @@ export function applyOrder(
 ): void {
   const fk = factionKeyOverride ?? state.factionKey;
   const faction = state.factions[fk];
-  const actorId = source === 'npc_ai' ? orderActorFor(state, order) : state.playerPersonId;
-  const actorName = source === 'npc_ai' ? orderActorNameFor(state, order) : state.playerPersonName;
+  const npcSettlementActor = source === 'npc_ai' && order.kind === 'settle_defeated_commander'
+    ? npcActor(ctx, fk)
+    : undefined;
+  const actorId = source === 'npc_ai' ? (npcSettlementActor?.id ?? orderActorFor(state, order)) : state.playerPersonId;
+  const actorName = source === 'npc_ai' ? (npcSettlementActor?.name ?? orderActorNameFor(state, order)) : state.playerPersonName;
   switch (order.kind) {
     case 'move_army': {
       const army = state.armies.find((a) => a.armyId === order.armyId);
       if (!army) return;
-      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+      if (army.faction === 'YONG' && state.flags.successionCrisis) {
+        const commander = ctx.charactersById[army.commanderId];
+        const risk = successionCommandRisk(
+          ctx.seed.relationships,
+          state.special.YONG.princes ?? [],
+          army.commanderId,
+          state.characters[army.commanderId]?.militaryLoyalty ?? commander?.loyalty ?? 50,
+          state.flags.successionCrisis,
+        );
+        if (risk) {
+          events.push(emitEvent(state, {
+            type: 'politics',
+            title: `大雍·${army.commanderName}拒绝奉诏`,
+            summary: `夺嫡危机中，${army.commanderName}因与${risk.rivalPrinceName}的关系网络及自身低忠诚拒绝调兵；其部暂留原地。朝廷需先稳定局势或更换统将。`,
+            actorId: army.commanderId,
+            actorName: army.commanderName,
+            factionKey: 'YONG',
+            targetId: army.armyId,
+            targetLabel: army.name,
+            after: { refusal: true, rivalPrinceId: risk.rivalPrinceId, rivalAffinity: risk.rivalAffinity, crownPrinceAffinity: risk.crownPrinceAffinity },
+            evidence: '夺嫡危机 + 统将低忠诚 + 对竞争皇子的显式关系权重高于储君关系',
+            source,
+            visibleToPlayer: state.factionKey === 'YONG',
+          }));
+          return;
+        }
+      }
+      const warnedRefusal = warnedCommanderRefusal(state, ctx, army, order.targetRegionId);
+      if (warnedRefusal) {
+        events.push(emitEvent(state, {
+          type: 'politics',
+          title: `倒戈预警·${army.commanderName}拒绝攻击${state.factions[warnedRefusal.targetFaction].name}`,
+          summary: `${army.commanderName}已收到倒戈预警，军令忠诚仅 ${Math.round(warnedRefusal.loyalty)}，拒绝奉命进攻与其存在明确强关系的${state.factions[warnedRefusal.targetFaction].name}。军团暂留${state.regions[army.nodeId]?.name ?? '原驻地'}；君主仍可在本旬赏赐恢复忠诚或撤换统将。`,
+          actorId: army.commanderId,
+          actorName: army.commanderName,
+          factionKey: army.faction,
+          targetId: army.armyId,
+          targetLabel: army.name,
+          before: {
+            loyalty: warnedRefusal.loyalty,
+            defectionTargetFaction: warnedRefusal.targetFaction,
+            regionId: army.nodeId,
+          },
+          after: { refusal: true, orderKind: order.kind, targetRegionId: order.targetRegionId },
+          evidence: '仅对已预警、军令忠诚 ≤15 且目的州属于其拟归附交战势力的军令触发；提高忠诚或撤换统将即可解除',
+          source,
+          visibleToPlayer: army.faction === state.factionKey,
+        }));
+        return;
+      }
+      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId, { troops: order.amount ?? army.troops });
       if (!path.ok) return;
       const amount = order.amount ?? army.troops;
       const unitRequests = (order.units ?? []).filter((u) => u.count > 0);
@@ -509,7 +1162,33 @@ export function applyOrder(
           }),
         );
       }
-      const days = dayCostsFor(mover, path.costs, { routeTypes: path.routeTypes, season: seasonOf(state.date.month) });
+      const baseDays = dayCostsFor(mover, path.costs, { routeTypes: path.routeTypes, season: seasonOf(state.date.month) });
+      const executionDrag = commanderPoliticalExecutionDrag(state, ctx, mover.commanderId, mover.faction);
+      const days = [...baseDays];
+      if (executionDrag && days.length > 0) {
+        const baseMarchDays = baseDays.reduce((sum, daysForHop) => sum + daysForHop, 0);
+        const delayDays = Math.max(1, Math.ceil(baseMarchDays * 1.25) - baseMarchDays);
+        days[days.length - 1] += delayDays;
+        const moraleBefore = mover.morale;
+        const fatigueBefore = mover.fatigue;
+        mover.morale = clamp(mover.morale - 3);
+        mover.fatigue = clamp(mover.fatigue + 5);
+        events.push(emitEvent(state, {
+          type: 'politics',
+          title: `军令消极执行·${mover.commanderName}`,
+          summary: `${mover.commanderName}因与同势力人物${executionDrag.targetName}积怨未消（仇怨 ${executionDrag.grudge}、军令忠诚 ${Math.round(executionDrag.loyalty)}），虽已奉命开拔，却消极拖延行程；本次行军由 ${baseMarchDays} 日延至 ${baseMarchDays + delayDays} 日，所部士气 ${moraleBefore}→${mover.morale}、疲劳 ${fatigueBefore}→${mover.fatigue}。`,
+          actorId: mover.commanderId,
+          actorName: mover.commanderName,
+          factionKey: mover.faction,
+          targetId: mover.armyId,
+          targetLabel: mover.name,
+          before: { militaryLoyalty: executionDrag.loyalty, politicalGrudge: executionDrag.grudge, marchDays: baseMarchDays, morale: moraleBefore, fatigue: fatigueBefore },
+          after: { delayedDays: delayDays, marchDays: baseMarchDays + delayDays, morale: mover.morale, fatigue: mover.fatigue, grudgeTargetId: executionDrag.targetId },
+          evidence: '确定性军令执行规则：统将军令忠诚 ≤35 且对同势力在世人物积怨 ≥10；全程按 1.25 倍行军时间计算，整数天至少延误 1 天，士气 -3、疲劳 +5',
+          source,
+          visibleToPlayer: mover.faction === state.factionKey,
+        }));
+      }
       assignMarch(mover, path.path, days, order.targetRegionId);
       events.push(
         emitEvent(state, {
@@ -759,6 +1438,7 @@ export function applyOrder(
       if (house) {
         house.support = clamp(house.support + BALANCE.negotiateHouse.supportGain);
         house.taxCompliance = Math.round((0.6 + house.support / 250) * 100) / 100;
+        house.privateForce = Math.round(3_000 + house.support * BALANCE.politics.chu.privateForcePerSupport);
         house.lastNegotiationTurn = state.date.turn;
       }
       events.push(
@@ -779,28 +1459,537 @@ export function applyOrder(
       );
       return;
     }
+    case 'hold_court': {
+      const debate = courtDebateEdge(state, ctx, order.agenda, order.speakerPersonId, order.oppositionPersonId);
+      const decision = courtDecisionForResolution(order.agenda, order.resolution, debate.speaker, debate.opposition, order.decision);
+      const cost = courtCost(order.agenda, decision);
+      faction.resources.cash -= cost;
+      const speakerOpinion = debate.speaker ? courtOpinion(debate.speaker, order.agenda) : '廷臣依据议题共议，采用默认效果';
+      const oppositionOpinion = debate.opposition ? courtOpinion(debate.opposition, order.agenda) : '未指定反对臣';
+      const agendaLabel = COURT_AGENDA_LABEL[order.agenda];
+      const decisionLabel = COURT_DECISION_LABEL[decision];
+      let summary = '';
+      let after: Record<string, unknown> = { agenda: order.agenda, decision, resolution: order.resolution ?? 'direct_policy', cost };
+
+      if (order.agenda === 'war_council') {
+        const armies = state.armies.filter((a) => a.faction === fk);
+        for (const army of armies) {
+          if (decision === 'assertive') {
+            army.morale = clamp(army.morale + 5);
+            army.training = clamp(army.training + 2);
+            army.fatigue = clamp(army.fatigue + 3);
+          } else if (decision === 'balanced') {
+            army.morale = clamp(army.morale + 3);
+            army.training = clamp(army.training + 1);
+          } else {
+            army.morale = clamp(army.morale + 1);
+            army.fatigue = clamp(army.fatigue - 5);
+            army.supply = clamp(army.supply + 2);
+          }
+        }
+        summary = decision === 'assertive'
+          ? `兵部主张立即整军备边，仓曹警告军饷压力。廷议决定强硬推进：${armies.length} 支军队士气 +5、训练 +2、疲劳 +3。`
+          : decision === 'balanced'
+            ? `诸将与文臣折中议定：${armies.length} 支军队士气 +3、训练 +1，以有限军费改善战备。`
+            : `廷议采纳缓进整训：${armies.length} 支军队士气 +1、疲劳 -5、补给 +2，暂不追加军费。`;
+        after = { ...after, affectedArmies: armies.length, moraleDelta: decision === 'assertive' ? 5 : decision === 'balanced' ? 3 : 1, trainingDelta: decision === 'assertive' ? 2 : decision === 'balanced' ? 1 : 0 };
+      } else if (order.agenda === 'succession') {
+        const yong = state.special.YONG;
+        const princes = yong.princes ?? [];
+        const heir = princes.find((p) => p.isCrownPrince);
+        const strongest = [...princes].sort((a, b) => b.influence - a.influence)[0];
+        if (decision === 'assertive') {
+          if (heir) {
+            heir.influence = clamp(heir.influence + 10);
+            heir.trust = clamp(heir.trust + 4);
+          }
+          for (const prince of princes) if (prince.personId !== heir?.personId) prince.trust = clamp(prince.trust - 4);
+          yong.courtStability = clamp((yong.courtStability ?? 60) - 4);
+        } else if (decision === 'balanced') {
+          yong.courtStability = clamp((yong.courtStability ?? 60) + 7);
+          if (strongest && strongest.personId !== heir?.personId) strongest.influence = clamp(strongest.influence - 5);
+          for (const prince of princes) prince.trust = clamp(prince.trust + 2);
+        } else {
+          yong.courtStability = clamp((yong.courtStability ?? 60) + 4);
+          for (const prince of princes) prince.trust = clamp(prince.trust + 5);
+          if (heir) heir.influence = clamp(heir.influence - 3);
+        }
+        summary = decision === 'assertive'
+          ? `中书主张尊储以定名分，诸王宾客反对偏袒。朝廷公开支持${heir?.name ?? '储君'}，其影响力上升，但朝局稳定下降至 ${Math.round(yong.courtStability ?? 0)}。`
+          : decision === 'balanced'
+            ? `廷议压低最强藩王的扩张空间、安抚各方，朝局稳定升至 ${Math.round(yong.courtStability ?? 0)}。`
+            : `皇帝暂缓站队，给各皇子留足体面；信任回升，但储位支持度有所稀释。朝局稳定升至 ${Math.round(yong.courtStability ?? 0)}。`;
+        after = { ...after, courtStability: yong.courtStability, crownPrinceInfluence: heir?.influence, strongestPrinceInfluence: strongest?.influence };
+      } else if (order.agenda === 'tribal_alliance') {
+        const hun = state.special.HUN;
+        const tribes = hun.tribes ?? [];
+        if (decision === 'assertive') {
+          hun.cohesion = clamp((hun.cohesion ?? 58) + 8);
+          for (const tribe of tribes) tribe.loyalty = clamp(tribe.loyalty - 3);
+        } else if (decision === 'balanced') {
+          hun.cohesion = clamp((hun.cohesion ?? 58) + 4);
+          for (const tribe of tribes) tribe.loyalty = clamp(tribe.loyalty + 2);
+        } else {
+          hun.cohesion = clamp((hun.cohesion ?? 58) + 2);
+          for (const tribe of tribes) tribe.loyalty = clamp(tribe.loyalty + 5);
+        }
+        for (const tribe of tribes) {
+          tribe.stance = tribe.loyalty >= 65 ? 'eager' : tribe.loyalty >= 50 ? 'watchful' : tribe.loyalty >= 38 ? 'reluctant' : 'refusing';
+        }
+        summary = decision === 'assertive'
+          ? `诸将要求统一号令，君主以强令整合联盟：协调度升至 ${Math.round(hun.cohesion ?? 0)}，但各部忠诚各降 3。`
+          : decision === 'balanced'
+            ? `廷议以赏赐与军令折中：协调度升至 ${Math.round(hun.cohesion ?? 0)}，各部忠诚 +2。`
+            : `廷议优先兑现盟约，各部忠诚 +5，联盟协调度升至 ${Math.round(hun.cohesion ?? 0)}。`;
+        after = { ...after, cohesion: hun.cohesion, tribes: tribes.map((t) => ({ id: t.tribeId, loyalty: t.loyalty, stance: t.stance })) };
+      } else {
+        const chu = state.special.CHU;
+        const houses = chu.houses ?? [];
+        if (decision === 'assertive') {
+          chu.centralAuthority = clamp((chu.centralAuthority ?? 55) + 10);
+          for (const house of houses) house.support = clamp(house.support - 5);
+        } else if (decision === 'balanced') {
+          chu.centralAuthority = clamp((chu.centralAuthority ?? 55) + 4);
+          for (const house of houses) house.support = clamp(house.support + 2);
+        } else {
+          chu.centralAuthority = clamp((chu.centralAuthority ?? 55) - 3);
+          for (const house of houses) house.support = clamp(house.support + 6);
+        }
+        for (const house of houses) {
+          house.taxCompliance = Math.round((0.6 + house.support / 250) * 100) / 100;
+          house.privateForce = Math.round(3_000 + house.support * BALANCE.politics.chu.privateForcePerSupport);
+        }
+        summary = decision === 'assertive'
+          ? `台谏要求收归财赋与任官之权，世家代表警告反弹。中枢权威升至 ${Math.round(chu.centralAuthority ?? 0)}，各家支持下降 5。`
+          : decision === 'balanced'
+            ? `廷议以让利换取合作：中枢权威升至 ${Math.round(chu.centralAuthority ?? 0)}，各家支持 +2。`
+            : `朝廷允诺地方保留更多利益，各家支持 +6，但中枢权威降至 ${Math.round(chu.centralAuthority ?? 0)}。`;
+        after = { ...after, centralAuthority: chu.centralAuthority, houses: houses.map((h) => ({ id: h.houseId, support: h.support, taxCompliance: h.taxCompliance })) };
+      }
+      if (debate.edge !== 0) {
+        if (order.agenda === 'war_council') {
+          for (const army of state.armies.filter((a) => a.faction === fk)) {
+            army.morale = clamp(army.morale + debate.edge);
+          }
+        } else if (order.agenda === 'succession') {
+          const yong = state.special.YONG;
+          yong.courtStability = clamp((yong.courtStability ?? 60) + debate.edge);
+          state.factions.YONG.stability = clamp(yong.courtStability);
+          after = { ...after, courtStability: yong.courtStability };
+        } else if (order.agenda === 'tribal_alliance') {
+          const hun = state.special.HUN;
+          hun.cohesion = clamp((hun.cohesion ?? 58) + debate.edge);
+          state.factions.HUN.stability = clamp(hun.cohesion);
+          after = { ...after, cohesion: hun.cohesion };
+        } else {
+          const chu = state.special.CHU;
+          chu.centralAuthority = clamp((chu.centralAuthority ?? 55) + debate.edge);
+          state.factions.CHU.stability = clamp(chu.centralAuthority);
+          after = { ...after, centralAuthority: chu.centralAuthority };
+        }
+        summary += ` 双方论证能力差使议案主要效果${debate.edge > 0 ? '增强' : '减弱'} ${debate.edge > 0 ? '+' : ''}${debate.edge}。`;
+      }
+      const resolutionLabel = order.resolution === 'adopt_speaker'
+        ? `采纳主议臣意见（${debate.speaker?.name ?? '主议臣'}）`
+        : order.resolution === 'adopt_opposition'
+          ? `驳回主议、采纳反对臣意见（${debate.opposition?.name ?? '反对臣'}）`
+          : order.resolution === 'compromise'
+            ? '折中调和双方意见'
+            : '君主直接裁定政策方向';
+      let speakerStandingAfter: number | undefined;
+      let oppositionStandingAfter: number | undefined;
+      if (order.resolution === 'adopt_speaker') {
+        speakerStandingAfter = adjustCourtStanding(state, ctx, debate.speaker?.person_id, 5);
+        oppositionStandingAfter = adjustCourtStanding(state, ctx, debate.opposition?.person_id, -4);
+      } else if (order.resolution === 'adopt_opposition') {
+        speakerStandingAfter = adjustCourtStanding(state, ctx, debate.speaker?.person_id, -4);
+        oppositionStandingAfter = adjustCourtStanding(state, ctx, debate.opposition?.person_id, 5);
+      } else if (order.resolution === 'compromise') {
+        speakerStandingAfter = adjustCourtStanding(state, ctx, debate.speaker?.person_id, 1);
+        oppositionStandingAfter = adjustCourtStanding(state, ctx, debate.opposition?.person_id, 1);
+      }
+      const decisionRecord = {
+        resolutionLabel,
+        finalPolicy: COURT_DECISION_LABEL[decision],
+        speakerStandingBefore: debate.speakerStanding,
+        oppositionStandingBefore: debate.oppositionStanding,
+        speakerStandingAfter: speakerStandingAfter ?? debate.speakerStanding,
+        oppositionStandingAfter: oppositionStandingAfter ?? debate.oppositionStanding,
+      };
+      after = { ...after, ...decisionRecord };
+      const debateRecord = {
+        speakerPersonId: debate.speaker?.person_id ?? null,
+        speakerName: debate.speaker?.name ?? '廷臣集议',
+        speakerScore: debate.speakerScore,
+        oppositionPersonId: debate.opposition?.person_id ?? null,
+        oppositionName: debate.opposition?.name ?? '未指定反对臣',
+        oppositionScore: debate.oppositionScore,
+        speakerStandingBefore: debate.speakerStanding,
+        oppositionStandingBefore: debate.oppositionStanding,
+        speakerStandingAfter: state.characters[debate.speaker?.person_id ?? '']?.courtStanding ?? debate.speakerStanding,
+        oppositionStandingAfter: state.characters[debate.opposition?.person_id ?? '']?.courtStanding ?? debate.oppositionStanding,
+        debateEdge: debate.edge,
+      };
+      after = { ...after, ...debateRecord };
+      events.push(
+        emitEvent(state, {
+          type: 'politics',
+          title: `朝廷廷议·${agendaLabel}：${decisionLabel}`,
+          summary: `${resolutionLabel}；最终政策「${COURT_DECISION_LABEL[decision]}」。 ${debate.speaker && debate.opposition ? `主议臣${debate.speaker.name}主张「${speakerOpinion}」，反对臣${debate.opposition.name}提出「${oppositionOpinion}」。 ` : ''}${summary} 廷议所列分歧：${order.agenda === 'war_council' ? '兵部主战、仓曹顾虑军需' : order.agenda === 'succession' ? '储位名分与诸王平衡' : order.agenda === 'tribal_alliance' ? '盟约兑现与统一军令' : '世家利益与中枢权威'}。执行耗银 ${cost.toLocaleString()} 两。`,
+          actorId,
+          actorName,
+          factionKey: fk,
+          targetId: `court-${state.date.turn}-${order.agenda}`,
+          targetLabel: agendaLabel,
+          before: {},
+          after,
+          evidence: '廷议根据议题相关能力比较主议臣与反对臣；能力差每 15 点修正 1 点主要效果，最高 ±3；裁决后果记录在事件账本。',
+          source,
+          visibleToPlayer: fk === state.factionKey || source === 'player_order',
+        }),
+      );
+      return;
+    }
+    case 'replace_warned_commander': {
+      const army = state.armies.find((item) => item.armyId === order.armyId && item.faction === fk);
+      if (!army) return;
+      const oldCommander = ctx.charactersById[army.commanderId];
+      const replacement = ctx.charactersById[order.replacementPersonId];
+      const oldRuntime = state.characters[army.commanderId];
+      if (!oldCommander || !replacement || !oldRuntime || oldRuntime.defectionWarningTurn === undefined) return;
+      if (currentFactionOfCharacter(state, ctx, replacement.person_id) !== fk || !isCharacterAlive(state, replacement.person_id)) return;
+      if (state.armies.some((item) => item.armyId !== army.armyId && item.faction === fk && item.commanderId === replacement.person_id) ||
+        Object.values(state.regions).some((item) => item.faction === fk && item.garrisonCommanderId === replacement.person_id)) return;
+
+      const before = {
+        commanderId: army.commanderId,
+        commanderName: army.commanderName,
+        morale: army.morale,
+        oldCommanderLoyalty: oldRuntime.militaryLoyalty ?? oldCommander.loyalty,
+        oldCommanderStanding: oldRuntime.courtStanding ?? 50,
+        warningTurn: oldRuntime.defectionWarningTurn,
+        targetFaction: oldRuntime.defectionTargetFaction,
+      };
+      oldRuntime.militaryLoyalty = clamp(before.oldCommanderLoyalty - 5);
+      oldRuntime.courtStanding = clamp(before.oldCommanderStanding - 3);
+      oldRuntime.defectionWarningTurn = undefined;
+      oldRuntime.defectionTargetFaction = undefined;
+      state.characters[oldCommander.person_id] = oldRuntime;
+      const replacementRuntime = state.characters[replacement.person_id] ?? {
+        personId: replacement.person_id,
+        alive: true,
+        ageBand: replacement.age_band,
+        courtStanding: 50,
+        militaryLoyalty: replacement.loyalty,
+      };
+      const moraleAfter = clamp(army.morale - 5);
+      army.commanderId = replacement.person_id;
+      army.commanderName = replacement.name;
+      army.morale = moraleAfter;
+      state.characters[replacement.person_id] = replacementRuntime;
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: `预防倒戈·撤换统将·${oldCommander.name} → ${replacement.name}`,
+        summary: `君主在倒戈期限届满前撤换${oldCommander.name}，改由${replacement.name}接掌${army.name}。此举未耗银，但交接使部队士气 ${Math.round(before.morale)}→${Math.round(moraleAfter)}；旧将忠诚 ${Math.round(before.oldCommanderLoyalty)}→${Math.round(oldRuntime.militaryLoyalty ?? 0)}、在朝声望 ${Math.round(before.oldCommanderStanding)}→${Math.round(oldRuntime.courtStanding ?? 0)}。倒戈预警已解除。`,
+        actorId,
+        actorName,
+        factionKey: fk,
+        targetId: army.armyId,
+        targetLabel: army.name,
+        before,
+        after: {
+          commanderId: replacement.person_id,
+          commanderName: replacement.name,
+          morale: moraleAfter,
+          oldCommanderLoyalty: oldRuntime.militaryLoyalty,
+          oldCommanderStanding: oldRuntime.courtStanding,
+          warningCleared: oldRuntime.defectionWarningTurn === undefined,
+        },
+        evidence: '君主在警告期限内撤换统将；接任者必须在世、同属本方且未统领其他军团或州兵；撤换会付出忠诚、声望与士气代价',
+        source,
+        visibleToPlayer: fk === state.factionKey,
+      }));
+      return;
+    }
+    case 'reward_commander': {
+      const person = ctx.charactersById[order.personId];
+      if (!person) return;
+      const runtime = state.characters[person.person_id] ?? {
+        personId: person.person_id,
+        alive: true,
+        ageBand: person.age_band,
+        courtStanding: 50,
+        militaryLoyalty: person.loyalty,
+      };
+      const before = clamp(runtime.militaryLoyalty ?? person.loyalty);
+      const after = clamp(before + order.amount / 1_000);
+      runtime.militaryLoyalty = after;
+      state.characters[person.person_id] = runtime;
+      faction.resources.cash -= order.amount;
+      events.push(emitEvent(state, {
+        type: 'order_accepted',
+        title: `君主赏赐将领·${person.name}`,
+        summary: `赐银 ${order.amount.toLocaleString()} 两，${person.name}军令忠诚度由 ${Math.round(before)} 升至 ${Math.round(after)}。忠诚不足不仅会影响夺嫡期间的奉诏，也可能使与敌对势力有强关系的统将倒戈。`,
+        actorId,
+        actorName,
+        factionKey: fk,
+        targetId: person.person_id,
+        targetLabel: person.name,
+        before: { militaryLoyalty: before, cash: faction.resources.cash + order.amount },
+        after: { militaryLoyalty: after, loyaltyGain: after - before, cash: faction.resources.cash },
+        evidence: '军令忠诚属于本局人物运行时数据；赏赐金额 1000 两换取 1 点忠诚，忠诚上限 100',
+        source,
+      }));
+      return;
+    }
+    case 'offer_defector_amnesty': {
+      const person = ctx.charactersById[order.personId];
+      const runtime = state.characters[order.personId];
+      if (!person || !runtime?.allegianceFaction || person.faction_key !== fk || !isCharacterAlive(state, person.person_id)) return;
+      const currentFaction = runtime.allegianceFaction;
+      const army = state.armies.find((item) => item.faction === currentFaction && item.commanderId === person.person_id);
+      const region = army ? state.regions[army.nodeId] : undefined;
+      if (!army || army.status !== 'idle' || !region || region.faction !== currentFaction ||
+        state.armies.some((item) => item.armyId !== army.armyId && item.faction === currentFaction && item.nodeId === army.nodeId) ||
+        !isAtWar(state.diplomacy, fk, currentFaction)) return;
+      const tie = findDefectionAllegiance(
+        ctx.seed.relationships,
+        ctx.charactersById,
+        person.person_id,
+        currentFaction,
+        (personId) => currentFactionOfCharacter(state, ctx, personId),
+        (personId, factionKey) => state.characters[personId]?.alive !== false && isAtWar(state.diplomacy, currentFaction, factionKey),
+        fk,
+      );
+      if (!tie) return;
+      const before = clamp(runtime.militaryLoyalty ?? person.loyalty);
+      const penalty = Math.round(order.amount / 2_500) + 2;
+      const after = clamp(before - penalty);
+      const cashBefore = faction.resources.cash;
+      runtime.militaryLoyalty = after;
+      runtime.defectionWarningTurn = undefined;
+      runtime.defectionTargetFaction = undefined;
+      if (after <= 15) {
+        runtime.defectionWarningTurn = state.date.turn;
+        runtime.defectionTargetFaction = fk;
+      }
+      faction.resources.cash -= order.amount;
+      const stabilityLoss = Math.max(1, Math.round(penalty / 3));
+      state.factions[currentFaction].stability = clamp(state.factions[currentFaction].stability - stabilityLoss);
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: `旧主招抚·${person.name}`,
+        summary: `${actorName}凭与${person.name}的旧主知遇关系向其发出招抚，耗银 ${order.amount.toLocaleString()} 两，军令忠诚 ${Math.round(before)} → ${Math.round(after)}（-${Math.round(before - after)}）。${after <= 15 ? `忠诚已跌至归还阈值；${state.factions[currentFaction].name}须在下一旬结束前赏赐或撤换统将，否则军团与${region.name}可能归还${state.factions[fk].name}。` : '忠诚下降但尚未进入自动归还预警，后续仍取决于忠诚、关系与战局。'}`,
+        actorId,
+        actorName,
+        factionKey: fk,
+        targetId: person.person_id,
+        targetLabel: person.name,
+        before: { militaryLoyalty: before, currentFaction, cash: cashBefore },
+        after: {
+          militaryLoyalty: after,
+          loyaltyDelta: after - before,
+          currentFaction,
+          targetFaction: fk,
+          warningTurn: runtime.defectionWarningTurn,
+          defectionTargetFaction: runtime.defectionTargetFaction,
+          currentFactionStability: state.factions[currentFaction].stability,
+          cash: faction.resources.cash,
+        },
+        evidence: '只允许君主对原属本方、现由敌对势力控制驻地的归附将领发动招抚；需存在明确强关系，金额越高对忠诚打击越大，阈值命中后保留一整回合反制窗口',
+        source,
+        visibleToPlayer: true,
+      }));
+      return;
+    }
+    case 'settle_defeated_commander': {
+      const person = ctx.charactersById[order.personId];
+      if (!person) return;
+      const runtime = state.characters[person.person_id];
+      if (!runtime) return;
+      const before = clamp(runtime.militaryLoyalty ?? person.loyalty);
+      const army = state.armies.find((item) => item.faction === fk && item.commanderId === person.person_id);
+      if (order.action === 'replace') {
+        const replacement = order.replacementPersonId ? ctx.charactersById[order.replacementPersonId] : null;
+        if (!army || !replacement || !state.characters[replacement.person_id]) return;
+        const loyaltyAfter = clamp(before - 10);
+        const moraleBefore = army.morale;
+        const moraleAfter = clamp(army.morale - 5);
+        const previousCommanderId = army.commanderId;
+        const previousCommanderName = army.commanderName;
+        army.commanderId = replacement.person_id;
+        army.commanderName = replacement.name;
+        army.morale = moraleAfter;
+        runtime.militaryLoyalty = loyaltyAfter;
+        const politicalOutcome = resolveBattleCasePolitics(state, ctx, person.person_id, order.action, events, source);
+        runtime.pendingBattleSettlement = false;
+        state.characters[person.person_id] = runtime;
+        events.push(emitEvent(state, {
+          type: 'politics',
+          title: '撤换败将·' + person.name + ' → ' + replacement.name,
+          summary: '君主撤换战败统将' + person.name + '，改由' + replacement.name + '接掌' + army.name + '。旧将军令忠诚由 ' + Math.round(before) + ' 降至 ' + Math.round(loyaltyAfter) + '；新旧指挥交接使所部士气 ' + Math.round(moraleBefore) + ' → ' + Math.round(moraleAfter) + '。' + (politicalOutcome ? ' ' + politicalOutcome : ''),
+          actorId,
+          actorName,
+          factionKey: fk,
+          targetId: army.armyId,
+          targetLabel: army.name,
+          before: {
+            commanderId: previousCommanderId,
+            commanderName: previousCommanderName,
+            militaryLoyalty: before,
+            morale: moraleBefore,
+          },
+          after: {
+            action: order.action,
+            commanderId: replacement.person_id,
+            commanderName: replacement.name,
+            dismissedCommanderId: person.person_id,
+            militaryLoyalty: loyaltyAfter,
+            loyaltyDelta: loyaltyAfter - before,
+            morale: moraleAfter,
+          },
+          evidence: '仅允许君主撤换尚未善后的本方战败统将；接任人选必须在世、同属本方且未统领其他军团或州兵',
+          source,
+        }));
+        return;
+      }
+      const cashBefore = faction.resources.cash;
+      let loyaltyAfter = before;
+      let moraleBefore: number | undefined;
+      let moraleAfter: number | undefined;
+      let trainingBefore: number | undefined;
+      let trainingAfter: number | undefined;
+      if (order.action === 'relieve') {
+        faction.resources.cash -= 12_000;
+        loyaltyAfter = clamp(before + 8);
+        if (army) {
+          moraleBefore = army.morale;
+          army.morale = clamp(army.morale + 6);
+          moraleAfter = army.morale;
+        }
+      } else if (order.action === 'discipline') {
+        loyaltyAfter = clamp(before - 8);
+        if (army) {
+          moraleBefore = army.morale;
+          trainingBefore = army.training;
+          army.training = clamp(army.training + 5);
+          army.morale = clamp(army.morale - 3);
+          moraleAfter = army.morale;
+          trainingAfter = army.training;
+        }
+      } else if (order.action === 'demote') {
+        loyaltyAfter = clamp(before - 6);
+        runtime.commandPenalty = Math.min(25, (runtime.commandPenalty ?? 0) + 8);
+        if (army) {
+          moraleBefore = army.morale;
+          trainingBefore = army.training;
+          army.training = clamp(army.training + 2);
+          army.morale = clamp(army.morale - 2);
+          moraleAfter = army.morale;
+          trainingAfter = army.training;
+        }
+      } else if (order.action === 'trial') {
+        loyaltyAfter = clamp(before - 15);
+        runtime.commandPenalty = Math.min(30, (runtime.commandPenalty ?? 0) + 12);
+        if (army) {
+          moraleBefore = army.morale;
+          trainingBefore = army.training;
+          army.training = clamp(army.training + 3);
+          army.morale = clamp(army.morale - 5);
+          moraleAfter = army.morale;
+          trainingAfter = army.training;
+        }
+      }
+      runtime.militaryLoyalty = loyaltyAfter;
+      const politicalOutcome = resolveBattleCasePolitics(state, ctx, person.person_id, order.action, events, source);
+      if (!politicalOutcome && order.action === 'demote') adjustCourtStanding(state, ctx, person.person_id, -5);
+      if (!politicalOutcome && order.action === 'trial') adjustCourtStanding(state, ctx, person.person_id, -10);
+      runtime.pendingBattleSettlement = false;
+      state.characters[person.person_id] = runtime;
+      const isRelief = order.action === 'relieve';
+      const settlementTitle = isRelief
+        ? `抚恤败军·留任·${person.name}`
+        : order.action === 'demote'
+          ? `降职问责·${person.name}`
+          : order.action === 'trial'
+            ? `公开审判·${person.name}`
+            : `追责败将·${person.name}`;
+      const settlementSummary = isRelief
+        ? `君主拨银 12000 两抚恤并留用${person.name}，军令忠诚由 ${Math.round(before)} 升至 ${Math.round(loyaltyAfter)}。${army ? '所部士气得到恢复。' : '原军团已不复存在，抚恤仅影响将领忠诚。'}`
+        : order.action === 'demote'
+          ? `君主降职处分${person.name}，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}，有效统率惩罚累计为 ${runtime.commandPenalty ?? 0}。${army ? '所部训练提高，但士气下降。' : '原军团已不复存在。'}`
+          : order.action === 'trial'
+            ? `君主公开审判${person.name}，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}，有效统率惩罚累计为 ${runtime.commandPenalty ?? 0}。${army ? '公开审判令部队士气受损，训练有所加强。' : '原军团已不复存在。'}`
+            : `君主追究${person.name}战败之责，军令忠诚由 ${Math.round(before)} 降至 ${Math.round(loyaltyAfter)}。${army ? '所部训练加强，但士气受挫。' : '原军团已不复存在，追责仅影响将领忠诚。'}`;
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: settlementTitle,
+        summary: settlementSummary + (politicalOutcome ? ' ' + politicalOutcome : '') + (source === 'npc_ai' && order.npcRulingNote ? ' ' + order.npcRulingNote : ''),
+        actorId,
+        actorName,
+        factionKey: fk,
+        targetId: person.person_id,
+        targetLabel: person.name,
+        before: {
+          militaryLoyalty: before,
+          cash: cashBefore,
+          morale: moraleBefore,
+          training: trainingBefore,
+        },
+        after: {
+          action: order.action,
+          militaryLoyalty: loyaltyAfter,
+          loyaltyDelta: loyaltyAfter - before,
+          cash: faction.resources.cash,
+          morale: moraleAfter,
+          training: trainingAfter,
+          armyId: army?.armyId,
+        },
+        evidence: source === 'npc_ai'
+          ? 'NPC 君主依据在朝声望、显式关系网络、伤亡比例与国库状况自主裁决；结算由同一规则引擎执行'
+          : '仅允许处置上一回合记录为战败的在世将领；抚恤/追责结果由规则引擎结算',
+        source,
+      }));
+      return;
+    }
     case 'appoint': {
       const person = ctx.charactersById[order.personId];
       const region = state.regions[order.regionId];
       if (!person || !region) return;
       faction.resources.cash -= 8_000;
       const old = region.governorName;
+      const oldGovernorId = region.governorId;
+      const orderBefore = region.order;
+      const loyaltyBefore = region.loyalty;
+      const relationshipEffect = appointmentRelationshipEffect(
+        ctx.seed.relationships,
+        person.person_id,
+        oldGovernorId,
+        region.garrisonCommanderId,
+      );
       region.governorId = person.person_id;
       region.governorName = person.name;
-      region.loyalty = clamp(region.loyalty + 4);
+      region.order = clamp(region.order + relationshipEffect.orderDelta);
+      region.loyalty = clamp(region.loyalty + 4 + relationshipEffect.loyaltyDelta);
       events.push(
         emitEvent(state, {
           type: 'order_accepted',
           title: `任命 ${person.name} 为${region.name}主官`,
-          summary: `原任 ${old} 调离；新任官员能力（治理 ${person.governance}）将影响该州执行效率。`,
+          summary: `原任 ${old} 调离；新任官员治理 ${person.governance}。交接评估：${relationshipEffect.explanation}`,
           actorId,
           actorName,
           factionKey: fk,
           targetId: person.person_id,
           targetLabel: person.name,
-          before: { governor: old },
-          after: { governor: person.name },
-          evidence: '任命需君主权限并耗银 8000',
+          before: { governor: old, order: orderBefore, loyalty: loyaltyBefore },
+          after: {
+            governor: person.name,
+            order: region.order,
+            loyalty: region.loyalty,
+            relationshipOrderDelta: relationshipEffect.orderDelta,
+            relationshipLoyaltyDelta: relationshipEffect.loyaltyDelta,
+          },
+          evidence: '任命需君主权限并耗银 8000；交接修正只由种子显式人物关系触发',
           source,
         }),
       );
@@ -886,7 +2075,7 @@ export function applyOrder(
       if (!region) return;
       const amount = Math.min(Math.round(order.amount), region.garrison);
       if (amount < 60) return;
-      const path = findPath(state, ctx, fk, region.regionId, order.targetRegionId);
+      const path = findPath(state, ctx, fk, region.regionId, order.targetRegionId, { troops: amount });
       if (!path.ok) return;
       const commander =
         commanderOf(ctx, order.commanderId) ??

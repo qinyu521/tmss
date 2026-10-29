@@ -6,9 +6,15 @@ import {
   ROLE_ALLOWED_ORDERS,
   ROLE_LABEL,
   SCHEME_LABELS,
+  courtOpinion,
+  courtRecommendedDecision,
+  courtSkill,
   fmt,
   type Order,
   type SchemeKind,
+  type CourtAgenda,
+  type CourtDecision,
+  type CourtResolution,
 } from '@tianming/shared';
 import { api, type CharacterSummary } from '../api/client';
 import { useApp } from '../state/store';
@@ -17,7 +23,7 @@ import { Modal, Portrait, UnitIcon } from './ui';
 const GROUPS = {
   military: ['move_army', 'dispatch_garrison', 'rest_army', 'scout'],
   civil: ['recruit', 'levy_grain', 'levy_tax', 'trade'],
-  politics: ['appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
+  politics: ['hold_court', 'reward_commander', 'offer_defector_amnesty', 'replace_warned_commander', 'settle_defeated_commander', 'appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
   scheme: ['scheme'],
 } as const;
 
@@ -76,6 +82,20 @@ export default function OrdersSheet() {
   const [characters, setCharacters] = useState<CharacterSummary[]>([]);
   const [commanders, setCommanders] = useState<CharacterSummary[]>([]);
   const [searching, setSearching] = useState(false);
+  const [courtAgenda, setCourtAgenda] = useState<CourtAgenda>('war_council');
+  const [courtResolution, setCourtResolution] = useState<CourtResolution>('compromise');
+  const [courtSpeakerId, setCourtSpeakerId] = useState('');
+  const [courtOppositionId, setCourtOppositionId] = useState('');
+  const [rewardCommanderId, setRewardCommanderId] = useState('');
+  const [rewardAmount, setRewardAmount] = useState(10_000);
+  const [amnestyCandidates, setAmnestyCandidates] = useState<CharacterSummary[]>([]);
+  const [amnestyCommanderId, setAmnestyCommanderId] = useState('');
+  const [amnestyAmount, setAmnestyAmount] = useState(20_000);
+  const [defectionArmyId, setDefectionArmyId] = useState('');
+  const [defectionReplacementId, setDefectionReplacementId] = useState('');
+  const [settlementCommanderId, setSettlementCommanderId] = useState('');
+  const [settlementAction, setSettlementAction] = useState<'relieve' | 'discipline' | 'replace' | 'demote' | 'trial'>('relieve');
+  const [settlementReplacementId, setSettlementReplacementId] = useState('');
   const [scheme, setScheme] = useState<SchemeKind>('fire');
   const [schemeTarget, setSchemeTarget] = useState('');
   const [strategistId, setStrategistId] = useState('');
@@ -120,10 +140,72 @@ export default function OrdersSheet() {
   useEffect(() => {
     if (!view) return;
     api
-      .characters({ faction: view.factionKey, pageSize: '80' })
-      .then((res) => setCommanders(res.items))
-      .catch(() => setCommanders([]));
-  }, [view?.factionKey, view?.gameId]);
+      .characters({ faction: view.factionKey, pageSize: '100', ...(view.gameId ? { gameId: view.gameId } : {}) })
+      .then((res) => {
+        const available = res.items.filter((person) => person.alive !== false);
+        setCommanders(res.items);
+        // 切换新局/势力时重新选择本局仍在世的主议臣与反对臣，避免旧局人物残留。
+        setCourtSpeakerId(available[0]?.person_id ?? '');
+        setCourtOppositionId(available.find((person) => person.person_id !== available[0]?.person_id)?.person_id ?? '');
+        const firstArmyCommander = view.armies.find((army) => army.own)?.commanderId;
+        setRewardCommanderId(firstArmyCommander && available.some((person) => person.person_id === firstArmyCommander) ? firstArmyCommander : '');
+        const warnedCommander = available.find((person) => person.defectionWarningTurn !== undefined && person.defectionTargetFaction);
+        const warnedArmy = warnedCommander ? view.armies.find((army) => army.own && army.commanderId === warnedCommander.person_id) : undefined;
+        setDefectionArmyId(warnedArmy?.armyId ?? '');
+        const freeReplacement = available.find((person) =>
+          !view.armies.some((army) => army.commanderId === person.person_id) &&
+          !view.regions.some((region) => region.owned && region.garrisonCommanderName === person.name)
+        );
+        setDefectionReplacementId(freeReplacement?.person_id ?? '');
+        setSettlementCommanderId(available.find((person) => person.pendingBattleSettlement && person.lastBattleOutcome === 'defeat')?.person_id ?? '');
+        const replacement = available.find((person) =>
+          !view.armies.some((army) => army.own && army.commanderId === person.person_id) &&
+          !view.regions.some((region) => region.owned && region.garrisonCommanderName === person.name)
+        );
+        setSettlementReplacementId(replacement?.person_id ?? '');
+      })
+      .catch(() => {
+        setCommanders([]);
+        setCourtSpeakerId('');
+        setCourtOppositionId('');
+        setRewardCommanderId('');
+        setDefectionArmyId('');
+        setDefectionReplacementId('');
+        setSettlementCommanderId('');
+      });
+  }, [view?.factionKey, view?.gameId, view?.date.turn]);
+
+  useEffect(() => {
+    if (!view || view.playerRole !== 'ruler') {
+      setAmnestyCandidates([]);
+      setAmnestyCommanderId('');
+      return;
+    }
+    let cancelled = false;
+    const loadAmnestyCandidates = async () => {
+      const params: Record<string, string> = view.gameId ? { gameId: view.gameId } : {};
+      const first = await api.characters({ ...params, page: '1', pageSize: '100' });
+      const pageCount = Math.ceil(first.total / Math.max(1, first.pageSize));
+      const remaining = await Promise.all(
+        Array.from({ length: Math.max(0, pageCount - 1) }, (_, index) =>
+          api.characters({ ...params, page: String(index + 2), pageSize: '100' }),
+        ),
+      );
+      const candidates = [first, ...remaining]
+        .flatMap((page) => page.items)
+        .filter((person) => person.alive !== false && person.originalFactionKey === view.factionKey && Boolean(person.allegianceFaction) && person.allegianceFaction !== view.factionKey)
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+      if (cancelled) return;
+      setAmnestyCandidates(candidates);
+      setAmnestyCommanderId((previous) => candidates.some((person) => person.person_id === previous) ? previous : candidates[0]?.person_id ?? '');
+    };
+    loadAmnestyCandidates().catch(() => {
+      if (cancelled) return;
+      setAmnestyCandidates([]);
+      setAmnestyCommanderId('');
+    });
+    return () => { cancelled = true; };
+  }, [view?.gameId, view?.factionKey, view?.date.turn, view?.playerRole]);
 
   useEffect(() => {
     if (!selectedArmy) return;
@@ -160,6 +242,69 @@ export default function OrdersSheet() {
     (c) => !view.armies.some((a) => a.commanderId === c.person_id) && c.person_id !== selectedArmy?.commanderId,
   );
   const strategists = [...commanders].sort((a, b) => b.strategy - a.strategy);
+  const courtAgendas: { key: CourtAgenda; label: string; desc: string }[] = [
+    { key: 'war_council', label: '军务与边防', desc: '军令、训练、士气与军需之间的权衡。' },
+    ...(view.factionKey === 'YONG' ? [{ key: 'succession' as const, label: '皇嗣与储位', desc: '明确储位可强化名分，但可能激化其他皇子；折中可稳定朝局。' }] : []),
+    ...(view.factionKey === 'HUN' ? [{ key: 'tribal_alliance' as const, label: '部落盟约', desc: '统一号令能提升联盟协调，但强压会损伤各部忠诚；兑现盟约能安抚部落。' }] : []),
+    ...(view.factionKey === 'CHU' ? [{ key: 'clan_relations' as const, label: '世家与中枢', desc: '收权可增强中央权威但会激怒世家；让利则反之。' }] : []),
+  ];
+  const courtDecisionCopy: Record<CourtDecision, { label: string; desc: string }> = {
+    assertive: { label: '强硬推进', desc: '更快强化军事或中央权威，但会积累疲劳、派系反弹或忠诚损失。' },
+    balanced: { label: '折中调和', desc: '以适度成本改善战备或稳定政治关系，避免单方面倾斜。' },
+    conciliatory: { label: '怀柔让步', desc: '优先恢复疲劳、信任或支持度；通常牺牲部分短期控制力。' },
+  };
+  const courtResolutionCopy: Record<CourtResolution, { label: string; desc: string }> = {
+    adopt_speaker: { label: '采纳主议臣', desc: '以主议臣基于自身身份与属性提出的政策为准。' },
+    adopt_opposition: { label: '驳回主议，采纳反对臣', desc: '否决主议臣的主张，转而执行反对臣所倡方案。' },
+    compromise: { label: '折中调和', desc: '不完全采纳任何一方，采用折中政策。' },
+  };
+  const activeCourtAgenda = courtAgendas.some((item) => item.key === courtAgenda)
+    ? courtAgenda
+    : courtAgendas[0].key;
+  const courtOfficials = commanders.filter((person) => person.alive !== false);
+  const rewardCandidates = courtOfficials.filter((person) => ownArmies.some((army) => army.commanderId === person.person_id));
+  const selectedRewardCommander = rewardCandidates.find((person) => person.person_id === rewardCommanderId);
+  const selectedAmnestyCommander = amnestyCandidates.find((person) => person.person_id === amnestyCommanderId);
+  const amnestyCurrentFaction = view.factions.find((faction) => faction.key === selectedAmnestyCommander?.allegianceFaction)?.shortName ?? selectedAmnestyCommander?.allegianceFaction ?? '未知势力';
+  const warnedCommanderCandidates = courtOfficials.filter((person) =>
+    person.defectionWarningTurn !== undefined &&
+    Boolean(person.defectionTargetFaction) &&
+    view?.armies.some((army) => army.own && army.commanderId === person.person_id)
+  );
+  const warnedArmyCandidates = view?.armies.filter((army) =>
+    army.own && warnedCommanderCandidates.some((person) => person.person_id === army.commanderId)
+  ) ?? [];
+  const selectedWarnedArmy = warnedArmyCandidates.find((army) => army.armyId === defectionArmyId) ?? warnedArmyCandidates[0];
+  const selectedWarnedCommander = selectedWarnedArmy
+    ? warnedCommanderCandidates.find((person) => person.person_id === selectedWarnedArmy.commanderId)
+    : undefined;
+  const warnedReplacementCandidates = courtOfficials.filter((person) =>
+    person.person_id !== selectedWarnedCommander?.person_id &&
+    !view?.armies.some((army) => army.commanderId === person.person_id) &&
+    !view?.regions.some((region) => region.owned && region.garrisonCommanderName === person.name)
+  );
+  const defeatedCommanderCandidates = courtOfficials.filter((person) => person.pendingBattleSettlement === true && person.lastBattleOutcome === 'defeat');
+  const selectedDefeatedCommander = defeatedCommanderCandidates.find((person) => person.person_id === settlementCommanderId);
+  const battlePoliticalOpponent = selectedDefeatedCommander?.battlePoliticalOpponentId
+    ? courtOfficials.find((person) => person.person_id === selectedDefeatedCommander.battlePoliticalOpponentId)
+    : undefined;
+  const canReplaceSelectedCommander = Boolean(selectedDefeatedCommander && view?.armies.some((army) => army.own && army.commanderId === selectedDefeatedCommander.person_id));
+  const settlementReplacementCandidates = courtOfficials.filter((person) =>
+    !view?.armies.some((army) => army.own && army.commanderId === person.person_id) &&
+    !view?.regions.some((region) => region.owned && region.garrisonCommanderName === person.name)
+  );
+  const courtSpeaker = courtOfficials.find((person) => person.person_id === courtSpeakerId);
+  const courtOpponent = courtOfficials.find((person) => person.person_id === courtOppositionId);
+  const speakerCourtScore = courtSpeaker ? courtSkill(courtSpeaker, activeCourtAgenda) : 50;
+  const oppositionCourtScore = courtOpponent ? courtSkill(courtOpponent, activeCourtAgenda) : 50;
+  const courtDebateEdge = courtSpeaker && courtOpponent && courtSpeaker.person_id !== courtOpponent.person_id
+    ? Math.max(-3, Math.min(3, Math.round((speakerCourtScore - oppositionCourtScore) / 15)))
+    : 0;
+  const effectiveCourtDecision: CourtDecision = courtResolution === 'adopt_speaker'
+    ? (courtSpeaker ? courtRecommendedDecision(courtSpeaker, activeCourtAgenda) : 'balanced')
+    : courtResolution === 'adopt_opposition'
+      ? (courtOpponent ? courtRecommendedDecision(courtOpponent, activeCourtAgenda) : 'balanced')
+      : 'balanced';
 
   const tradeCost = Math.round((BALANCE.prices[resource] ?? 0) * tradeAmount * BALANCE.tradePremium);
   const recruitCost = Math.round(recruitAmount * BALANCE.recruit.cashPerMan);
@@ -215,8 +360,38 @@ export default function OrdersSheet() {
         return tribeId ? { orderId, kind: 'appease_tribe', tribeId, amount } : null;
       case 'balance_princes':
         return { orderId, kind: 'balance_princes', amount: 1 };
+      case 'hold_court':
+        return {
+          orderId,
+          kind: 'hold_court',
+          agenda: activeCourtAgenda,
+          decision: effectiveCourtDecision,
+          resolution: courtResolution,
+          ...(courtSpeaker && courtOpponent && courtSpeaker.person_id !== courtOpponent.person_id
+            ? { speakerPersonId: courtSpeaker.person_id, oppositionPersonId: courtOpponent.person_id }
+            : {}),
+        };
       case 'negotiate_house':
         return houseId ? { orderId, kind: 'negotiate_house', houseId, amount: 1 } : null;
+      case 'reward_commander':
+        return rewardCommanderId && rewardCandidates.some((person) => person.person_id === rewardCommanderId)
+          ? { orderId, kind: 'reward_commander', personId: rewardCommanderId, amount: rewardAmount }
+          : null;
+      case 'offer_defector_amnesty':
+        return amnestyCommanderId && amnestyCandidates.some((person) => person.person_id === amnestyCommanderId)
+          ? { orderId, kind: 'offer_defector_amnesty', personId: amnestyCommanderId, amount: amnestyAmount }
+          : null;
+      case 'replace_warned_commander':
+        return selectedWarnedArmy && selectedWarnedCommander &&
+          warnedArmyCandidates.some((army) => army.armyId === selectedWarnedArmy.armyId) &&
+          warnedReplacementCandidates.some((person) => person.person_id === defectionReplacementId)
+          ? { orderId, kind: 'replace_warned_commander', armyId: selectedWarnedArmy.armyId, replacementPersonId: defectionReplacementId }
+          : null;
+      case 'settle_defeated_commander':
+        return settlementCommanderId && defeatedCommanderCandidates.some((person) => person.person_id === settlementCommanderId) &&
+          (settlementAction !== 'replace' || (canReplaceSelectedCommander && settlementReplacementCandidates.some((person) => person.person_id === settlementReplacementId)))
+          ? { orderId, kind: 'settle_defeated_commander', personId: settlementCommanderId, action: settlementAction, ...(settlementAction === 'replace' ? { replacementPersonId: settlementReplacementId } : {}) }
+          : null;
       case 'appoint':
         return personId && appointRegion ? { orderId, kind: 'appoint', personId, regionId: appointRegion } : null;
       case 'scheme': {
@@ -516,6 +691,87 @@ export default function OrdersSheet() {
               </>
             )}
 
+            {action === 'hold_court' && (
+              <>
+                <div className="form-row">
+                  <label>廷议议题</label>
+                  <select value={activeCourtAgenda} onChange={(e) => setCourtAgenda(e.target.value as CourtAgenda)}>
+                    {courtAgendas.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                  </select>
+                </div>
+                <div className="form-note">
+                  {courtAgendas.find((item) => item.key === activeCourtAgenda)?.desc}
+                </div>
+                <div className="form-row">
+                  <label>主议臣</label>
+                  <select value={courtSpeakerId} onChange={(e) => setCourtSpeakerId(e.target.value)}>
+                    <option value="">请选择主议臣</option>
+                    {courtOfficials.map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkill(person, activeCourtAgenda))} · 声望 {Math.round(person.courtStanding ?? 50)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>反对臣</label>
+                  <select value={courtOppositionId} onChange={(e) => setCourtOppositionId(e.target.value)}>
+                    <option value="">请选择反对臣</option>
+                    {courtOfficials.filter((person) => person.person_id !== courtSpeakerId).map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · {person.current_position_standard || person.identity_type} · 议题能力 {Math.round(courtSkill(person, activeCourtAgenda))}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-note">
+                  {courtSpeaker && courtOpponent
+                    ? `争辩比较：${courtSpeaker.name}（能力 ${Math.round(speakerCourtScore)}）对阵${courtOpponent.name}（能力 ${Math.round(oppositionCourtScore)}），本次议案效果 ${courtDebateEdge > 0 ? '+' : ''}${courtDebateEdge}。`
+                    : '同时指定主议臣与反对臣后，双方与议题相关的能力差会影响裁决效果；不指定则采用集议默认效果。'}
+                </div>
+                <div className="subhead" style={{ marginTop: 10 }}>君主裁定</div>
+                <div className="action-grid">
+                  {(Object.keys(courtResolutionCopy) as CourtResolution[]).map((key) => (
+                    <button key={key} className={`action-chip ${courtResolution === key ? 'active' : ''}`} onClick={() => setCourtResolution(key)}>
+                      {courtResolutionCopy[key].label}
+                    </button>
+                  ))}
+                </div>
+                <div className="form-note">
+                  {courtResolutionCopy[courtResolution].desc}
+                  当前将执行政策：{courtDecisionCopy[effectiveCourtDecision].label}。
+                  {courtResolution !== 'compromise' && !(courtSpeaker && courtOpponent)
+                    ? '请先选择主议臣与反对臣。'
+                    : courtDecisionCopy[effectiveCourtDecision].desc}
+                </div>
+                <div className="card" style={{ marginTop: 10, background: 'rgba(0,0,0,0.16)' }}>
+                  <div className="subhead">廷臣意见</div>
+                  <div className="small" style={{ lineHeight: 1.9 }}>
+                    <div>
+                      <span className="gold">{courtSpeaker ? `${courtSpeaker.name}·主议：` : '主议臣：'}</span>
+                      {courtSpeaker
+                        ? courtOpinion(courtSpeaker, activeCourtAgenda)
+                        : '未指定主议臣，采用廷臣集议的标准议论。'}
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      <span style={{ color: 'var(--danger)' }}>{courtOpponent ? `${courtOpponent.name}·反对：` : '反对臣：'}</span>
+                      {courtOpponent
+                        ? courtOpinion(courtOpponent, activeCourtAgenda)
+                        : '未指定反对臣，不计算人物能力差带来的效果修正。'}
+                    </div>
+                  </div>
+                  <div className="divider" />
+                  <div className="small muted" style={{ lineHeight: 1.7 }}>
+                    {view.factionKey === 'YONG' && `当前朝局稳定 ${Math.round(view.special.courtStability ?? 60)}；皇子：${(view.special.princes ?? []).map((p) => `${p.name}（影响 ${Math.round(p.influence)}）`).join('、') || '无可用派系记录'}。`}
+                    {view.factionKey === 'HUN' && `当前联盟协调度 ${Math.round(view.special.cohesion ?? 58)}；部落：${(view.special.tribes ?? []).map((t) => `${t.name}（忠诚 ${Math.round(t.loyalty)}）`).join('、') || '无可用部落记录'}。`}
+                    {view.factionKey === 'CHU' && `当前中枢权威 ${Math.round(view.special.centralAuthority ?? 55)}；世家支持均值 ${Math.round((view.special.houses ?? []).reduce((sum, h) => sum + h.support, 0) / Math.max(1, view.special.houses?.length ?? 0))}。`}
+                    {view.factionKey === 'HUN' && activeCourtAgenda === 'war_council' && ` 目前军团 ${view.armies.filter((a) => a.own).length} 支。`}
+                  </div>
+                </div>
+                <div className="form-note">廷议每旬限一次。命令提交后会在回合结算时形成政治事件，裁决将直接影响运行时状态；并非只记录一段对话。</div>
+              </>
+            )}
+
             {action === 'balance_princes' && (
               <div className="form-note">
                 耗银 {fmt(BALANCE.balancePrinces.cashCost)}，朝局稳定 +{BALANCE.balancePrinces.stabilityGain}，最高影响力皇子 -{BALANCE.balancePrinces.topInfluenceDrop}。
@@ -532,6 +788,161 @@ export default function OrdersSheet() {
                   </select>
                 </div>
                 <div className="form-note">协商耗银 {fmt(BALANCE.negotiateHouse.cashCost)}，支持 +{BALANCE.negotiateHouse.supportGain}。世家支持影响税赋、征兵与地方私兵。</div>
+              </>
+            )}
+
+            {action === 'reward_commander' && (
+              <>
+                <div className="form-row">
+                  <label>受赏将领</label>
+                  <select value={rewardCommanderId} onChange={(e) => setRewardCommanderId(e.target.value)}>
+                    <option value="">请选择本军团统将</option>
+                    {rewardCandidates.map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · 军令忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>赏赐银两</label>
+                  <select value={rewardAmount} onChange={(e) => setRewardAmount(Number(e.target.value))}>
+                    <option value={5000}>5000 两 · 忠诚 +5</option>
+                    <option value={10000}>10000 两 · 忠诚 +10</option>
+                    <option value={20000}>20000 两 · 忠诚 +20</option>
+                  </select>
+                </div>
+                <div className="form-note">
+                  {selectedRewardCommander
+                    ? `当前军令忠诚 ${Math.round(selectedRewardCommander.militaryLoyalty ?? selectedRewardCommander.loyalty)}，赏后最多升至 100。将领忠诚会影响大雍夺嫡危机中的拒命风险。`
+                    : '只能赏赐目前统领本国军团的在世将领。'}
+                </div>
+              </>
+            )}
+
+            {action === 'offer_defector_amnesty' && (
+              <>
+                <div className="form-row">
+                  <label>招抚旧将</label>
+                  <select value={amnestyCommanderId} onChange={(e) => setAmnestyCommanderId(e.target.value)}>
+                    <option value="">请选择已倒戈的旧将</option>
+                    {amnestyCandidates.map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · 现归附{view.factions.find((faction) => faction.key === person.allegianceFaction)?.shortName ?? person.allegianceFaction} · 忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>招抚规格</label>
+                  <select value={amnestyAmount} onChange={(e) => setAmnestyAmount(Number(e.target.value))}>
+                    <option value={10_000}>10000 两 · 忠诚 -6</option>
+                    <option value={20_000}>20000 两 · 忠诚 -10</option>
+                    <option value={40_000}>40000 两 · 忠诚 -18</option>
+                  </select>
+                </div>
+                <div className="form-note">
+                  {selectedAmnestyCommander
+                    ? `该将领现归附${amnestyCurrentFaction}，军令忠诚 ${Math.round(selectedAmnestyCommander.militaryLoyalty ?? selectedAmnestyCommander.loyalty)}。招抚需本方与归附方交战、并存在明确强旧主关系；忠诚降至 15 及以下会启动完整一回合预警，归附方可通过赏赐或撤换反制。`
+                    : '这里只列出原属本方、当前效忠其他势力的人物。只有仍统领军团、独占归附方驻地的将领可被招抚；招抚并非立即夺回州府。'}
+                </div>
+              </>
+            )}
+
+            {action === 'replace_warned_commander' && (
+              <>
+                <div className="form-row">
+                  <label>倒戈预警军团</label>
+                  <select value={selectedWarnedArmy?.armyId ?? ''} onChange={(e) => setDefectionArmyId(e.target.value)}>
+                    <option value="">选择收到倒戈预警的军团</option>
+                    {warnedArmyCandidates.map((army) => {
+                      const commander = warnedCommanderCandidates.find((person) => person.person_id === army.commanderId);
+                      return (
+                        <option key={army.armyId} value={army.armyId}>
+                          {army.name} · {commander?.name ?? army.commanderName} · 忠诚 {Math.round(commander?.militaryLoyalty ?? commander?.loyalty ?? 0)} · 可能归附 {commander?.defectionTargetFaction}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>接任统将</label>
+                  <select value={defectionReplacementId} onChange={(e) => setDefectionReplacementId(e.target.value)}>
+                    <option value="">选择未掌兵的本方将领</option>
+                    {warnedReplacementCandidates.map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · 统率 {person.command} · 忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-note">
+                  {selectedWarnedCommander
+                    ? `当前预警期限为第 ${(selectedWarnedCommander.defectionWarningTurn ?? 0) + 1} 回合。撤换不耗银，但部队士气 -5、旧将忠诚 -5、在朝声望 -3；新将立即接掌军团并清除倒戈预警。`
+                    : '这里只能选择已有有效倒戈预警的本方军团。撤换适合国库紧张、无法通过赏赐挽回军心的情况。'}
+                </div>
+              </>
+            )}
+
+            {action === 'settle_defeated_commander' && (
+              <>
+                <div className="form-row">
+                  <label>战败将领</label>
+                  <select value={settlementCommanderId} onChange={(e) => setSettlementCommanderId(e.target.value)}>
+                    <option value="">选择待善后的败将</option>
+                    {defeatedCommanderCandidates.map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · 忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)} · 伤亡 {Math.round((person.lastBattleLossRate ?? 0) * 100)}%{person.pendingBattleCase === 'impeachment' ? ' · 朝臣弹劾' : person.pendingBattleCase === 'transfer_request' ? ' · 请调前线' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>处置方式</label>
+                  <select value={settlementAction} onChange={(e) => setSettlementAction(e.target.value as 'relieve' | 'discipline' | 'replace' | 'demote' | 'trial')}>
+                    <option value="relieve">留任抚恤 · 耗银 12000 · 忠诚 +8、所部士气 +6</option>
+                    <option value="demote">降职问责 · 不耗银 · 忠诚 -6、统率 -8、士气 -2</option>
+                    <option value="replace" disabled={!canReplaceSelectedCommander}>撤换统将 · 不耗银 · 旧将忠诚 -10、所部士气 -5</option>
+                    <option value="trial">公开审判 · 不耗银 · 忠诚 -15、统率 -12、士气 -5、声望重创</option>
+                  </select>
+                </div>
+                {settlementAction === 'replace' && (
+                  <div className="form-row">
+                    <label>接任统将</label>
+                    <select value={settlementReplacementId} onChange={(e) => setSettlementReplacementId(e.target.value)}>
+                      <option value="">选择未掌兵的本方将领</option>
+                      {settlementReplacementCandidates.map((person) => (
+                        <option key={person.person_id} value={person.person_id}>
+                          {person.name} · 统率 {person.command} · 忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {selectedDefeatedCommander?.pendingBattleCase && (
+                  <div className="form-note">
+                    {selectedDefeatedCommander.pendingBattleCase === 'impeachment'
+                      ? `案由：战损引发弹劾${battlePoliticalOpponent ? `，发起者为${battlePoliticalOpponent.name}` : '，朝中要求裁断'}。留任会保护败将；降职部分采纳问责；撤换或公开审判会更强烈地响应弹劾。`
+                      : '案由：战败将领请求调离前线。留任抚恤会支持其继续统兵；降职驳回请求但惩处统将；撤换批准调离；公开审判则公开追责并冲击政治秩序。'}
+                  </div>
+                )}
+                <div className="form-note">
+                  {selectedDefeatedCommander
+                    ? settlementAction === 'relieve'
+                      ? `抚恤后忠诚预计为 ${Math.min(100, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) + 8)}；若原军团已溃散，则只恢复将领忠诚。`
+                      : settlementAction === 'demote'
+                        ? `降职后忠诚预计为 ${Math.max(0, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) - 6)}，有效统率将再受 -8 惩罚；若军团仍在，训练 +2、士气 -2。`
+                        : settlementAction === 'trial'
+                          ? `公开审判后忠诚预计为 ${Math.max(0, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) - 15)}，统率惩罚再增加 12，朝廷声望重创；若军团仍在，士气 -5、训练 +3。`
+                          : settlementAction === 'discipline'
+                            ? `追责后忠诚预计为 ${Math.max(0, Math.round(selectedDefeatedCommander.militaryLoyalty ?? selectedDefeatedCommander.loyalty) - 8)}；若原军团仍在，则以训练提升换取士气下降。`
+                            : canReplaceSelectedCommander
+                          ? settlementReplacementCandidates.some((person) => person.person_id === settlementReplacementId)
+                            ? `撤换后由${settlementReplacementCandidates.find((person) => person.person_id === settlementReplacementId)?.name}接掌军团；旧将忠诚 -10、部队士气 -5。已掌领军团或州兵的将领不会列为接任人选。`
+                            : '请指定一名在世、同属本方且未统领军团或州兵的接任将领。'
+                          : '原军团已不存在，无法撤换统将；仍可抚恤或追责败将。'
+                    : '这里只显示最近一场战斗尚未善后的战败将领；每场战败只能处置一次。'}
+                </div>
               </>
             )}
 
@@ -622,7 +1033,7 @@ export default function OrdersSheet() {
           )}
 
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-            <button className="btn primary" disabled={!order || busy} onClick={() => void submit()}>下达此命令</button>
+            <button className="btn primary" disabled={!order || busy || (action === 'hold_court' && (!courtSpeaker || !courtOpponent || courtSpeaker.person_id === courtOpponent.person_id))} onClick={() => void submit()}>下达此命令</button>
             <button className="btn ghost" onClick={() => setOrdersOpen(false)}>稍后再下</button>
             {view.pendingOrders.length > 0 && <span className="muted small" style={{ alignSelf: 'center' }}>已有 {view.pendingOrders.length} 条待结算命令（上限 6）</span>}
           </div>
@@ -679,6 +1090,8 @@ function describeOrder(o: Order): string {
   if (o.kind === 'trade') return `${o.resource} × ${o.amount}`;
   if (o.kind === 'appease_tribe') return `${o.tribeId} · ${o.amount} 两`;
   if (o.kind === 'balance_princes') return '平衡皇子派系';
+  if (o.kind === 'hold_court') return `廷议：${o.agenda} · ${o.decision}`;
+  if (o.kind === 'reward_commander') return `赏赐 ${o.personId} · ${o.amount.toLocaleString()} 两`;
   if (o.kind === 'negotiate_house') return o.houseId;
   if (o.kind === 'appoint') return `${o.personId} → ${o.regionId}`;
   if (o.kind === 'rest_army') return o.armyId;
