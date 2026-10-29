@@ -1212,10 +1212,6 @@ export function applyOrder(
       applyDiplomaticAction(state, order, events, source, fk, actorId, actorName);
       return;
     }
-    case 'diplomatic_action': {
-      applyDiplomaticAction(state, order, events, source, fk, actorId, actorName);
-      return;
-    }
     case 'appoint': {
       const person = ctx.charactersById[order.personId];
       const region = state.regions[order.regionId];
