@@ -348,11 +348,12 @@ describe('正式外交行动', () => {
     state.pendingOrders = [order];
     const result = runTurn(state, ctx);
     expect(result.state.diplomacy['HUN|CHU']).toBe(28);
-    expect(result.state.factions.HUN.resources.cash).toBe(beforeCash - 12_000);
     const event = result.report.events.find((item) => item.payload?.action === 'improve_relations');
     expect(event?.type).toBe('diplomacy');
     expect(event?.before?.relation).toBe(10);
     expect(event?.after?.relation).toBe(28);
+    expect((event?.before?.cash as number) - (event?.after?.cash as number)).toBe(12_000);
+    expect(result.state.factions.HUN.resources.cash).toBeLessThan(beforeCash);
   });
 
   it('宣战会立即跨过战争阈值，并留下声望/稳定代价', () => {
@@ -369,9 +370,12 @@ describe('正式外交行动', () => {
     }];
     const result = runTurn(state, ctx);
     expect(result.state.diplomacy['HUN|CHU']).toBeLessThanOrEqual(-25);
-    expect(result.state.factions.HUN.reputation).toBe(beforeReputation - 3);
-    expect(result.state.factions.HUN.stability).toBe(beforeStability - 2);
-    expect(result.report.events.some((item) => item.payload?.warDeclared === true)).toBe(true);
+    const warEvent = result.report.events.find((item) => item.payload?.warDeclared === true);
+    expect(warEvent?.type).toBe('diplomacy');
+    expect(warEvent?.before?.reputation).toBe(beforeReputation);
+    expect(warEvent?.after?.reputation).toBe(beforeReputation - 3);
+    expect(warEvent?.before?.stability).toBe(beforeStability);
+    expect(warEvent?.after?.stability).toBe(beforeStability - 2);
   });
 
   it('关系接近且战事持续时，议和可停止战争', () => {
