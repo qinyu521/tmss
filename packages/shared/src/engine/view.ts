@@ -262,14 +262,19 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
         : undefined,
       nodeId: army.nodeId,
       regionName: region?.name ?? '',
+      mapNodeId: own ? army.mapNodeId : undefined,
+      mapPath: own ? (army.mapPath ?? []) : [],
+      targetMapNodeId: own ? army.targetMapNodeId : null,
       own,
       status: army.status,
       stance: army.stance,
       path: own ? army.path : [],
       targetRegionId: own ? army.targetRegionId : null,
-      progress: own && army.path.length > 0 && (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 0) > 0
-        ? Math.max(0, Math.min(1, 1 - (army.hopCosts[0] ?? 0) / (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 1)))
-        : 0,
+      progress: own && (army.mapPath?.length ?? 0) > 0 && (army.mapCurrentHopDaysTotal ?? 0) > 0
+        ? Math.max(0, Math.min(1, 1 - (army.mapHopCosts?.[0] ?? 0) / (army.mapCurrentHopDaysTotal ?? 1)))
+        : own && army.path.length > 0 && (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 0) > 0
+          ? Math.max(0, Math.min(1, 1 - (army.hopCosts[0] ?? 0) / (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 1)))
+          : 0,
       troops: own ? army.troops : undefined,
       troopsLabel: own
         ? `${fmt(army.troops)}人`
