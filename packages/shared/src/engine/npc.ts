@@ -276,7 +276,7 @@ function pickDefensiveReinforcement(
     if (army.faction === factionKey || !isAtWar(state.diplomacy, factionKey, army.faction)) continue;
     const nodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
     const node = nodeId ? state.mapNodes[nodeId] : undefined;
-    if (!node || node.faction === factionKey) continue;
+    if (!nodeId || !node || node.faction === factionKey) continue;
     const stationed = enemyArmiesByNode.get(nodeId) ?? [];
     stationed.push(army);
     enemyArmiesByNode.set(nodeId, stationed);
