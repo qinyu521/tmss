@@ -324,10 +324,14 @@ export function assignMarch(army: Army, path: string[], dayCosts: number[], targ
 export function clearMarch(army: Army): void {
   army.path = [];
   army.hopCosts = [];
+  army.currentHopDaysTotal = 0;
+  army.mapPath = [];
+  army.mapHopCosts = [];
+  army.mapCurrentHopDaysTotal = 0;
+  army.targetMapNodeId = null;
   army.targetRegionId = null;
   army.marchDaysLeft = 0;
   army.marchDaysTotal = 0;
-  army.currentHopDaysTotal = 0;
   army.stance = 'defend';
   army.status = 'idle';
 }
