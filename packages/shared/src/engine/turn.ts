@@ -28,6 +28,7 @@ import { retreatRegion as retreatGuard, resolveBattle } from './battle.js';
 import { runEconomy, politicalTags, shortageTags } from './economy.js';
 import { runPolitics } from './politics.js';
 import { runLifecycle } from './lifecycle.js';
+import { refreshCharacterGoals, advanceCharacterGoals } from './goals.js';
 import { buildChronicle } from './chronicle.js';
 import { clamp, factionNameOf } from './state.js';
 
@@ -105,6 +106,9 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
     applyOrder(state, ctx, order, events, 'player_order');
   }
 
+  // 1.5) 关键人物刷新持久化目标；目标用于 NPC 决策，真实效果仍在后续规则结算。
+  refreshCharacterGoals(state, ctx, events);
+
   // 2) NPC 行动
   const npcOrders = generateNpcOrders(state, ctx);
   const npcEventStart = events.length;
@@ -118,6 +122,9 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
       events[i].visibleToPlayer = false;
     }
   }
+
+  // 2.5) 重要人物按目标、阈值和四回合冷却执行自主行动。
+  advanceCharacterGoals(state, ctx, events);
 
   // 3) 行军与战斗
   processMovement(state, ctx, events);
