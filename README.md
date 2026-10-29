@@ -44,7 +44,7 @@ npm start             # 用 API 托管已构建前端：http://localhost:8787
 
 ```bash
 npm run validate:seed   # 计数 / ID 唯一 / 引用 / 兵力 / 连通性 / 原型冲突报告
-npm test                # 引擎/回放/种子/API 集成共 49 个测试
+npm test                # 引擎/回放/种子/API 集成测试（当前统计见 docs/IMPLEMENTATION_STATUS.md）
 npm run typecheck       # shared + api + web
 npm run build           # 前端生产构建
 npm run smoke           # 对运行中的 API 做端到端冒烟（需先启动 npm run dev:api）
@@ -101,9 +101,9 @@ scripts                  种子校验、导入、头像/图标生成、冒烟测
 ## 当前限制
 
 - 单机/个人模式，无应用内登录鉴权或按用户隔离存档；Compose 只绑定 `127.0.0.1:8787`。公开访问必须由只允许实例所有者的 Cloudflare Access 或等效认证网关保护；`SINGLE_PLAYER_MODE=0` 会因未实现多人认证而拒绝启动。
-- 未接入外部 LLM（Provider 接口预留，默认模板史官）；音效预留未实现。
+- AI 史官提供可选的 OpenAI 兼容 LLM Provider；默认使用本地模板。真实外部模型联调仍需在目标环境验收；音效预留未实现。
 - 战斗为战略级单次结算，不是实时战术战斗；水战仅以兵种/地形修正体现。
-- 存档 schema v1，暂无跨大版本迁移（读档会清除存档点之后的事件）。
+- 存档 schema v5，提供 v1→v5 增量迁移；读档会清除存档点之后的事件。跨版本迁移仍需随新增状态持续补充回归测试。
 - 浏览器 3D 依赖 WebGL；低端设备建议在设置中切换低画质。
 
 详细规格、规则与验收记录见 `docs/`。
