@@ -145,6 +145,7 @@ export const ORDER_LABELS: Record<string, string> = {
   appease_tribe: '赏赐部落',
   balance_princes: '平衡皇子',
   negotiate_house: '协商世家',
+  court_debate: '提交朝议议案',
   appoint: '任命官职',
   rest_army: '整军休整',
   scout: '遣斥候侦察',
@@ -171,6 +172,7 @@ export const ROLE_ALLOWED_ORDERS: Record<PlayerRole, string[]> = {
     'appease_tribe',
     'balance_princes',
     'negotiate_house',
+    'court_debate',
     'appoint',
     'rest_army',
     'scout',
@@ -185,12 +187,13 @@ export const ROLE_ALLOWED_ORDERS: Record<PlayerRole, string[]> = {
     'trade',
     'appease_tribe',
     'negotiate_house',
+    'court_debate',
     'rest_army',
     'scout',
     'scheme',
   ],
-  general: ['move_army', 'dispatch_garrison', 'rest_army', 'scout', 'scheme'],
-  strategist: ['scout', 'scheme'],
+  general: ['move_army', 'dispatch_garrison', 'rest_army', 'scout', 'scheme', 'court_debate'],
+  strategist: ['scout', 'scheme', 'court_debate'],
 };
 
 export const SHORTAGE_LABEL: Record<string, string> = {
