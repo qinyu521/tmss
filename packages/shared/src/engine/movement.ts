@@ -171,6 +171,7 @@ export function assignMarch(army: Army, path: string[], dayCosts: number[], targ
   army.status = 'marching';
   army.marchDaysTotal = dayCosts.reduce((s, d) => s + d, 0);
   army.marchDaysLeft = army.marchDaysTotal;
+  army.currentHopDaysTotal = dayCosts[0] ?? 0;
 }
 
 export function clearMarch(army: Army): void {
@@ -179,6 +180,7 @@ export function clearMarch(army: Army): void {
   army.targetRegionId = null;
   army.marchDaysLeft = 0;
   army.marchDaysTotal = 0;
+  army.currentHopDaysTotal = 0;
   army.stance = 'defend';
   army.status = 'idle';
 }
