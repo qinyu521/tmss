@@ -91,6 +91,7 @@ const orderSchema = z.discriminatedUnion('kind', [
     kind: z.literal('move_army'),
     armyId: z.string().min(1),
     targetRegionId: z.string().min(1),
+    targetMapNodeId: z.string().min(1).optional(),
     amount: z.number().finite().optional(),
     units: z.array(z.object({ unitId: z.string().min(1), count: z.number().int().positive() })).max(5).optional(),
     commanderId: z.string().min(1).optional(),
