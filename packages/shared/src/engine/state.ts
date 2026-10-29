@@ -17,7 +17,7 @@ import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
 import { buildContext, buildInitialArmies, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -324,11 +324,36 @@ function migrateV3toV4(state: GameState, roster?: CharacterSeed[]): void {
   }
 }
 
+/**
+ * v4 → v5: repair legacy in-flight marches saved before current-hop progress existed.
+ * Older versions reduced marchDaysLeft for partial travel but left hopCosts[0]
+ * unchanged. The difference between the remaining hop-cost sum and marchDaysLeft
+ * is therefore the elapsed time on the current hop. Newer saves already have
+ * currentHopDaysTotal and are left untouched.
+ */
+function migrateV4toV5(state: GameState): void {
+  for (const army of state.armies ?? []) {
+    if (army.status !== 'marching' || !army.path?.length || !army.hopCosts?.length) continue;
+    if (Number.isFinite(army.currentHopDaysTotal) && (army.currentHopDaysTotal ?? 0) > 0) continue;
+
+    const firstHopTotal = Math.max(1, army.hopCosts[0] ?? 1);
+    const remainingRouteCosts = army.hopCosts.reduce((sum, days) => sum + Math.max(0, days), 0);
+    const savedRemainingDays = Math.max(0, Math.min(remainingRouteCosts, army.marchDaysLeft ?? remainingRouteCosts));
+    const elapsedOnCurrentHop = Math.max(0, Math.min(firstHopTotal, remainingRouteCosts - savedRemainingDays));
+    army.currentHopDaysTotal = firstHopTotal;
+    if (elapsedOnCurrentHop > 0) {
+      army.hopCosts[0] = Math.max(1, firstHopTotal - elapsedOnCurrentHop);
+    }
+    army.marchDaysLeft = army.hopCosts.reduce((sum, days) => sum + Math.max(0, days), 0);
+  }
+}
+
 const MIGRATIONS: Migration[] = [
   { from: 1, to: 2, apply: migrateV1toV2 },
   { from: 2, to: 3, apply: migrateV2toV3 },
   { from: 3, to: 4, apply: migrateV3toV4 },
-];
+  { from: 4, to: 5, apply: migrateV4toV5 },
+]
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
 export function migrateState(state: GameState, roster?: CharacterSeed[]): GameState {
