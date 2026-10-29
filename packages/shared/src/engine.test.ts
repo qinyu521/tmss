@@ -721,6 +721,194 @@ describe('正式外交行动', () => {
   });
 });
 
+describe('NPC 战略地图节点进攻', () => {
+  it('防御盟约响应会优先向敌方独立据点下令，而非只选州府主城', () => {
+    const state = newGame('HUN', 'ruler', 'npc-strategic-node-target');
+    state.date.turn = 2;
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|YONG'] = -40;
+    state.diplomacy['YONG|CHU'] = -40;
+    state.diplomacy['HUN|CHU'] = 50;
+    state.treaties = [{
+      treatyId: 'treaty-hun-chu-map-target',
+      kind: 'alliance',
+      a: 'HUN',
+      b: 'CHU',
+      startTurn: 1,
+      endTurn: 8,
+      status: 'active',
+    }];
+
+    const adjacency = buildMapAdjacency(ctx);
+    const mapSeedById = new Map(ctx.seed.map_nodes.map((node) => [node.node_id, node]));
+    const targetEdge = Object.entries(adjacency)
+      .flatMap(([from, links]) => links.map((link) => ({ from, to: link.to })))
+      .find(({ to }) => mapSeedById.get(to)?.node_type !== '州府/主城');
+    expect(targetEdge).toBeDefined();
+    const { from: sourceNodeId, to: targetNodeId } = targetEdge!;
+    const targetSeed = mapSeedById.get(targetNodeId)!;
+    const sourceSeed = mapSeedById.get(sourceNodeId)!;
+    expect(targetSeed.node_type).not.toBe('州府/主城');
+
+    for (const region of Object.values(state.regions)) region.faction = 'CHU';
+    for (const node of Object.values(state.mapNodes ?? {})) node.faction = 'CHU';
+    state.mapNodes![targetNodeId].faction = 'YONG';
+    state.mapNodes![targetNodeId].garrison = 0;
+    state.mapNodes![targetNodeId].fortification = 0;
+
+    const sourceRegionId = ctx.territories.find((region) => region.region === sourceSeed.region)?.region_id;
+    const targetRegionId = ctx.territories.find((region) => region.region === targetSeed.region)?.region_id;
+    if (!sourceRegionId || !targetRegionId) throw new Error('测试战略节点缺少对应州府。');
+
+    const chuArmies = state.armies.filter((army) => army.faction === 'CHU');
+    const activeArmyId = chuArmies[0]?.armyId;
+    if (!activeArmyId) throw new Error('测试缺少大楚军团。');
+    const safeNodeId = Object.keys(state.mapNodes ?? {}).find(
+      (nodeId) => nodeId !== sourceNodeId && nodeId !== targetNodeId,
+    );
+    if (!safeNodeId) throw new Error('测试地图缺少可安置后方军团的节点。');
+    const safeRegionId = state.mapNodes![safeNodeId].regionId;
+    state.armies = state.armies.map((army) => {
+      if (army.faction === 'CHU') {
+        if (army.armyId === activeArmyId) {
+          return {
+            ...army,
+            nodeId: sourceRegionId,
+            mapNodeId: sourceNodeId,
+            status: 'idle',
+            supply: 100,
+            fatigue: 0,
+            morale: 100,
+            training: 100,
+          };
+        }
+        return { ...army, status: 'marching' };
+      }
+      // 避免原始 YONG 军团偶然驻在测试目标节点，让本例只测节点选敌。
+      return { ...army, nodeId: safeRegionId, mapNodeId: safeNodeId, status: 'marching' };
+    });
+
+    const orders = generateNpcOrders(state, ctx).filter(
+      (order) => order.kind === 'move_army' && order.orderId.startsWith('npc-CHU-'),
+    );
+    expect(orders).toContainEqual(expect.objectContaining({
+      kind: 'move_army',
+      armyId: activeArmyId,
+      targetRegionId,
+      targetMapNodeId: targetNodeId,
+    }));
+  });
+});
+
+describe('NPC 战略节点战斗闭环', () => {
+  it('NPC 的节点目标命令会在回合结算中触发据点战并只改变节点控制权', () => {
+    const state = newGame('HUN', 'ruler', 'npc-node-battle-integration');
+    state.date.turn = 2;
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|YONG'] = -40;
+    state.diplomacy['YONG|CHU'] = -40;
+    state.diplomacy['HUN|CHU'] = 50;
+    state.treaties = [{
+      treatyId: 'treaty-hun-chu-node-battle',
+      kind: 'alliance',
+      a: 'HUN',
+      b: 'CHU',
+      startTurn: 1,
+      endTurn: 8,
+      status: 'active',
+    }];
+
+    const adjacency = buildMapAdjacency(ctx);
+    const mapSeedById = new Map(ctx.seed.map_nodes.map((node) => [node.node_id, node]));
+    const targetEdge = Object.entries(adjacency)
+      .flatMap(([from, links]) => links.map((link) => ({ from, to: link.to })))
+      .find(({ to }) => mapSeedById.get(to)?.node_type !== '州府/主城');
+    expect(targetEdge).toBeDefined();
+    const { from: sourceNodeId, to: targetNodeId } = targetEdge!;
+    const sourceSeed = mapSeedById.get(sourceNodeId)!;
+    const targetSeed = mapSeedById.get(targetNodeId)!;
+    const sourceRegionId = ctx.territories.find((region) => region.region === sourceSeed.region)?.region_id;
+    const targetRegionId = ctx.territories.find((region) => region.region === targetSeed.region)?.region_id;
+    if (!sourceRegionId || !targetRegionId) throw new Error('测试战略节点缺少对应州府。');
+
+    for (const region of Object.values(state.regions)) region.faction = 'CHU';
+    for (const node of Object.values(state.mapNodes ?? {})) node.faction = 'CHU';
+    state.mapNodes![targetNodeId].faction = 'YONG';
+    state.mapNodes![targetNodeId].garrison = 0;
+    state.mapNodes![targetNodeId].fortification = 0;
+
+    const chuArmy = state.armies.find((army) => army.faction === 'CHU');
+    if (!chuArmy) throw new Error('测试缺少大楚军团。');
+    const safeNodeId = Object.keys(state.mapNodes ?? {}).find(
+      (nodeId) => nodeId !== sourceNodeId && nodeId !== targetNodeId,
+    );
+    if (!safeNodeId) throw new Error('测试地图缺少后方安置节点。');
+    const safeRegionId = state.mapNodes![safeNodeId].regionId;
+    state.armies = state.armies.map((army) => {
+      if (army.armyId === chuArmy.armyId) {
+        return {
+          ...army,
+          nodeId: sourceRegionId,
+          mapNodeId: sourceNodeId,
+          troops: 300_000,
+          levies: 300_000,
+          units: [],
+          status: 'idle',
+          stance: 'defend',
+          supply: 100,
+          fatigue: 0,
+          morale: 100,
+          training: 100,
+          path: [],
+          hopCosts: [],
+          mapPath: [],
+          mapHopCosts: [],
+          targetRegionId: null,
+          targetMapNodeId: null,
+          marchDaysTotal: 0,
+          marchDaysLeft: 0,
+          currentHopDaysTotal: 0,
+          mapCurrentHopDaysTotal: 0,
+        };
+      }
+      return {
+        ...army,
+        nodeId: safeRegionId,
+        mapNodeId: safeNodeId,
+        status: 'marching',
+        path: [],
+        hopCosts: [],
+        mapPath: [],
+        mapHopCosts: [],
+        targetRegionId: null,
+        targetMapNodeId: null,
+        marchDaysTotal: 0,
+        marchDaysLeft: 0,
+        currentHopDaysTotal: 0,
+        mapCurrentHopDaysTotal: 0,
+      };
+    });
+
+    const beforeOccupiedNodes = state.statistics.occupiedMapNodes ?? 0;
+    const result = runTurn(state, ctx);
+    const battle = result.report.events.find((event) =>
+      event.type === 'battle' && event.payload?.mapNodeId === targetNodeId,
+    );
+    const occupation = result.report.events.find((event) =>
+      event.type === 'occupation' && event.targetId === targetNodeId,
+    );
+
+    expect(battle).toBeDefined();
+    expect(battle?.after?.attackerWon).toBe(true);
+    expect(occupation).toBeDefined();
+    expect(result.state.mapNodes?.[targetNodeId]?.faction).toBe('CHU');
+    // 攻占附属据点不直接转移州府行政归属。
+    expect(result.state.regions[targetRegionId].faction).toBe('CHU');
+    expect(result.state.statistics.occupiedMapNodes).toBe(beforeOccupiedNodes + 1);
+  });
+
+});
+
 describe('NPC 外交自主决策', () => {
   it('同一状态重复生成外交意图完全一致，战事与国库压力会触发议和', () => {
     const state = newGame('HUN', 'ruler', 'npc-diplomacy-determinism');
@@ -859,7 +1047,6 @@ describe('回合结算', () => {
     expect((battleA!.after as any).attackerWon).toBe((battleB!.after as any).attackerWon);
     expect((battleA!.payload as any).seed).toBe((battleB!.payload as any).seed);
     expect((battleA!.after as any).totalLosses).toBe((battleB!.after as any).totalLosses);
-
     const outcome = (battleA!.after as any).attackerWon as boolean;
     const payload = battleA!.payload as any;
     const defeatedCommanderId = outcome ? payload.defenderCommander?.id : payload.attackerCommander?.id;
