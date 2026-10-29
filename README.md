@@ -44,7 +44,7 @@ npm start             # 用 API 托管已构建前端：http://localhost:8787
 
 ```bash
 npm run validate:seed   # 计数 / ID 唯一 / 引用 / 兵力 / 连通性 / 原型冲突报告
-npm test                # 引擎/回放/种子/API 集成共 49 个测试
+npm test                # 引擎/回放/种子/API 集成测试；测试总数以命令输出和 CI 为准
 npm run typecheck       # shared + api + web
 npm run build           # 前端生产构建
 npm run smoke           # 对运行中的 API 做端到端冒烟（需先启动 npm run dev:api）
