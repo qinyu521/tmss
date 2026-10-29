@@ -52,7 +52,8 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     const idleArmies = state.armies
       .filter((army) => army.faction === key && army.status === 'idle' && army.troops > 4_000 && army.supply > 35)
       .sort((a, b) => armyReadiness(b, ctx) - armyReadiness(a, ctx));
-    const attack = pickEnemyAttack(state, ctx, key, idleArmies);
+    const frontierGoalArmies = idleArmies.filter((army) => state.characters[army.commanderId]?.goal === 'press_frontier');
+    const attack = (frontierGoalArmies.length ? pickEnemyAttack(state, ctx, key, frontierGoalArmies) : null) ?? pickEnemyAttack(state, ctx, key, idleArmies);
     const commander = attack ? ctx.charactersById[attack.army.commanderId] : undefined;
     const command = commander?.command ?? 50;
     const strategy = commander?.strategy ?? 50;
@@ -61,6 +62,8 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     if (key === 'YONG' && state.flags.successionCrisis) attackChance -= 0.14;
     if (key === 'CHU' && state.flags.houseBoycott) attackChance -= 0.12;
     if (res.grain < grainDemandForTroops(troops, 1.5)) attackChance -= 0.12;
+    if (attack && state.characters[attack.army.commanderId]?.goal === 'press_frontier') attackChance += 0.18;
+    if (attack && state.characters[attack.army.commanderId]?.goal === 'restore_readiness') attackChance -= 0.22;
     attackChance = clamp(attackChance, 0.12, 0.92);
 
     if (attack && rng() < attackChance) {
@@ -73,7 +76,10 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     } else {
       const tired = state.armies
         .filter((army) => army.faction === key && army.status === 'idle')
-        .sort((a, b) => restPriority(a) - restPriority(b))[0];
+        .sort((a, b) =>
+          Number(state.characters[b.commanderId]?.goal === 'restore_readiness') - Number(state.characters[a.commanderId]?.goal === 'restore_readiness') ||
+          restPriority(a) - restPriority(b),
+        )[0];
       if (tired && (tired.supply < 75 || tired.fatigue > 30 || tired.morale < 45)) {
         orders.push({ orderId: oid(), kind: 'rest_army', armyId: tired.armyId });
       }
@@ -83,9 +89,10 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     if (key === 'HUN' && state.special.HUN.tribes) {
       const tribes = state.special.HUN.tribes;
       const dissatisfied = tribes.filter((tribe) => tribe.stance === 'refusing' || tribe.loyalty < 40);
-      const target = dissatisfied.sort(
-        (a, b) => Number(b.stance === 'refusing') - Number(a.stance === 'refusing') || a.loyalty - b.loyalty,
-      )[0] ?? [...tribes].sort((a, b) => a.loyalty - b.loyalty)[0];
+      const target = tribes.find((tribe) => state.characters[tribe.chiefId]?.goal === 'demand_patronage') ??
+        dissatisfied.sort(
+          (a, b) => Number(b.stance === 'refusing') - Number(a.stance === 'refusing') || a.loyalty - b.loyalty,
+        )[0] ?? [...tribes].sort((a, b) => a.loyalty - b.loyalty)[0];
       if ((state.special.HUN.cohesion ?? 55) < 60 && target && target.loyalty < 60 && res.cash > 20_000) {
         orders.push({ orderId: oid(), kind: 'appease_tribe', tribeId: target.tribeId, amount: 6_000 });
       }
@@ -96,7 +103,8 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
       const needsBalance =
         state.flags.successionCrisis ||
         (court.courtStability ?? 60) < 52 ||
-        (dominantPrince?.influence ?? 0) >= 76;
+        (dominantPrince?.influence ?? 0) >= 76 ||
+        Boolean(dominantPrince && state.characters[dominantPrince.personId]?.goal === 'consolidate_power');
       if (needsBalance && res.cash > Math.max(45_000, BALANCE.balancePrinces.cashCost * 2.5)) {
         orders.push({ orderId: oid(), kind: 'balance_princes', amount: 1 });
       }
@@ -104,9 +112,11 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     if (key === 'CHU' && state.special.CHU.houses) {
       const houses = state.special.CHU.houses;
       const lowest = [...houses].sort((a, b) => a.support - b.support)[0];
-      const needsNegotiation = state.flags.houseBoycott || (lowest?.support ?? 100) < 50;
-      if (lowest && needsNegotiation && res.cash > Math.max(35_000, BALANCE.negotiateHouse.cashCost * 2.5)) {
-        orders.push({ orderId: oid(), kind: 'negotiate_house', houseId: lowest.houseId, amount: 1 });
+      const goalHouse = houses.find((house) => state.characters[house.patriarchId]?.goal === 'protect_house');
+      const targetHouse = goalHouse ?? lowest;
+      const needsNegotiation = state.flags.houseBoycott || (targetHouse?.support ?? 100) < 50 || Boolean(goalHouse);
+      if (targetHouse && needsNegotiation && res.cash > Math.max(35_000, BALANCE.negotiateHouse.cashCost * 2.5)) {
+        orders.push({ orderId: oid(), kind: 'negotiate_house', houseId: targetHouse.houseId, amount: 1 });
       }
     }
   }
