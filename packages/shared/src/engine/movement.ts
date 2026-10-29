@@ -5,6 +5,16 @@ import { BALANCE } from '../balance.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
 import { isRiverRoute, type Season } from './season.js';
 
+export const ROUTE_WAYPOINT_PREFIX = 'ROUTE-WAYPOINT:';
+
+export function isRouteWaypointId(nodeId: string): boolean {
+  return nodeId.startsWith(ROUTE_WAYPOINT_PREFIX);
+}
+
+export function routeWaypointId(edgeId: string): string {
+  return `${ROUTE_WAYPOINT_PREFIX}${edgeId}`;
+}
+
 export interface AdjacentRegion {
   to: string;
   cost: number;
@@ -76,6 +86,8 @@ export function canTraverse(state: GameState, ctx: DerivedContext, faction: Fact
 export interface PathResult {
   ok: boolean;
   path: string[];
+  /** 与 path/costs 对齐的道路边 ID，可用于将长路段拆成可视化中途节点。 */
+  edgeIds: string[];
   costs: number[];
   /** 与 costs 对齐的边类型（用于季节/地形行军修正） */
   routeTypes: string[];
@@ -109,7 +121,7 @@ export function findPath(
   to: string,
   options: { troops?: number } = {},
 ): PathResult {
-  if (from === to) return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '部队已在该州府。' };
+  if (from === to) return { ok: false, path: [], edgeIds: [], costs: [], routeTypes: [], totalDays: 0, error: '部队已在该州府。' };
   if (!state.regions[from] || !state.regions[to]) {
     return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '州府不存在。' };
   }
@@ -126,7 +138,7 @@ export function findPath(
   }
   const adj = buildAdjacency(ctx);
   const dist: Record<string, number> = { [from]: 0 };
-  const prev: Record<string, { node: string; cost: number; routeType: string }> = {};
+  const prev: Record<string, { node: string; edgeId: string; cost: number; routeType: string }> = {};
   const visited = new Set<string>();
   const queue: string[] = [from];
   while (queue.length > 0) {
@@ -142,7 +154,7 @@ export function findPath(
       const candidate = dist[node] + effectiveCost;
       if (dist[link.to] === undefined || candidate < dist[link.to]) {
         dist[link.to] = candidate;
-        prev[link.to] = { node, cost: effectiveCost, routeType: link.routeType };
+        prev[link.to] = { node, edgeId: link.edgeId, cost: effectiveCost, routeType: link.routeType };
         queue.push(link.to);
       }
     }
@@ -151,16 +163,18 @@ export function findPath(
     return { ok: false, path: [], costs: [], routeTypes: [], totalDays: 0, error: '没有可用道路抵达目标（可能被中立州府阻隔）。' };
   }
   const path: string[] = [];
+  const edgeIds: string[] = [];
   const costs: number[] = [];
   const routeTypes: string[] = [];
   let cursor = to;
   while (cursor !== from) {
     path.unshift(cursor);
+    edgeIds.unshift(prev[cursor].edgeId);
     costs.unshift(prev[cursor].cost);
     routeTypes.unshift(prev[cursor].routeType);
     cursor = prev[cursor].node;
   }
-  return { ok: true, path, costs, routeTypes, totalDays: costs.reduce((s, c) => s + c, 0) };
+  return { ok: true, path, edgeIds, costs, routeTypes, totalDays: costs.reduce((s, c) => s + c, 0) };
 }
 
 /** 骑兵是否占全军半数以上（冬季涉渡封冻河面的前提） */
@@ -207,10 +221,45 @@ export function estimatePathDays(
     .reduce((sum, days) => sum + days, 0);
 }
 
+
+
+export interface ExpandedRoute {
+  path: string[];
+  dayCosts: number[];
+}
+
+/**
+ * 将较长道路拆成一个可视、可结算的中途行军节点。州府仍是行政控制单元；
+ * 中途节点仅表示军团在实际道路上的位置，不改变领土归属或战斗结算规则。
+ */
+export function expandLongRouteSegments(
+  path: Pick<PathResult, 'path' | 'edgeIds'>,
+  dayCosts: number[],
+): ExpandedRoute {
+  const expandedPath: string[] = [];
+  const expandedCosts: number[] = [];
+  for (let i = 0; i < path.path.length; i++) {
+    const destination = path.path[i];
+    const days = Math.max(1, dayCosts[i] ?? 1);
+    const edgeId = path.edgeIds[i];
+    if (days >= 8 && edgeId) {
+      const firstLeg = Math.ceil(days / 2);
+      const secondLeg = days - firstLeg;
+      expandedPath.push(routeWaypointId(edgeId), destination);
+      expandedCosts.push(firstLeg, Math.max(1, secondLeg));
+    } else {
+      expandedPath.push(destination);
+      expandedCosts.push(days);
+    }
+  }
+  return { path: expandedPath, dayCosts: expandedCosts };
+}
+
 export function assignMarch(army: Army, path: string[], dayCosts: number[], targetRegionId: string): void {
   army.path = path;
   army.hopCosts = dayCosts;
   army.targetRegionId = targetRegionId;
+  army.positionNodeId = army.nodeId;
   army.stance = 'march';
   army.status = 'marching';
   army.marchDaysTotal = dayCosts.reduce((s, d) => s + d, 0);
@@ -225,6 +274,7 @@ export function clearMarch(army: Army): void {
   army.marchDaysLeft = 0;
   army.marchDaysTotal = 0;
   army.currentHopDaysTotal = 0;
+  army.positionNodeId = army.nodeId;
   army.stance = 'defend';
   army.status = 'idle';
 }

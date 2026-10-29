@@ -460,7 +460,10 @@ export interface Army {
   commanderId: string;
   commanderName: string;
   districtId: string;
+  /** 控制/经济归属所在州府；军队位于道路中途时仍保留其行政归属。 */
   nodeId: string;
+  /** 当前物理位置节点，可为州府 ID 或 ROUTE-WAYPOINT:* 道路中途节点；旧存档缺省时回退 nodeId。 */
+  positionNodeId?: string;
   units: ArmyUnitStack[];
   levies: number;
   troops: number;
