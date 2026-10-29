@@ -254,7 +254,7 @@ function pickEnemyAttack(
 }
 
 function strategicNodePriorityBonus(nodeType: string): number {
-  if (/州府\\/主城/.test(nodeType)) return 0.08;
+  if (nodeType.includes('州府/主城')) return 0.08;
   if (/关隘|边塞/.test(nodeType)) return 0.07;
   if (/粮仓|粮库|驿站/.test(nodeType)) return 0.06;
   if (/港埠|渡口|水军/.test(nodeType)) return 0.045;
