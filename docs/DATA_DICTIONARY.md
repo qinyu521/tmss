@@ -76,7 +76,7 @@
 - `MapNodeState` 为每个存档单独保存控制方 `faction`、所属州府 `regionId`、节点驻军 `garrison`、城防 `fortification`、补给 `supplyLevel`、地形 `terrain` 与资源画像。占领附属节点不会自动改变 `RegionState.faction`。
 - `Army.mapNodeId/mapPath/mapHopCosts/mapCurrentHopDaysTotal/targetMapNodeId` 记录实际节点驻地、节点路线、每段剩余行军日和当前段完整时长；原有 `nodeId/path/hopCosts/currentHopDaysTotal` 保留为州府兼容路径。
 - `move_army.targetMapNodeId` 可选择附属据点；缺省时目标为州府/主城。节点控制和驻军是游戏存档状态，不写回权威种子 JSON。
-- schema v4 用 v3 → v4 迁移为旧档补齐节点状态和路线字段；已有节点控制方、驻军和行军进度优先保留。
+- schema v5 迁移链先用 v3 → v4 补齐节点状态与路线字段，再以 v4 → v5 为 `CharacterRuntime` 增加人物目标默认值；已有节点控制、驻军、行军进度、生死与成长记录均须保留。
 
 ### 4.4 数据缺失记录
 
@@ -94,4 +94,5 @@
 - `RegionState`：`garrisonCommanderId/garrisonCommanderName`（州兵统带）、`ambushBonus`（伏兵加成，战后清零）、`diversionBonus/diversionFor`（声东击西加成）。
 - `Army`：`isDetachment`（分遣队）、`isMilitia`（州兵临时编成）；新军队拥有独立统兵官，同一统兵官不能同时统领两军。
 - `Order`：`move_army.amount/units/commanderId`、`recruit.regionId/commanderId/formNewArmy`、`dispatch_garrison`、`scheme`（五类计谋与目标/施计者）。
-- 原有存档缺这些字段时按 0/空兼容，不强制迁移；新存档完整写入。
+- `CharacterRuntime`：除生死/成长/属性覆盖外，schema v5 增加 `goal`、`goalTargetId`、`goalSinceTurn`、`goalLastActionTurn` 与 `goalReason`。目标是存档内的规则状态，不写回种子；v4 → v5 只补默认 `idle`，不触发行动。
+- 原有存档缺这些字段时按 0/空兼容；人物目标采用 v4 → v5 幂等迁移，行动冷却与目标状态随存档保存。
