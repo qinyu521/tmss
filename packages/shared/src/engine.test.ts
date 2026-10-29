@@ -302,6 +302,12 @@ describe('正式朝议', () => {
     expect(event?.payload?.opponents).toBeInstanceOf(Array);
     expect(repeated?.payload).toEqual(event?.payload);
     expect(repeated?.after).toEqual(event?.after);
+    const passed = event?.after?.passed;
+    if (passed === true) {
+      expect(event?.after?.stability).toBe((event?.before?.stability as number) + 3);
+    } else {
+      expect(event?.after?.stability).toBe(event?.before?.stability);
+    }
   });
 
   it('朝议不接受不匹配的议题与裁决，并校验政策资源成本', () => {
