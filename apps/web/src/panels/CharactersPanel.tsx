@@ -1,8 +1,18 @@
 import { useEffect, useState } from 'react';
-import { FACTION_VISUALS, ROLE_LABEL } from '@tianming/shared';
+import { FACTION_VISUALS, ROLE_LABEL, type CharacterGoalType } from '@tianming/shared';
 import { api, type CharacterSummary } from '../api/client';
 import { useApp } from '../state/store';
 import { Empty, Modal, Portrait } from '../components/ui';
+
+const GOAL_LABELS: Record<CharacterGoalType, string> = {
+  idle: '暂无急务',
+  restore_readiness: '整军恢复战备',
+  press_frontier: '推进边境战事',
+  stabilize_region: '整饬地方秩序',
+  demand_patronage: '向王庭施压求援',
+  consolidate_power: '扩张个人政治影响',
+  protect_house: '维护家族利益',
+};
 
 export default function CharactersPanel() {
   const view = useApp((s) => s.view);
@@ -49,7 +59,7 @@ export default function CharactersPanel() {
 
   if (!view) return null;
   const c = detail?.character;
-  const runtime = detail?.runtime as { alive?: boolean; deathCause?: string; growthNote?: string } | null | undefined;
+  const runtime = detail?.runtime as { alive?: boolean; deathCause?: string; growthNote?: string; goal?: CharacterGoalType; goalTargetId?: string; goalSinceTurn?: number; goalReason?: string } | null | undefined;
 
   return (
     <Modal
@@ -93,6 +103,7 @@ export default function CharactersPanel() {
                   </div>
                   <div className="cc-pos">{it.current_position_standard}</div>
                   <div className="cc-meta">{it.identity_type} · {it.region} · 忠诚 {it.loyalty}</div>
+                  {it.goal && it.goal !== 'idle' && <div className="cc-meta" style={{ color: 'var(--gold)' }}>当前目标：{GOAL_LABELS[it.goal]}</div>}
                 </div>
               </button>
             ))}
@@ -127,6 +138,13 @@ export default function CharactersPanel() {
                 <div className="small muted">性别/年龄：{c.gender} · {c.age_band}</div>
                 <div className="small muted">原型：{c.historical_archetype}（{c.archetype_id}）</div>
                 {runtime?.growthNote && <div className="small" style={{ color: 'var(--gold)' }}>{runtime.growthNote}</div>}
+                {runtime?.goal && runtime.goal !== 'idle' && (
+                  <div className="card small" style={{ marginTop: 10, lineHeight: 1.6 }}>
+                    <div className="gold">当前目标：{GOAL_LABELS[runtime.goal]}</div>
+                    <div className="muted">{runtime.goalReason ?? '目标由当前职位与世界局势推导。'}</div>
+                    {runtime.goalSinceTurn !== undefined && <div className="muted">始于第 {runtime.goalSinceTurn} 回合</div>}
+                  </div>
+                )}
               </>
             )}
           </div>
