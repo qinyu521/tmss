@@ -4,7 +4,7 @@ import type { DerivedContext } from '../dataset.js';
 import { diplomacyKey, isAtWar } from '../dataset.js';
 import { hashString, mulberry32 } from '../dataset.js';
 import { BALANCE, grainDemandForTroops, perThousandDemand } from '../balance.js';
-import { buildAdjacency, estimatePathDays, findPath } from './movement.js';
+import { buildAdjacency, buildMapAdjacency, capitalMapNodeId, estimatePathDays, findMapPath, findPath } from './movement.js';
 import type { Army, RegionState } from '../types.js';
 import { factionTroops } from './economy.js';
 import { clamp } from './state.js';
@@ -70,13 +70,14 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
     attackChance = clamp(attackChance, 0.12, 0.92);
 
     // 防御盟约召援优先级高于普通进攻意愿：有可行目标便下达军令，而非只等待概率判定。
-    const mustAnswerAllianceWar = Boolean(attack && defensiveWarTargets.has(attack.region.faction));
+    const mustAnswerAllianceWar = Boolean(attack && defensiveWarTargets.has(attack.targetFaction));
     if (attack && (mustAnswerAllianceWar || rng() < attackChance)) {
       orders.push({
         orderId: oid(),
         kind: 'move_army',
         armyId: attack.army.armyId,
         targetRegionId: attack.region.regionId,
+        ...(attack.targetMapNodeId ? { targetMapNodeId: attack.targetMapNodeId } : {}),
       });
     } else {
       const tired = state.armies
@@ -214,6 +215,8 @@ function defensiveAllianceWarTargets(state: GameState, factionKey: FactionKey): 
 interface AttackCandidate {
   army: Army;
   region: RegionState;
+  targetFaction: FactionKey;
+  targetMapNodeId?: string;
   score: number;
 }
 
@@ -233,8 +236,8 @@ function restPriority(army: Army): number {
 }
 
 /**
- * 在“可走到的接壤目标”之间评估兵力比和行军成本，挑一个能打的军团-目标组合。
- * 极端不利（我军战备力量不足敌方守备的 58%）时不发起无意义的送死进攻。
+ * NPC 的目标选择以真实 72 节点战略地图为准；只有没有地图运行时状态的旧档才回退州府图。
+ * 这样 NPC 能争夺关隘、港埠、粮仓等独立据点，而不只是直接向整州主城进军。
  */
 function pickEnemyAttack(
   state: GameState,
@@ -244,6 +247,107 @@ function pickEnemyAttack(
   defensiveWarTargets: ReadonlySet<FactionKey> = new Set(),
 ): AttackCandidate | null {
   if (armies.length === 0) return null;
+  if (state.mapNodes && Object.keys(state.mapNodes).length > 0) {
+    return pickEnemyMapNodeAttack(state, ctx, factionKey, armies, defensiveWarTargets);
+  }
+  return pickEnemyRegionAttack(state, ctx, factionKey, armies, defensiveWarTargets);
+}
+
+function strategicNodePriorityBonus(nodeType: string): number {
+  if (nodeType.includes('州府/主城')) return 0.08;
+  if (/关隘|边塞/.test(nodeType)) return 0.07;
+  if (/粮仓|粮库|驿站/.test(nodeType)) return 0.06;
+  if (/港埠|渡口|水军/.test(nodeType)) return 0.045;
+  if (/矿场|盐场|马场|资源/.test(nodeType)) return 0.03;
+  return 0;
+}
+
+function pickEnemyMapNodeAttack(
+  state: GameState,
+  ctx: DerivedContext,
+  factionKey: FactionKey,
+  armies: Army[],
+  defensiveWarTargets: ReadonlySet<FactionKey>,
+): AttackCandidate | null {
+  const adjacency = buildMapAdjacency(ctx);
+  const ownNodeIds = Object.values(state.mapNodes ?? {})
+    .filter((node) => node.faction === factionKey)
+    .map((node) => node.nodeId);
+  const candidateIds = new Set<string>();
+
+  // 只把与己方控制节点相邻的敌方据点列为前线目标，避免 AI 无理由越过前线。
+  for (const ownNodeId of ownNodeIds) {
+    for (const link of adjacency[ownNodeId] ?? []) {
+      const target = state.mapNodes?.[link.to];
+      if (!target || target.faction === factionKey) continue;
+      if (!isAtWar(state.diplomacy, factionKey, target.faction)) continue;
+      candidateIds.add(target.nodeId);
+    }
+  }
+
+  const candidates: AttackCandidate[] = [];
+  for (const targetNodeId of candidateIds) {
+    const targetNode = state.mapNodes?.[targetNodeId];
+    const region = targetNode ? state.regions[targetNode.regionId] : undefined;
+    if (!targetNode || !region) continue;
+    const isCapital = targetNode.nodeType === '州府/主城';
+    const garrison = isCapital ? region.garrison : targetNode.garrison;
+    const fortification = isCapital ? region.fortification : targetNode.fortification;
+
+    const defenderArmies = state.armies
+      .filter((army) =>
+        army.faction === targetNode.faction &&
+        army.troops > 0 &&
+        (army.mapNodeId ? army.mapNodeId === targetNode.nodeId : army.nodeId === targetNode.regionId),
+      )
+      .reduce((sum, army) => sum + armyReadiness(army, ctx), 0);
+    const defenderPower = defenderArmies + garrison * 0.62 + fortification * 260;
+
+    for (const army of armies) {
+      const fromMapNodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
+      if (!fromMapNodeId) continue;
+      const path = findMapPath(state, ctx, factionKey, fromMapNodeId, targetNode.nodeId, { troops: army.troops });
+      const estimatedDays = estimatePathDays(army, path, seasonOf(state.date.month));
+      if (!path.ok || estimatedDays > BALANCE.turnDays * 2) continue;
+
+      const attackPower = armyReadiness(army, ctx);
+      if (attackPower < Math.max(1, defenderPower) * 0.58) continue;
+
+      const commander = ctx.charactersById[army.commanderId];
+      const commandAdvantage = ((commander?.command ?? 50) + (commander?.strategy ?? 50)) / 200;
+      const localUnrest = (100 - region.loyalty) / 100;
+      const defenseRatio = defenderPower / Math.max(1, attackPower);
+      const travelPenalty = (estimatedDays / BALANCE.turnDays) * 0.08;
+      const strategicValue = strategicNodePriorityBonus(targetNode.nodeType);
+      const score = defenseRatio + travelPenalty - localUnrest * 0.08 - commandAdvantage * 0.025 - strategicValue;
+      candidates.push({
+        army,
+        region,
+        targetFaction: targetNode.faction,
+        targetMapNodeId: targetNode.nodeId,
+        score,
+      });
+    }
+  }
+
+  candidates.sort(
+    (a, b) =>
+      Number(defensiveWarTargets.has(b.targetFaction)) - Number(defensiveWarTargets.has(a.targetFaction)) ||
+      a.score - b.score ||
+      b.army.troops - a.army.troops ||
+      (a.targetMapNodeId ?? a.region.regionId).localeCompare(b.targetMapNodeId ?? b.region.regionId),
+  );
+  return candidates[0] ?? null;
+}
+
+/** 旧存档兼容路径：没有 72 节点控制状态时以州府和原始道路寻路。 */
+function pickEnemyRegionAttack(
+  state: GameState,
+  ctx: DerivedContext,
+  factionKey: FactionKey,
+  armies: Army[],
+  defensiveWarTargets: ReadonlySet<FactionKey>,
+): AttackCandidate | null {
   const adjacency = buildAdjacency(ctx);
   const ownRegionIds = Object.values(state.regions)
     .filter((region) => region.faction === factionKey)
@@ -281,13 +385,13 @@ function pickEnemyAttack(
       const defenseRatio = defenderPower / Math.max(1, attackPower);
       const travelPenalty = (estimatedDays / BALANCE.turnDays) * 0.08;
       const score = defenseRatio + travelPenalty - localUnrest * 0.08 - commandAdvantage * 0.025;
-      candidates.push({ army, region, score });
+      candidates.push({ army, region, targetFaction: region.faction, score });
     }
   }
 
   candidates.sort(
     (a, b) =>
-      Number(defensiveWarTargets.has(b.region.faction)) - Number(defensiveWarTargets.has(a.region.faction)) ||
+      Number(defensiveWarTargets.has(b.targetFaction)) - Number(defensiveWarTargets.has(a.targetFaction)) ||
       a.score - b.score ||
       b.army.troops - a.army.troops ||
       a.region.regionId.localeCompare(b.region.regionId),
