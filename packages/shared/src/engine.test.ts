@@ -865,7 +865,7 @@ describe('回合结算', () => {
     const defeatedCommanderId = outcome ? payload.defenderCommander?.id : payload.attackerCommander?.id;
     expect(defeatedCommanderId).toBeTruthy();
     expect(a.state.characters[defeatedCommanderId].militaryLoyalty)
-      .toBeLessThan(base.characters[defeatedCommanderId].militaryLoyalty);
+      .toBeLessThan(base.characters[defeatedCommanderId].militaryLoyalty ?? 50);
     expect(a.report.events.some((event) =>
       event.type === 'politics' &&
       event.title.includes('战败失威') &&
