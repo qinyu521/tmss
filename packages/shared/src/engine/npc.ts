@@ -53,7 +53,7 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
 
     // 4) 军事行动：先评估敌方前线威胁，再决定反击、增援与休整；不让 AI 只会一味进攻。
     const idleArmies = state.armies
-      .filter((army) => army.faction === key && army.status === 'idle' && army.troops > 4_000 && army.supply > 35)
+      .filter((army) => army.faction === key && army.status === 'idle' && army.stance !== 'siege' && army.troops > 4_000 && army.supply > 35)
       .sort((a, b) => armyReadiness(b, ctx) - armyReadiness(a, ctx));
     const frontierGoalArmies = idleArmies.filter((army) => state.characters[army.commanderId]?.goal === 'press_frontier');
     const attack = (frontierGoalArmies.length ? pickEnemyAttack(state, ctx, key, frontierGoalArmies, defensiveWarTargets) : null) ?? pickEnemyAttack(state, ctx, key, idleArmies, defensiveWarTargets);
@@ -96,7 +96,7 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
       });
     } else if (!defense) {
       const tired = state.armies
-        .filter((army) => army.faction === key && army.status === 'idle')
+        .filter((army) => army.faction === key && army.status === 'idle' && army.stance !== 'siege')
         .sort((a, b) =>
           Number(state.characters[b.commanderId]?.goal === 'restore_readiness') - Number(state.characters[a.commanderId]?.goal === 'restore_readiness') ||
           restPriority(a) - restPriority(b),
