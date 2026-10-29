@@ -392,8 +392,84 @@ export function resolveCommanderDefectionThreats(
       },
       evidence: '同一倒戈条件需连续跨越预警回合；将领军团与其独占驻地同步改变势力，避免在原势力腹地生成无法交战的敌军团',
       source: 'engine',
+    events.push(emitEvent(state, {
+      type: 'politics',
+      title: `将领倒戈·${region.name}归附${state.factions[targetFaction].name}`,
+      summary: `${army.commanderName}在忠诚长期跌至 ${Math.round(loyalty)}、且与${state.factions[targetFaction].name}的${targetPersonName}有强关系后，越过朝廷预警期限，率 ${Math.round(army.troops).toLocaleString()} 人倒戈。军团与${region.name}州府一并归附；地方秩序 ${Math.round(before.regionOrder)}→${Math.round(region.order)}、民心 ${Math.round(before.regionLoyalty)}→${Math.round(region.loyalty)}，旧势力稳定 -5，新势力稳定 -2。`,
+      actorId: army.commanderId,
+      actorName: army.commanderName,
+      factionKey: oldFaction,
+      targetId: region.regionId,
+      targetLabel: region.name,
+      before,
+      after: {
+        armyFaction: targetFaction,
+        regionFaction: targetFaction,
+        troops: army.troops,
+        militaryLoyalty: runtime.militaryLoyalty ?? before.militaryLoyalty,
+        regionOrder: region.order,
+        regionLoyalty: region.loyalty,
+        oldFactionStability: state.factions[oldFaction].stability,
+        targetFactionStability: state.factions[targetFaction].stability,
+        defectionTargetPersonId: targetPersonId,
+      },
+      evidence: '同一倒戈条件需连续跨越预警回合；将领军团与其独占驻地同步改变势力，避免在原势力腹地生成无法交战的敌军团',
+      source: 'engine',
       visibleToPlayer: state.factionKey === oldFaction || state.factionKey === targetFaction,
     }));
+
+    // Explicitly recorded old subordinates may lose faith when their commander defects.
+    // Limit the ripple to three active commanders; they must still pass the normal warning window.
+    const subordinatePattern = /旧部|部属|主从|效忠|知遇|门生|追随|部下|恩主|副将|旧主/;
+    const hostilePattern = /竞争|制衡|敌对|不和|争夺|仇敌|追杀/;
+    const followerCandidates = new Map<string, { weight: number; army: Army }>();
+    for (const edge of ctx.seed.relationships) {
+      const followerId = edge.source_person_id === army.commanderId
+        ? edge.target_person_id
+        : edge.target_person_id === army.commanderId
+          ? edge.source_person_id
+          : '';
+      if (!followerId || followerId === army.commanderId || edge.strength !== '强') continue;
+      const follower = ctx.charactersById[followerId];
+      const followerRuntime = state.characters[followerId];
+      const relationText = `${edge.relation} ${edge.notes}`;
+      if (!follower || !followerRuntime || !isCharacterAlive(state, followerId)) continue;
+      if ((followerRuntime.allegianceFaction ?? follower.faction_key) !== oldFaction) continue;
+      if (!subordinatePattern.test(relationText) || hostilePattern.test(relationText)) continue;
+      const followerArmy = state.armies.find((item) => item.faction === oldFaction && item.commanderId === followerId);
+      if (!followerArmy) continue;
+      const weight = 3;
+      const previous = followerCandidates.get(followerId);
+      if (!previous || weight > previous.weight) followerCandidates.set(followerId, { weight, army: followerArmy });
+    }
+    const followers = [...followerCandidates.entries()]
+      .map(([personId, value]) => ({ personId, ...value }))
+      .sort((a, b) => b.weight - a.weight || a.personId.localeCompare(b.personId))
+      .slice(0, 3);
+    for (const follower of followers) {
+      const followerRuntime = state.characters[follower.personId];
+      const followerSeed = ctx.charactersById[follower.personId];
+      if (!followerRuntime || !followerSeed) continue;
+      const loyaltyBefore = followerRuntime.militaryLoyalty ?? followerSeed.loyalty ?? 50;
+      const loyaltyAfter = clamp(loyaltyBefore - 6);
+      followerRuntime.militaryLoyalty = loyaltyAfter;
+      state.characters[follower.personId] = followerRuntime;
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: `旧部动摇·${followerSeed.name}`,
+        summary: `${army.commanderName}倒戈后，其旧部${followerSeed.name}受到牵连，军令忠诚由 ${Math.round(loyaltyBefore)} 降至 ${Math.round(loyaltyAfter)}。若忠诚跌至 15 以下且其与新势力存在明确强关系，将依照正常规则先收到倒戈预警，不会立即叛离。`,
+        actorId: army.commanderId,
+        actorName: army.commanderName,
+        factionKey: oldFaction,
+        targetId: follower.army.armyId,
+        targetLabel: follower.army.name,
+        before: { militaryLoyalty: loyaltyBefore, armyFaction: follower.army.faction, defectorId: army.commanderId },
+        after: { militaryLoyalty: loyaltyAfter, commanderId: follower.personId, targetFaction, defectionWarningRequired: loyaltyAfter <= 15 },
+        evidence: '仅由强度为强且明确标记旧部/主从/效忠/知遇等关系的边触发；每次倒戈最多影响三名仍在本方统兵的旧部，后续倒戈必须再次满足独立条件并经历预警期',
+        source: 'engine',
+        visibleToPlayer: state.factionKey === oldFaction || state.factionKey === targetFaction,
+      }));
+    }
   }
 }
 
