@@ -1795,9 +1795,16 @@ describe('回合结算', () => {
     const defenderCommanderId = defenderBefore?.commanderId ?? base.regions['YONG-REG03'].garrisonCommanderId;
     const attackerLoyaltyBefore = base.characters[attackerCommanderId].militaryLoyalty ?? 50;
     const defenderLoyaltyBefore = base.characters[defenderCommanderId].militaryLoyalty ?? 50;
-    base.pendingOrders = [
-      { orderId: 'b1', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' },
-    ];
+    // 固定为本旬可抵达的在途部队，单独验证战斗确定性，不把路程长度耦合进战果断言。
+    attackerBefore.path = ['YONG-REG03'];
+    attackerBefore.hopCosts = [5];
+    attackerBefore.targetRegionId = 'YONG-REG03';
+    attackerBefore.stance = 'march';
+    attackerBefore.status = 'marching';
+    attackerBefore.marchDaysTotal = 5;
+    attackerBefore.marchDaysLeft = 5;
+    attackerBefore.currentHopDaysTotal = 5;
+    base.pendingOrders = [];
     const a = runTurn(clone(base), ctx);
     const b = runTurn(clone(base), ctx);
     const battleA = a.report.events.find((e) => e.type === 'battle');
@@ -1829,9 +1836,17 @@ describe('回合结算', () => {
 
   it('攻入敌方州府后，战斗结果与占领、行军状态更新保持一致', () => {
     const state = newGame('HUN', 'ruler', 'battle-transition');
-    state.pendingOrders = [
-      { orderId: 'b-transition', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' },
-    ];
+    const marchingArmy = state.armies.find((army) => army.armyId === 'HUN-ARMY-02')!;
+    // 战斗结算测试使用已在途且本旬能够抵达的部队；新命令的行军耗时另由路线测试覆盖。
+    marchingArmy.path = ['YONG-REG03'];
+    marchingArmy.hopCosts = [5];
+    marchingArmy.targetRegionId = 'YONG-REG03';
+    marchingArmy.stance = 'march';
+    marchingArmy.status = 'marching';
+    marchingArmy.marchDaysTotal = 5;
+    marchingArmy.marchDaysLeft = 5;
+    marchingArmy.currentHopDaysTotal = 5;
+    state.pendingOrders = [];
 
     const result = runTurn(state, ctx);
     const battle = result.report.events.find((event) => event.type === 'battle');
