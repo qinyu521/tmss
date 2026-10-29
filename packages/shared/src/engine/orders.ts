@@ -1,6 +1,8 @@
 import type {
   Army,
   CharacterSeed,
+  CourtResolution,
+  CourtTopic,
   GameEvent,
   GameState,
   IntelEntry,
@@ -162,6 +164,290 @@ function mulberry(seed: number): () => number {
   };
 }
 
+interface CourtVoteResult {
+  advisors: CharacterSeed[];
+  supporters: CharacterSeed[];
+  opponents: CharacterSeed[];
+  supportVotes: number;
+  opposeVotes: number;
+  roleBonus: number;
+  passed: boolean;
+}
+
+function courtTopicLabel(topic: CourtTopic): string {
+  return topic === 'military' ? '军务与战备' : topic === 'taxation' ? '赋役与民生' : '派系与朝局';
+}
+
+function courtResolutionLabel(resolution: CourtResolution): string {
+  const labels: Record<CourtResolution, string> = {
+    mobilize: '积极用兵',
+    consolidate: '整军休养',
+    raise: '加征军需税',
+    relieve: '蠲免赋役',
+    balance: '协调各派',
+    patronize: '扶持主导派系',
+  };
+  return labels[resolution];
+}
+
+/** 列席官员与投票完全由种子能力、在世状态和当前玩家身份确定，不使用随机数。 */
+function calculateCourtVote(
+  state: GameState,
+  ctx: DerivedContext,
+  topic: CourtTopic,
+  resolution: CourtResolution,
+  factionKey: FactionKey = state.factionKey,
+): CourtVoteResult {
+  const candidates = ctx.seed.characters
+    .filter((person) => person.faction_key === factionKey && person.person_id !== state.playerPersonId)
+    .filter((person) => isCharacterAlive(state, person.person_id))
+    .sort((a, b) => {
+      const score = (person: CharacterSeed) =>
+        topic === 'military'
+          ? person.command + person.strategy + person.governance * 0.25
+          : topic === 'taxation'
+            ? person.governance + person.commerce + person.loyalty * 0.2
+            : person.intrigue + person.governance + person.loyalty * 0.2;
+      return score(b) - score(a) || a.person_id.localeCompare(b.person_id);
+    });
+  const advisors = candidates.slice(0, 5);
+  const advancesPolicy = resolution === 'mobilize' || resolution === 'raise' || resolution === 'patronize';
+  const preference = (person: CharacterSeed) => {
+    const loyaltyAdjustment = (person.loyalty - 50) * 0.15;
+    if (topic === 'military') return person.command + person.strategy - person.governance - person.commerce + loyaltyAdjustment;
+    if (topic === 'taxation') return person.commerce - person.governance + loyaltyAdjustment;
+    return person.intrigue - person.governance + loyaltyAdjustment;
+  };
+  const supporters = advisors.filter((person) => (preference(person) >= 0) === advancesPolicy);
+  const opponents = advisors.filter((person) => !supporters.some((item) => item.person_id === person.person_id));
+  const roleBonus =
+    state.playerRole === 'ruler'
+      ? 1
+      : topic === 'military' && state.playerRole === 'general'
+        ? 2
+        : topic === 'taxation' && state.playerRole === 'governor'
+          ? 2
+          : topic === 'factions' && state.playerRole === 'strategist'
+            ? 2
+            : 0;
+  const supportVotes = supporters.length + roleBonus;
+  const opposeVotes = opponents.length;
+  return {
+    advisors,
+    supporters,
+    opponents,
+    supportVotes,
+    opposeVotes,
+    roleBonus,
+    passed: supportVotes > opposeVotes || (supportVotes === opposeVotes && state.playerRole === 'ruler'),
+  };
+}
+
+function updateTribeStance(loyalty: number): 'eager' | 'watchful' | 'reluctant' | 'refusing' {
+  return loyalty >= 65 ? 'eager' : loyalty >= 50 ? 'watchful' : loyalty >= 38 ? 'reluctant' : 'refusing';
+}
+
+function applyCourtDebate(
+  state: GameState,
+  order: Extract<Order, { kind: 'court_debate' }>,
+  ctx: DerivedContext,
+  events: GameEvent[],
+  source: GameEvent['source'],
+  factionKey: FactionKey,
+  actorId: string,
+  actorName: string,
+): void {
+  const faction = state.factions[factionKey];
+  const vote = calculateCourtVote(state, ctx, order.topic, order.resolution, factionKey);
+  const topicLabel = courtTopicLabel(order.topic);
+  const resolutionLabel = courtResolutionLabel(order.resolution);
+  const ownRegions = Object.values(state.regions).filter((region) => region.faction === factionKey);
+  const politicalMetric = () =>
+    factionKey === 'HUN'
+      ? Math.round(state.special.HUN.cohesion ?? 0)
+      : factionKey === 'YONG'
+        ? Math.round(state.special.YONG.courtStability ?? 0)
+        : Math.round(state.special.CHU.centralAuthority ?? 0);
+  const before = {
+    cash: Math.round(faction.resources.cash),
+    grain: Math.round(faction.resources.grain),
+    stability: Math.round(faction.stability),
+    politicalMetric: politicalMetric(),
+    averageOrder: Math.round(ownRegions.reduce((sum, region) => sum + region.order, 0) / Math.max(1, ownRegions.length)),
+    averageLoyalty: Math.round(ownRegions.reduce((sum, region) => sum + region.loyalty, 0) / Math.max(1, ownRegions.length)),
+  };
+  let effectSummary = '议案未获多数支持，暂不执行政策；朝议意见已归档。';
+
+  if (vote.passed) {
+    if (order.topic === 'military') {
+      if (order.resolution === 'mobilize') {
+        faction.resources.cash -= 12_000;
+        faction.resources.grain -= 15_000;
+        for (const army of state.armies.filter((item) => item.faction === factionKey)) {
+          army.morale = clamp(army.morale + 4);
+          army.training = clamp(army.training + 3);
+        }
+        faction.reputation = clamp(faction.reputation + 1);
+        faction.stability = clamp(faction.stability - 1);
+        effectSummary = '耗银 12,000、军粮 15,000；本方军团士气 +4、训练 +3，国库与军粮承担短期压力。';
+      } else {
+        faction.resources.cash -= 4_000;
+        for (const army of state.armies.filter((item) => item.faction === factionKey)) {
+          army.fatigue = clamp(army.fatigue - 8);
+          army.supply = clamp(army.supply + 5);
+          army.morale = clamp(army.morale + 1);
+        }
+        faction.reputation = clamp(faction.reputation + 1);
+        faction.stability = clamp(faction.stability + 1);
+        effectSummary = '耗银 4,000；本方军团疲劳 -8、补给 +5、士气 +1，转入休整。';
+      }
+    } else if (order.topic === 'taxation') {
+      if (order.resolution === 'raise') {
+        const targetRegions = [...ownRegions].sort((a, b) => b.taxOutput - a.taxOutput).slice(0, Math.min(3, ownRegions.length));
+        const gained = targetRegions.length * BALANCE.levyTax.cashPerRegion;
+        faction.resources.cash += gained;
+        for (const region of targetRegions) {
+          region.order = clamp(region.order - BALANCE.levyTax.orderCost / 2);
+          region.loyalty = clamp(region.loyalty - BALANCE.levyTax.supportCost / 2);
+        }
+        if (factionKey === 'CHU') {
+          for (const house of state.special.CHU.houses ?? []) house.support = clamp(house.support - 2);
+        }
+        if (factionKey === 'YONG') state.special.YONG.courtStability = clamp((state.special.YONG.courtStability ?? 60) - 1);
+        if (factionKey === 'HUN') {
+          const tribe = [...(state.special.HUN.tribes ?? [])].sort((a, b) => a.loyalty - b.loyalty)[0];
+          if (tribe) {
+            tribe.loyalty = clamp(tribe.loyalty - 1);
+            tribe.stance = updateTribeStance(tribe.loyalty);
+          }
+        }
+        faction.stability = clamp(faction.stability - 2);
+        effectSummary = `向 ${targetRegions.length} 个州府加征商税，入库 ${gained.toLocaleString()} 两；治安、民心下降，并加重派系/地方压力。`;
+      } else {
+        faction.resources.cash -= 15_000;
+        for (const region of ownRegions) {
+          region.order = clamp(region.order + 2);
+          region.loyalty = clamp(region.loyalty + 3);
+        }
+        if (factionKey === 'CHU') {
+          for (const house of state.special.CHU.houses ?? []) house.support = clamp(house.support + 1);
+        }
+        if (factionKey === 'YONG') state.special.YONG.courtStability = clamp((state.special.YONG.courtStability ?? 60) + 1);
+        if (factionKey === 'HUN') {
+          const tribe = [...(state.special.HUN.tribes ?? [])].sort((a, b) => a.loyalty - b.loyalty)[0];
+          if (tribe) {
+            tribe.loyalty = clamp(tribe.loyalty + 1);
+            tribe.stance = updateTribeStance(tribe.loyalty);
+          }
+        }
+        faction.reputation = clamp(faction.reputation + 1);
+        faction.stability = clamp(faction.stability + 2);
+        effectSummary = '耗银 15,000；本方州府治安 +2、民心 +3，世家/部落压力有所缓和。';
+      }
+    } else if (order.resolution === 'balance') {
+      faction.reputation = clamp(faction.reputation + 1);
+      faction.stability = clamp(faction.stability + 3);
+      if (factionKey === 'HUN') {
+        const tribe = [...(state.special.HUN.tribes ?? [])].sort((a, b) => a.loyalty - b.loyalty)[0];
+        if (tribe) {
+          tribe.loyalty = clamp(tribe.loyalty + 5);
+          tribe.stance = updateTribeStance(tribe.loyalty);
+        }
+        state.special.HUN.cohesion = clamp((state.special.HUN.cohesion ?? 55) + 3);
+        effectSummary = `协调诸部，${state.special.HUN.tribes?.length ? '最不满部落忠诚 +5，' : ''}联盟协调暂时改善。`;
+      } else if (factionKey === 'YONG') {
+        const yong = state.special.YONG;
+        yong.courtStability = clamp((yong.courtStability ?? 60) + 5);
+        const top = [...(yong.princes ?? [])].sort((a, b) => b.influence - a.influence)[0];
+        if (top) top.influence = clamp(top.influence - 3);
+        effectSummary = `朝局稳定 +5${top ? `，最具影响力的${top.name}影响力 -3` : ''}，缓和夺嫡风险。`;
+      } else {
+        const houses = [...(state.special.CHU.houses ?? [])].sort((a, b) => a.support - b.support).slice(0, 2);
+        for (const house of houses) {
+          house.support = clamp(house.support + 3);
+          house.taxCompliance = Math.round((0.6 + house.support / 250) * 100) / 100;
+        }
+        const all = state.special.CHU.houses ?? [];
+        state.special.CHU.centralAuthority = Math.round(all.reduce((sum, house) => sum + house.support, 0) / Math.max(1, all.length));
+        effectSummary = `缓和世家掣肘；支持度最低的 ${houses.length} 家各 +3。`;
+      }
+    } else {
+      faction.reputation = clamp(faction.reputation + 1);
+      faction.stability = clamp(faction.stability - 2);
+      if (factionKey === 'HUN') {
+        const tribes = [...(state.special.HUN.tribes ?? [])].sort((a, b) => b.loyalty - a.loyalty);
+        if (tribes[0]) {
+          tribes[0].loyalty = clamp(tribes[0].loyalty + 6);
+          tribes[0].stance = updateTribeStance(tribes[0].loyalty);
+        }
+        if (tribes.length > 1) {
+          tribes[tribes.length - 1].loyalty = clamp(tribes[tribes.length - 1].loyalty - 2);
+          tribes[tribes.length - 1].stance = updateTribeStance(tribes[tribes.length - 1].loyalty);
+        }
+        effectSummary = '优先奖赏最亲近王庭的部落（忠诚 +6），其他部落心生不满（最不满部落 -2）。';
+      } else if (factionKey === 'YONG') {
+        const yong = state.special.YONG;
+        const top = [...(yong.princes ?? [])].sort((a, b) => b.influence - a.influence)[0];
+        if (top) {
+          top.influence = clamp(top.influence + 6);
+          top.trust = clamp(top.trust + 3);
+        }
+        yong.courtStability = clamp((yong.courtStability ?? 60) - 3);
+        effectSummary = `偏袒主导皇子${top ? `${top.name}影响力 +6、信任 +3` : ''}，朝局稳定 -3。`;
+      } else {
+        const houses = [...(state.special.CHU.houses ?? [])].sort((a, b) => b.support - a.support);
+        if (houses[0]) houses[0].support = clamp(houses[0].support + 6);
+        for (const house of houses.slice(1)) house.support = clamp(house.support - 1);
+        for (const house of houses) house.taxCompliance = Math.round((0.6 + house.support / 250) * 100) / 100;
+        state.special.CHU.centralAuthority = Math.round(houses.reduce((sum, house) => sum + house.support, 0) / Math.max(1, houses.length));
+        effectSummary = '集中扶持支持度最高的世家（+6），其他世家各 -1，短期集中资源但扩大内部差距。';
+      }
+    }
+  }
+
+  const supporters = vote.supporters.map((person) => person.name);
+  const opponents = vote.opponents.map((person) => person.name);
+  const after = {
+    cash: Math.round(faction.resources.cash),
+    grain: Math.round(faction.resources.grain),
+    stability: Math.round(faction.stability),
+    politicalMetric: politicalMetric(),
+    averageOrder: Math.round(ownRegions.reduce((sum, region) => sum + region.order, 0) / Math.max(1, ownRegions.length)),
+    averageLoyalty: Math.round(ownRegions.reduce((sum, region) => sum + region.loyalty, 0) / Math.max(1, ownRegions.length)),
+    passed: vote.passed,
+    supportVotes: vote.supportVotes,
+    opposeVotes: vote.opposeVotes,
+  };
+  events.push(
+    emitEvent(state, {
+      type: 'politics',
+      title: `朝议·${topicLabel}议案${vote.passed ? '通过' : '驳回'}`,
+      summary: `${actorName}提出「${resolutionLabel}」。列席官员赞成 ${vote.supportVotes} 票、反对 ${vote.opposeVotes} 票；赞成：${supporters.join('、') || '无'}；反对：${opponents.join('、') || '无'}。\n${effectSummary}`,
+      actorId,
+      actorName,
+      factionKey,
+      targetId: order.topic,
+      targetLabel: topicLabel,
+      before,
+      after,
+      payload: {
+        topic: order.topic,
+        resolution: order.resolution,
+        passed: vote.passed,
+        supporters,
+        opponents,
+        supportVotes: vote.supportVotes,
+        opposeVotes: vote.opposeVotes,
+        roleBonus: vote.roleBonus,
+        effectSummary,
+      },
+      evidence: '确定性朝议投票：列席官员按能力画像形成立场，身份影响票数；未通过不执行政策。',
+      source,
+      visibleToPlayer: factionKey === state.factionKey,
+    }),
+  );
+}
+
 export function validateOrder(state: GameState, ctx: DerivedContext, order: Order): OrderValidation {
   const role = state.playerRole;
   if (!ROLE_ALLOWED[role].includes(order.kind)) {
@@ -244,7 +530,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         const cmd = commanderOf(ctx, order.commanderId);
         if (!cmd || cmd.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
         if (!isCharacterAlive(state, cmd.person_id)) return issues('COMMANDER_DEAD', '该将领已故，无法统兵。');
-        if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
+        if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本回合命令占用。');
         commanderNote = `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）`;
       }
       return {
@@ -276,7 +562,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         const cmd = commanderOf(ctx, order.commanderId);
         if (!cmd || cmd.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
         if (!isCharacterAlive(state, cmd.person_id)) return issues('COMMANDER_DEAD', '该将领已故，无法统兵。');
-        if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
+        if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本回合命令占用。');
       }
       const commander = order.commanderId
         ? commanderOf(ctx, order.commanderId)
@@ -355,6 +641,32 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         preview: `与 ${house.name} 协商，耗银 ${BALANCE.negotiateHouse.cashCost}，支持度 +${BALANCE.negotiateHouse.supportGain}。`,
       };
     }
+    case 'court_debate': {
+      const validPairs: Record<CourtTopic, CourtResolution[]> = {
+        military: ['mobilize', 'consolidate'],
+        taxation: ['raise', 'relieve'],
+        factions: ['balance', 'patronize'],
+      };
+      if (!validPairs[order.topic]?.includes(order.resolution)) {
+        return issues('BAD_DEBATE', '议题与裁决方向不匹配，请重新选择朝议方案。');
+      }
+      if (order.topic === 'military' && order.resolution === 'mobilize') {
+        if (faction.resources.cash < 12_000) return issues('NO_CASH', '积极用兵需预留军费 12,000 两。');
+        if (faction.resources.grain < 15_000) return issues('NO_GRAIN', '积极用兵需预留军粮 15,000 石。');
+      }
+      if (order.topic === 'military' && order.resolution === 'consolidate' && faction.resources.cash < 4_000) {
+        return issues('NO_CASH', '整军休养需军费 4,000 两。');
+      }
+      if (order.topic === 'taxation' && order.resolution === 'relieve' && faction.resources.cash < 15_000) {
+        return issues('NO_CASH', '蠲免赋役需预留 15,000 两，用于补偿地方与赈济。');
+      }
+      const vote = calculateCourtVote(state, ctx, order.topic, order.resolution);
+      return {
+        ok: true,
+        issues: [],
+        preview: `提交「${courtTopicLabel(order.topic)}·${courtResolutionLabel(order.resolution)}」；按当前列席官员预计赞成 ${vote.supportVotes}、反对 ${vote.opposeVotes}。议案可能被驳回，只有通过后政策才生效。`,
+      };
+    }
     case 'appoint': {
       if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '任命官职需君主权限。');
       const person = ctx.charactersById[order.personId];
@@ -408,7 +720,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         const cmd = commanderOf(ctx, commanderId);
         if (!cmd || cmd.faction_key !== state.factionKey) return issues('COMMANDER_INVALID', '统兵官必须属于本国。');
         if (!isCharacterAlive(state, cmd.person_id)) return issues('COMMANDER_DEAD', '该将领已故，无法统兵。');
-        if (commanderTaken(state, commanderId, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
+        if (commanderTaken(state, commanderId, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本回合命令占用。');
       } else {
         const local = region.garrisonCommanderId;
         commanderId = local && isCharacterAlive(state, local) && !commanderInUse(state, state.factionKey, local)
@@ -826,6 +1138,10 @@ export function applyOrder(
           visibleToPlayer: fk === 'CHU',
         }),
       );
+      return;
+    }
+    case 'court_debate': {
+      applyCourtDebate(state, order, ctx, events, source, fk, actorId, actorName);
       return;
     }
     case 'appoint': {
