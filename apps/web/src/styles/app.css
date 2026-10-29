@@ -1721,6 +1721,109 @@ h4 {
   border-radius: 8px;
 }
 
+
+/* ------------------------------ 三维战场回放 ------------------------------ */
+
+.battlefield-3d {
+  position: relative;
+  height: 270px;
+  margin: 2px 0 14px;
+  overflow: hidden;
+  border: 1px solid rgba(201, 162, 39, 0.32);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #18242b 0%, #4e5d58 55%, #1f261d 100%);
+  box-shadow: inset 0 0 36px rgba(0, 0, 0, 0.55);
+}
+.battlefield-3d canvas { display: block; width: 100%; height: 100%; }
+.battlefield-3d-caption {
+  position: absolute; left: 10px; top: 8px; z-index: 2;
+  padding: 3px 7px; border: 1px solid rgba(221, 194, 127, 0.22);
+  border-radius: 4px; color: rgba(235, 226, 202, 0.75);
+  background: rgba(8, 12, 13, 0.55); font-size: 10px; pointer-events: none;
+}
+
+/* WebGL 不可用时仍显示相同战斗阶段的二维阵列回放 */
+.battlefield-fallback {
+  --battle-ink: #e5d4ac;
+  position: relative; isolation: isolate; height: 230px; margin: 2px 0 14px;
+  overflow: hidden; border: 1px solid rgba(201, 162, 39, 0.32);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #18242b 0%, #4e5d58 54%, #3b4132 55%, #1f261d 100%);
+  box-shadow: inset 0 0 36px rgba(0, 0, 0, 0.55);
+}
+.fallback-sky { position: absolute; inset: 0 0 38%; z-index: -3; background: linear-gradient(180deg, rgba(7,14,22,.8),rgba(104,123,118,.08)); }
+.fallback-ridge {
+  position: absolute; left: -5%; top: 18%; width: 110%; height: 48%; z-index: -2;
+  clip-path: polygon(0 65%,9% 35%,17% 53%,29% 13%,38% 48%,49% 30%,62% 61%,74% 22%,85% 50%,93% 37%,100% 58%,100% 100%,0 100%);
+  background: rgba(34,48,44,.75);
+}
+.fallback-ground { position: absolute; inset: 58% 0 0; z-index: -1; background: linear-gradient(180deg,rgba(112,103,60,.3),rgba(18,23,18,.85)); border-top: 1px solid rgba(215,200,142,.15); }
+.fallback-center-mark {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%,-50%);
+  color: rgba(238,219,174,.26); font-size: 26px; text-shadow: 0 2px 10px #000;
+}
+.fallback-formation {
+  position: absolute; top: 24%; width: 43%;
+  transition: transform .75s cubic-bezier(.2,.75,.25,1), opacity .5s;
+  filter: drop-shadow(0 4px 3px rgba(0,0,0,.7));
+}
+.fallback-formation.attacker { left: 3%; }
+.fallback-formation.defender { right: 3%; transform: scaleX(-1); }
+.fallback-banner {
+  position: absolute; top: -12px; left: 18px; display: grid; place-items: center;
+  width: 22px; height: 28px; background: currentColor; color: #181713;
+  font-family: var(--font-display); font-size: 12px;
+  clip-path: polygon(0 0,100% 0,100% 78%,50% 100%,0 78%);
+  border-left: 2px solid rgba(230,220,185,.5);
+}
+.fallback-soldiers {
+  display: grid; grid-template-columns: repeat(6,minmax(8px,14px)); grid-auto-rows: 25px;
+  justify-content: center; column-gap: clamp(1px,.5vw,7px); padding: 0 8px;
+}
+.fallback-soldier { position: relative; display: block; width: 14px; height: 24px; transition: opacity .5s,transform .5s,filter .5s; }
+.fallback-soldier::before {
+  content: ''; position: absolute; z-index: 2; left: 4px; top: 2px; width: 7px; height: 6px;
+  border-radius: 45% 45% 30% 30%; background: #d1b48c; border-top: 2px solid currentColor;
+}
+.fallback-soldier i { position: absolute; top: 8px; left: 3px; width: 9px; height: 11px; border-radius: 3px 3px 1px 1px; background: currentColor; box-shadow: 0 3px 0 rgba(0,0,0,.45); }
+.fallback-soldier b { position: absolute; z-index: 3; top: -5px; left: 10px; width: 1px; height: 24px; background: #d1c9b4; transform: rotate(12deg); transform-origin: bottom; }
+.fallback-soldier.fallen { opacity: .13; filter: grayscale(1); transform: translateY(5px) rotate(35deg) scale(.72); }
+.fallback-label {
+  display: inline-block; margin: 3px 0 0 5px; padding: 2px 6px; border-radius: 3px;
+  background: rgba(8,9,7,.78); color: #e7dbc0; font-size: 10px; white-space: nowrap;
+  max-width: 90%; overflow: hidden; text-overflow: ellipsis;
+}
+.fallback-formation.defender .fallback-label { transform: scaleX(-1); }
+.fallback-phase {
+  position: absolute; left: 50%; bottom: 7px; transform: translateX(-50%);
+  z-index: 5; padding: 4px 12px; border: 1px solid rgba(221,194,127,.34);
+  border-radius: 20px; background: rgba(10,12,9,.78); color: #f0dca6;
+  font-family: var(--font-display); font-size: 12px; letter-spacing: .08em; white-space: nowrap;
+}
+.fallback-terrain { position: absolute; top: 8px; right: 10px; color: rgba(235,226,202,.75); font-size: 10px; text-shadow: 0 1px 4px #000; }
+.battlefield-fallback.terrain-forest { background: linear-gradient(180deg,#192a29 0%,#526a50 54%,#303d28 55%,#161f17 100%); }
+.battlefield-fallback.terrain-mountain { background: linear-gradient(180deg,#202a33 0%,#5a625f 54%,#343831 55%,#171a1a 100%); }
+.battlefield-fallback.terrain-hill { background: linear-gradient(180deg,#243039 0%,#77806a 54%,#4b5137 55%,#1c2219 100%); }
+.battlefield-fallback.terrain-river { background: linear-gradient(180deg,#1a2b37 0%,#4a747a 54%,#303f35 55%,#161d1a 100%); }
+.battlefield-fallback.phase-diversion .fallback-formation.attacker { transform: translateX(2%); }
+.battlefield-fallback.phase-engage .fallback-formation.attacker { transform: translateX(12%); }
+.battlefield-fallback.phase-engage .fallback-formation.defender { transform: scaleX(-1) translateX(12%); }
+.battlefield-fallback.phase-ambush .fallback-formation.attacker { transform: translate(-1%,4px) rotate(-1deg); }
+.battlefield-fallback.phase-ambush .fallback-formation.defender { transform: scaleX(-1) translateX(11%); }
+.battlefield-fallback.phase-maneuver .fallback-formation.attacker { transform: translate(13%,-5px); }
+.battlefield-fallback.phase-maneuver .fallback-formation.defender { transform: scaleX(-1) translateX(2%); }
+.battlefield-fallback.phase-grind .fallback-formation.attacker { transform: translateX(11%); }
+.battlefield-fallback.phase-grind .fallback-formation.defender { transform: scaleX(-1) translateX(11%); }
+.battlefield-fallback.phase-decisive .fallback-formation.attacker { transform: translateX(19%); }
+.battlefield-fallback.phase-decisive .fallback-formation.defender { transform: scaleX(-1) translateX(14%); }
+.battlefield-fallback.winner-attacker.phase-decisive .fallback-formation.attacker { transform: translateX(29%); }
+.battlefield-fallback.winner-attacker.phase-decisive .fallback-formation.defender { transform: scaleX(-1) translateX(24%); opacity: .75; }
+.battlefield-fallback.winner-defender.phase-decisive .fallback-formation.attacker { transform: translateX(9%); opacity: .7; }
+.battlefield-fallback.winner-defender.phase-decisive .fallback-formation.defender { transform: scaleX(-1) translateX(25%); }
+@media (prefers-reduced-motion: reduce) {
+  .fallback-formation, .fallback-soldier, .replay-bar > i { transition: none !important; }
+}
+
 /* ---------------------------------- 战报回放 ---------------------------------- */
 
 .replay-side {
