@@ -14,7 +14,7 @@ import { hashString, isAtWar } from '../dataset.js';
 import { BALANCE } from '../balance.js';
 import { FACTION_SHORT, makeDate, TURN_DAYS } from '../constants.js';
 import { emitEvent } from './events.js';
-import { applyOrder, validateOrder } from './orders.js';
+import { applyOrder, validateOrder, validateOrderForFaction } from './orders.js';
 import { generateNpcOrders } from './npc.js';
 import {
   clearMarch,
@@ -117,8 +117,13 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   const npcOrders = generateNpcOrders(state, ctx);
   const npcEventStart = events.length;
   for (const order of npcOrders) {
+    const factionKey = npcFactionOf(order);
+    if (!factionKey) continue;
     if (!npcAffordable(state, order)) continue;
-    applyOrder(state, ctx, order, events, 'npc_ai', npcFactionOf(order));
+    // NPC 同样必须通过权限/资源/路径校验，不能绕过玩家命令使用的规则。
+    const check = validateOrderForFaction(state, ctx, order, factionKey);
+    if (!check.ok) continue;
+    applyOrder(state, ctx, order, events, 'npc_ai', factionKey);
   }
   // NPC 的内部命令默认不可见；玩家只能通过斥候、烽燧与战报获知。
   for (let i = npcEventStart; i < events.length; i++) {

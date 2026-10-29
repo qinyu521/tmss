@@ -2,7 +2,37 @@ import type { CharacterSeed, ChronicleEntry, GameEvent, GameState, SeedRoster } 
 import { migrateState } from '@tianming/shared';
 import type { Db } from './db.js';
 
-export function saveGameState(db: Db, state: GameState): void {
+export class StaleGameStateError extends Error {
+  constructor(
+    readonly gameId: string,
+    readonly expectedTurn: number,
+    readonly actualTurn: number | null,
+  ) {
+    super(
+      `存档已被其他请求更新：期望回合 ${expectedTurn}，当前回合 ${actualTurn ?? '游戏不存在'}。请刷新后重试。`,
+    );
+    this.name = 'StaleGameStateError';
+  }
+}
+
+/**
+ * 保存游戏状态。传入 expectedTurn 时做乐观锁校验：
+ * 只有数据库中的回合与调用方读取时一致才写入，避免并发结算互相覆盖。
+ * 调用方应把“读取 → 结算 → 保存”包在 withTransaction 中。
+ */
+export function saveGameState(
+  db: Db,
+  state: GameState,
+  opts: { expectedTurn?: number } = {},
+): void {
+  if (opts.expectedTurn !== undefined) {
+    const row = db.prepare('SELECT turn FROM games WHERE game_id = ?').get(state.gameId) as
+      | { turn: number }
+      | undefined;
+    if (!row || row.turn !== opts.expectedTurn) {
+      throw new StaleGameStateError(state.gameId, opts.expectedTurn, row?.turn ?? null);
+    }
+  }
   db.prepare(
     `INSERT INTO games(game_id, schema_version, seed, faction_key, player_role, player_person_id, turn, date_label, state_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

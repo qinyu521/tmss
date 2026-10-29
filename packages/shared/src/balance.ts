@@ -92,6 +92,11 @@ export const BALANCE = {
     ironShortageEquipment: 0.8,
     horseShortageMobility: 0.85,
     supplyShortageBattlePenalty: 0.8,
+    /** 国库透支（欠饷）后的每回合惩罚 */
+    arrearsMorale: 3,
+    arrearsSupply: 2,
+    arrearsOrder: 2,
+    arrearsStability: 2,
     /** 每回合按辖区人口恢复兵员的比例；季节修正另行相乘。 */
     manpowerRegenPerPopulation: 0.0007,
     horsesPerCavalryRatio: { HUN: 0.52, YONG: 0.16, CHU: 0.11 } as Record<string, number>,
@@ -130,13 +135,13 @@ export const BALANCE = {
   /** 人物生命周期：衰老/死亡/继承/成长（engine/lifecycle.ts） */
   lifecycle: {
     /**
-     * 每回合基础死亡概率，按种子 age_band 词表映射。
-     * 种子词表仅四段（青年/壮年/中年/老成），「老成」为最高龄档，采用老年档 1.5%；
-     * 暮年 4% 保留给未来更高龄档扩展。
+     * 年死亡概率，按种子 age_band 词表映射；lifecycle 按「一年 = 365/7 回合」折算为每回合。
+     * 一回合只有 7 天，不能把年率直接当回合率使用。
+     * 暮年档 12% 保留给未来更高龄段扩展。
      */
-    mortalityPerTurn: { 青年: 0.001, 壮年: 0.002, 中年: 0.005, 老成: 0.015 } as Record<string, number>,
-    /** 词表外年龄段缺省概率 */
-    defaultMortality: 0.002,
+    mortalityAnnual: { 青年: 0.006, 壮年: 0.012, 中年: 0.03, 老成: 0.09 } as Record<string, number>,
+    /** 词表外年龄段缺省年概率 */
+    defaultMortalityAnnual: 0.012,
     /** 本回合参战部队主将的额外战死概率 */
     battleDeathBonus: 0.015,
     /** 主将阵亡后部队士气惩罚 */

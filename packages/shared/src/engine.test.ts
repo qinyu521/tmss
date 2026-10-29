@@ -21,6 +21,7 @@ import {
   resolveBattle,
   runTurn,
   validateOrder,
+  validateOrderForFaction,
   generateNpcOrders,
   type GameState,
   type Order,
@@ -1001,5 +1002,31 @@ describe('跨回合行军与当前路段进度', () => {
     expect(afterSecond.status).toBe('idle');
     expect(afterSecond.marchDaysLeft).toBe(0);
     expect(afterSecond.currentHopDaysTotal).toBe(0);
+  });
+});
+
+describe('NPC 命令校验', () => {
+  it('NPC 命令与玩家共用同一套目标/权限校验', () => {
+    const state = newGame('HUN', 'ruler', 'npc-validate');
+    const yongArmy = state.armies.find((a) => a.faction === 'YONG' && a.status === 'idle');
+    expect(yongArmy).toBeTruthy();
+    yongArmy!.supply = 60;
+    yongArmy!.fatigue = 30;
+
+    const bad = validateOrderForFaction(
+      state,
+      ctx,
+      { orderId: 'npc-bad', kind: 'move_army', armyId: 'missing-army', targetRegionId: 'YONG-REG01' },
+      'YONG',
+    );
+    expect(bad.ok).toBe(false);
+
+    const rest = validateOrderForFaction(
+      state,
+      ctx,
+      { orderId: 'npc-ok', kind: 'rest_army', armyId: yongArmy!.armyId },
+      'YONG',
+    );
+    expect(rest.ok).toBe(true);
   });
 });

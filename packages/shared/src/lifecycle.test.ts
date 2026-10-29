@@ -9,6 +9,7 @@ import {
   createGame,
   isCharacterAlive,
   migrateState,
+  mortalityChancePerTurn,
   runTurn,
   type GameEvent,
   type GameState,
@@ -169,6 +170,15 @@ describe('生命周期', () => {
         expect(v).toBeLessThanOrEqual(95);
       }
     }
+  });
+
+  it('死亡率按年折算到 7 天回合，老成档单回合低于 0.2%', () => {
+    const elder = mortalityChancePerTurn('老成');
+    expect(elder).toBeGreaterThan(0.0015);
+    expect(elder).toBeLessThan(0.002);
+    expect(mortalityChancePerTurn('青年')).toBeLessThan(0.0002);
+    // 52 个回合约等于一年，累计应回到 9% 年率附近。
+    expect(1 - Math.pow(1 - elder, 365 / 7)).toBeCloseTo(0.09, 2);
   });
 });
 

@@ -166,6 +166,19 @@ function applyShortageEffects(state: GameState, key: FactionKey, resource: 'grai
   }
 }
 
+function applyArrearsEffects(state: GameState, key: FactionKey): void {
+  for (const army of state.armies.filter((a) => a.faction === key)) {
+    army.morale = clamp(army.morale - BALANCE.economy.arrearsMorale);
+    army.supply = clamp(army.supply - BALANCE.economy.arrearsSupply);
+  }
+  for (const region of Object.values(state.regions).filter((r) => r.faction === key)) {
+    region.order = clamp(region.order - BALANCE.economy.arrearsOrder);
+  }
+  state.factions[key].stability = clamp(
+    state.factions[key].stability - BALANCE.economy.arrearsStability,
+  );
+}
+
 export function runEconomy(state: GameState, ctx: DerivedContext, events: GameEvent[]): Record<FactionKey, FactionEconomyTotals> {
   const totals = computeEconomy(state, ctx);
   for (const key of FACTION_KEYS) {
@@ -178,6 +191,13 @@ export function runEconomy(state: GameState, ctx: DerivedContext, events: GameEv
     res.iron += t.net.iron;
     res.horses += t.net.horses;
     res.cash += t.net.cash;
+    // 国库不允许无限透支：欠饷立即扣士气/治安，并把现银夹到 0。
+    const hadArrears = f.statusTags.includes('欠饷');
+    const arrears = res.cash < 0;
+    if (arrears) {
+      res.cash = 0;
+      applyArrearsEffects(state, key);
+    }
     const shortages: string[] = [];
     for (const resource of ['grain', 'salt', 'iron', 'horses'] as const) {
       if (res[resource] < 0) {
@@ -210,8 +230,26 @@ export function runEconomy(state: GameState, ctx: DerivedContext, events: GameEv
     f.stability = clamp(f.stability);
     f.reputation = clamp(f.reputation - BALANCE.drift.reputationDecay);
     f.statusTags = Array.from(new Set([...shortageTags(state, key), ...politicalTags(state, key)]));
+    if (arrears) f.statusTags = Array.from(new Set([...f.statusTags, '欠饷']));
 
     if (key === state.factionKey) {
+      if (arrears && !hadArrears) {
+        events.push(
+          emitEvent(state, {
+            type: 'resource',
+            title: `${FACTION_SHORT[key]}·国库透支`,
+            summary: '现银不足以支付本回合军饷，已压欠；全军士气、州府治安与朝局稳定受损。',
+            actorId: 'system',
+            actorName: '度支官',
+            factionKey: key,
+            targetLabel: '国库',
+            before: { cash: before.cash },
+            after: { cash: 0, arrears: true },
+            evidence: '欠饷惩罚见 balance.economy.arrears*；现金夹到 0，避免无限负库存',
+            source: 'engine',
+          }),
+        );
+      }
       events.push(
         emitEvent(state, {
           type: 'resource',

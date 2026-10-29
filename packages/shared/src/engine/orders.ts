@@ -780,6 +780,30 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
   }
 }
 
+/**
+ * NPC 势力没有玩家身份，但不能因此绕过权限、资源与路径校验。
+ * 以该势力君主视角复用同一套 validateOrder，并清空玩家提交队列（NPC 命令即时结算）。
+ */
+export function validateOrderForFaction(
+  state: GameState,
+  ctx: DerivedContext,
+  order: Order,
+  factionKey: FactionKey,
+): OrderValidation {
+  const ruler = ctx.seed.characters.find(
+    (char) => char.faction_key === factionKey && char.identity_type === '君主',
+  );
+  const projected: GameState = {
+    ...state,
+    factionKey,
+    playerRole: 'ruler',
+    playerPersonId: ruler?.person_id ?? state.playerPersonId,
+    playerPersonName: ruler?.name ?? state.playerPersonName,
+    pendingOrders: [],
+  };
+  return validateOrder(projected, ctx, order);
+}
+
 export function applyOrder(
   state: GameState,
   ctx: DerivedContext,
@@ -1150,10 +1174,6 @@ export function applyOrder(
     }
     case 'court_debate': {
       applyCourtDebate(state, order, ctx, events, source, fk, actorId, actorName);
-      return;
-    }
-    case 'diplomatic_action': {
-      applyDiplomaticAction(state, order, events, source, fk, actorId, actorName);
       return;
     }
     case 'diplomatic_action': {

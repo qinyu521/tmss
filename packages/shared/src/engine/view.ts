@@ -190,8 +190,9 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
       x: region.x,
       y: region.y,
       terrain: region.terrain,
-      fortification: region.fortification,
-      threat: region.threat,
+      // 敌方城防与威胁只给十位档位；精确值须经斥候/情报获得。
+      fortification: owned ? region.fortification : Math.round(region.fortification / 10) * 10,
+      threat: owned ? region.threat : Math.round(region.threat / 10) * 10,
       owned,
     };
     if (owned) {

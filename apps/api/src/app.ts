@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import apiPkg from '../package.json';
 import {
   BALANCE,
   FACTION_KEYS,
@@ -31,7 +32,7 @@ import {
   type PlayerRole,
   type SeedRoster,
 } from '@tianming/shared';
-import { openDatabase, resolveDbPath, ROOT, backupDatabase, type Db } from './db.js';
+import { openDatabase, resolveDbPath, ROOT, backupDatabase, withTransaction, type Db } from './db.js';
 import { loadSeed, referenceCounts, syncReferenceData } from './seed.js';
 import {
   createSave,
@@ -49,6 +50,7 @@ import {
   pruneAfterTurn,
   referenceSummary,
   saveGameState,
+  StaleGameStateError,
   updateChroniclePolish,
 } from './gameRepo.js';
 import { loadLlmConfig, polishChronicle, type LlmFetcher } from './llm.js';
@@ -149,7 +151,17 @@ const createGameSchema = z.object({
   seed: z.number().int().optional(),
 });
 
-const ordersBodySchema = z.object({ orders: z.array(orderSchema).min(1).max(6) });
+const ordersBodySchema = z
+  .object({ orders: z.array(orderSchema).min(1).max(6) })
+  .superRefine((value, ctx) => {
+    const seen = new Set<string>();
+    for (const order of value.orders) {
+      if (seen.has(order.orderId)) {
+        ctx.addIssue({ code: 'custom', message: `orderId 不能重复：${order.orderId}` });
+      }
+      seen.add(order.orderId);
+    }
+  });
 const saveBodySchema = z.object({ label: z.string().min(1).max(60).optional() });
 const chronicleLlmSchema = z.object({ turn: z.number().int().min(0).max(100_000) });
 
@@ -220,7 +232,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
 
   app.get('/api/health', async () => ({
     ok: true,
-    version: '0.6.0',
+    version: apiPkg.version,
     schemaVersion: SCHEMA_VERSION,
     mode: 'single-player',
     db: path.basename(dbPath),
@@ -322,18 +334,19 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
         const item = summariseCharacter(JSON.parse(r.payload));
         const rt = runtimeMap?.[item.person_id];
         if (!rt) return item;
-        const publicRuntime = { ...item, alive: rt.alive, deathCause: rt.deathCause };
-        // 角色目标属于本势力内部动向；角色档案中的敌方目标不得通过 gameId 列表泄露。
+        // 生死讣闻与人物目标同属本势力内部信息；敌方生死不得通过 gameId 泄露。
         if (runtimeState && item.faction_key === runtimeState.factionKey) {
           return {
-            ...publicRuntime,
+            ...item,
+            alive: rt.alive,
+            deathCause: rt.deathCause,
             goal: rt.goal ?? 'idle',
             goalTargetId: rt.goalTargetId,
             goalSinceTurn: rt.goalSinceTurn,
             goalReason: rt.goalReason,
           };
         }
-        return publicRuntime;
+        return item;
       }),
     };
   });
@@ -372,12 +385,21 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     const rawRuntime = runtimeState?.characters?.[id] ?? null;
     let runtime = rawRuntime;
     if (rawRuntime && runtimeState && character.faction_key !== runtimeState.factionKey) {
-      runtime = { ...rawRuntime };
-      delete runtime.goal;
-      delete runtime.goalTargetId;
-      delete runtime.goalSinceTurn;
-      delete runtime.goalLastActionTurn;
-      delete runtime.goalReason;
+      // 敌方人物的目标、生死与死因均属战争迷雾内的信息。
+      const sanitized = { ...rawRuntime } as Record<string, unknown>;
+      for (const key of [
+        'goal',
+        'goalTargetId',
+        'goalSinceTurn',
+        'goalLastActionTurn',
+        'goalReason',
+        'alive',
+        'deathTurn',
+        'deathCause',
+      ]) {
+        delete sanitized[key];
+      }
+      runtime = sanitized as unknown as typeof runtime;
     }
     return {
       character,
@@ -497,10 +519,19 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     if (working.length >= 6) {
       return reply.code(400).send({ error: 'TOO_MANY_ORDERS', message: '一回合最多提交 6 条命令。' });
     }
+    const existingIds = new Set(working.map((o) => o.orderId));
     const accepted: { order: Order; preview?: string }[] = [];
     const rejected: { orderId: string; issues: any[] }[] = [];
     for (const raw of parsed.data.orders) {
       const order = raw as Order;
+      // orderId 必须唯一：复用旧 ID 会让 countPending 把它当成同一条命令，绕过每类配额。
+      if (existingIds.has(order.orderId)) {
+        rejected.push({
+          orderId: order.orderId,
+          issues: [{ code: 'DUPLICATE_ORDER_ID', message: 'orderId 已存在，请为新命令生成唯一 ID。' }],
+        });
+        continue;
+      }
       const candidateState: GameState = { ...state, pendingOrders: working };
       const check = validateOrder(candidateState, ctx, order);
       if (check.ok) {
@@ -509,13 +540,14 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
           continue;
         }
         working.push(order);
+        existingIds.add(order.orderId);
         accepted.push({ order, preview: check.preview });
       } else {
         rejected.push({ orderId: order.orderId, issues: check.issues });
       }
     }
     state.pendingOrders = working;
-    saveGameState(db, state);
+    withTransaction(db, () => saveGameState(db, state, { expectedTurn: state.date.turn }));
     return { accepted, rejected, view: buildPlayerView(state, ctx) };
   });
 
@@ -524,18 +556,22 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     const orderId = String((req.params as any).orderId);
     state.pendingOrders = state.pendingOrders.filter((o) => o.orderId !== orderId);
-    saveGameState(db, state);
+    withTransaction(db, () => saveGameState(db, state, { expectedTurn: state.date.turn }));
     return { ok: true, view: buildPlayerView(state, ctx) };
   });
 
   app.post('/api/games/:id/turn', async (req, reply) => {
     const state = getGameState(db, String((req.params as any).id), seed.characters, seed);
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
-    const result = runTurn(state, ctx);
-    saveGameState(db, result.state);
-    insertEvents(db, result.report.events);
-    insertChronicle(db, result.report.chronicle);
-    createSave(db, result.state, `${result.state.date.label} 自动存档`, true);
+    // 结算、事件、史官、自动存档必须同进同退；中途失败回滚，避免脏档。
+    const result = withTransaction(db, () => {
+      const result = runTurn(state, ctx);
+      saveGameState(db, result.state, { expectedTurn: state.date.turn });
+      insertEvents(db, result.report.events);
+      insertChronicle(db, result.report.chronicle);
+      createSave(db, result.state, `${result.state.date.label} 自动存档`, true);
+      return result;
+    });
     return {
       view: buildPlayerView(result.state, ctx),
       report: {
@@ -562,10 +598,15 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   // 战报回放：交战双方数据属战报公开内容，直接返回确定性展开的分阶段脚本
   app.get('/api/games/:id/battles/:eventId/replay', async (req, reply) => {
     const gameId = String((req.params as any).id);
-    if (!getGameState(db, gameId, seed.characters, seed)) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
+    const state = getGameState(db, gameId, seed.characters, seed);
+    if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     const eventId = String((req.params as any).eventId);
     const event = getEvent(db, gameId, eventId);
     if (!event) return reply.code(404).send({ error: 'NOT_FOUND', message: '事件不存在。' });
+    // 存档中的隐藏战报（NPC 间交战）不能靠猜 eventId 绕过战争迷雾。
+    if (!event.visibleToPlayer && event.factionKey !== state.factionKey) {
+      return reply.code(404).send({ error: 'NOT_FOUND', message: '事件不存在。' });
+    }
     if (event.type !== 'battle') {
       return reply.code(400).send({ error: 'NOT_BATTLE', message: '该事件不是战斗，无法生成战报回放。' });
     }
@@ -625,8 +666,11 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     const save = getSave(db, gameId, saveId);
     if (!save) return reply.code(404).send({ error: 'NOT_FOUND', message: '存档不存在。' });
     const state = migrateState(save.state as GameState, seed.characters, seed);
-    saveGameState(db, state);
-    pruneAfterTurn(db, gameId, state.date.turn);
+    // 读档与裁剪存档点之后的事件必须原子完成，避免把旧档写回后事件残留。
+    withTransaction(db, () => {
+      saveGameState(db, state);
+      pruneAfterTurn(db, gameId, state.date.turn);
+    });
     return {
       view: buildPlayerView(state, ctx),
       events: listEvents(db, gameId, { limit: 200 }),
@@ -643,15 +687,26 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     return { ok: true, file };
   });
 
-  app.get('/api/admin/npc-intent', async () => {
-    const games = listGames(db).slice(0, 5);
-    const state = games[0] ? getGameState(db, games[0].game_id, seed.characters, seed) : null;
-    if (!state) return { items: [] };
+  app.get('/api/admin/npc-intent', async (req, reply) => {
+    // 该接口会泄露敌方本回合意图，默认关闭；仅在受保护网络中显式开启。
+    if (process.env.ALLOW_ADMIN_ENDPOINT !== '1') {
+      return reply.code(403).send({
+        error: 'DISABLED',
+        message: '管理接口默认关闭；设置 ALLOW_ADMIN_ENDPOINT=1 并在受保护网络中访问。',
+      });
+    }
+    const q = req.query as Record<string, string | undefined>;
+    const gameId = q.gameId ?? listGames(db)[0]?.game_id;
+    const state = gameId ? getGameState(db, gameId, seed.characters, seed) : null;
+    if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
     return { items: generateNpcOrders(state, ctx).map((o) => ({ kind: o.kind, orderId: o.orderId })) };
   });
 
   // 统一错误处理：不泄露内部堆栈
   app.setErrorHandler((error, _req, reply) => {
+    if (error instanceof StaleGameStateError) {
+      return reply.code(409).send({ error: 'STALE_STATE', message: error.message });
+    }
     app.log.error({ err: error }, 'api error');
     if (process.env.DEBUG_API === '1') console.error(error);
     reply.code(500).send({ error: 'INTERNAL', message: '服务器结算异常，已记录日志。' });

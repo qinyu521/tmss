@@ -37,15 +37,49 @@ export function openDatabase(dbPath = resolveDbPath()): Db {
 }
 
 export function migrate(db: Db): void {
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS schema_migrations(name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)',
+  );
+  const applied = new Set(
+    (db.prepare('SELECT name FROM schema_migrations').all() as { name: string }[]).map((row) => row.name),
+  );
   const files = fs
     .readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
     .sort();
   for (const file of files) {
+    if (applied.has(file)) continue;
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
-    db.exec(sql);
+    withTransaction(db, () => {
+      db.exec(sql);
+      db.prepare('INSERT INTO schema_migrations(name, applied_at) VALUES (?, ?)').run(
+        file,
+        new Date().toISOString(),
+      );
+    });
   }
-  db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)').run('schema_version', '1');
+  // 兼容旧库：记录已应用迁移数量，代替原先写死的 '1'。
+  db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)').run(
+    'schema_version',
+    String(files.length),
+  );
+}
+
+/** 同步事务包装：node:sqlite 无 Promise API，结算与存档必须同进同退。 */
+export function withTransaction<T>(db: Db, fn: () => T): T {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // 事务可能已被 SQLite 自动回滚。
+    }
+    throw error;
+  }
 }
 
 export function backupDatabase(db: Db, dbPath: string): string {

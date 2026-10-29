@@ -2,7 +2,7 @@ import type { CharacterSeed, GameEvent, GameState } from '../types.js';
 import type { DerivedContext } from '../dataset.js';
 import { hashString, mulberry32 } from '../dataset.js';
 import { BALANCE } from '../balance.js';
-import { FACTION_SHORT } from '../constants.js';
+import { FACTION_SHORT, TURN_DAYS } from '../constants.js';
 import { emitEvent } from './events.js';
 import { clamp, isCharacterAlive } from './state.js';
 
@@ -12,6 +12,14 @@ import { clamp, isCharacterAlive } from './state.js';
  * - 死亡只由本模块产生，每次死亡生成唯一 succession 事件（含前后状态与证据）；
  * - 继承在本模块内立即完成：州府主官/部队主将/部落首领/世家家主/皇子/玩家人物。
  */
+/** 把年死亡概率折算成每回合概率；一回合 = TURN_DAYS 天。 */
+export function mortalityChancePerTurn(band: string): number {
+  const annual =
+    BALANCE.lifecycle.mortalityAnnual[band] ?? BALANCE.lifecycle.defaultMortalityAnnual;
+  const turnsPerYear = 365 / TURN_DAYS;
+  return 1 - Math.pow(1 - annual, 1 / turnsPerYear);
+}
+
 export function runLifecycle(state: GameState, ctx: DerivedContext, events: GameEvent[]): void {
   const turn = state.date.turn;
   const rng = mulberry32(hashString(`${state.seed}-life-${turn}`));
@@ -25,7 +33,7 @@ export function runLifecycle(state: GameState, ctx: DerivedContext, events: Game
     const rt = state.characters[char.person_id];
     if (rt && !rt.alive) continue;
     const band = rt?.ageBand ?? char.age_band;
-    let p = L.mortalityPerTurn[band] ?? L.defaultMortality;
+    let p = mortalityChancePerTurn(band);
     const inBattle = battledCommanders.has(char.person_id);
     if (inBattle) p += L.battleDeathBonus;
     if (rng() >= p) continue;

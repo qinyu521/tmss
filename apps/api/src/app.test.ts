@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import apiPkg from '../package.json';
 import { buildApp, type BuiltApp } from './app.js';
+import { getGameState, insertEvents, saveGameState, StaleGameStateError } from './gameRepo.js';
 import type { LlmFetcher } from './llm.js';
 
 let built: BuiltApp;
@@ -34,6 +36,7 @@ describe('API 集成', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.ok).toBe(true);
+    expect(body.version).toBe(apiPkg.version);
     expect(body.seedCounts.characters).toBe(336);
     expect(body.seedCounts.map_nodes).toBe(72);
     expect(body.seedCounts.military_units).toBe(22);
@@ -414,6 +417,144 @@ describe('API 集成', () => {
     expect(body.balance.turnDays).toBe(7);
     expect(body.roles).toHaveLength(4);
     expect(Object.keys(body.unitProfiles)).toHaveLength(22);
+  });
+
+  it('拒绝复用 orderId，避免绕过每类命令配额', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'YONG', playerRole: 'ruler', seed: 8181 },
+    });
+    const gid = created.json().gameId as string;
+    const debate = { orderId: 'dup-debate', kind: 'court_debate', topic: 'factions', resolution: 'balance' };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: { orders: [debate] },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().accepted).toHaveLength(1);
+
+    const reused = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: { orders: [debate] },
+    });
+    expect(reused.statusCode).toBe(200);
+    expect(reused.json().rejected[0].issues[0].code).toBe('DUPLICATE_ORDER_ID');
+    expect(reused.json().view.pendingOrders).toHaveLength(1);
+
+    const withinPayload = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: { orders: [debate, debate] },
+    });
+    expect(withinPayload.statusCode).toBe(400);
+  });
+
+  it('隐藏战报不能通过猜 eventId 回放', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'HUN', playerRole: 'ruler', seed: 9191 },
+    });
+    const gid = created.json().gameId as string;
+    insertEvents(built.db, [
+      {
+        eventId: `hidden-battle-${gid}`,
+        gameId: gid,
+        turn: 1,
+        dateLabel: 'test',
+        type: 'battle',
+        factionKey: 'YONG',
+        actorName: '甲',
+        targetLabel: '乙',
+        title: 'NPC 间战斗',
+        summary: '不可见',
+        source: 'npc_ai',
+        visibleToPlayer: false,
+        payload: {},
+      } as any,
+    ]);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/games/${gid}/battles/hidden-battle-${gid}/replay`,
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('管理端 NPC 意图默认关闭，显式开启后按 gameId 返回', async () => {
+    const closed = await app.inject({ method: 'GET', url: '/api/admin/npc-intent' });
+    expect(closed.statusCode).toBe(403);
+
+    const previous = process.env.ALLOW_ADMIN_ENDPOINT;
+    process.env.ALLOW_ADMIN_ENDPOINT = '1';
+    try {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/games',
+        payload: { factionKey: 'CHU', playerRole: 'ruler', seed: 6161 },
+      });
+      const gid = created.json().gameId as string;
+      const opened = await app.inject({
+        method: 'GET',
+        url: `/api/admin/npc-intent?gameId=${gid}`,
+      });
+      expect(opened.statusCode).toBe(200);
+      expect(Array.isArray(opened.json().items)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.ALLOW_ADMIN_ENDPOINT;
+      else process.env.ALLOW_ADMIN_ENDPOINT = previous;
+    }
+  });
+
+  it('敌方生死不从人物列表与详情泄露', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'HUN', playerRole: 'ruler', seed: 7171 },
+    });
+    const gid = created.json().gameId as string;
+    const enemy = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=YONG&pageSize=1&gameId=${gid}`,
+    });
+    const enemyId = enemy.json().items[0].person_id as string;
+    const state = getGameState(built.db, gid, built.seed.characters, built.seed)!;
+    state.characters[enemyId].alive = false;
+    state.characters[enemyId].deathTurn = 1;
+    state.characters[enemyId].deathCause = '测试';
+    saveGameState(built.db, state);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: `/api/characters?faction=YONG&pageSize=1&gameId=${gid}`,
+    });
+    expect(Object.prototype.hasOwnProperty.call(list.json().items[0], 'alive')).toBe(false);
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/characters/${enemyId}?gameId=${gid}`,
+    });
+    expect(Object.prototype.hasOwnProperty.call(detail.json().runtime ?? {}, 'alive')).toBe(false);
+  });
+
+  it('存档乐观锁拒绝基于旧回合的写入', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'HUN', playerRole: 'ruler', seed: 5151 },
+    });
+    const gid = created.json().gameId as string;
+    const state = getGameState(built.db, gid, built.seed.characters, built.seed)!;
+    const expected = state.date.turn;
+    saveGameState(built.db, state, { expectedTurn: expected });
+    state.date.turn = expected + 1;
+    saveGameState(built.db, state, { expectedTurn: expected });
+    expect(() => saveGameState(built.db, state, { expectedTurn: expected })).toThrow(
+      StaleGameStateError,
+    );
   });
 });
 

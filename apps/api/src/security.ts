@@ -8,7 +8,10 @@
 export function assertSupportedDeploymentMode(
   env: Record<string, string | undefined> = process.env,
 ): void {
-  if (env.SINGLE_PLAYER_MODE === '0') {
+  // fail-closed：只有明确开启才放行；'0'/'false'/'no'/'off' 都视为请求多用户模式。
+  const mode = (env.SINGLE_PLAYER_MODE ?? '1').trim().toLowerCase();
+  const multiUserRequested = ['0', 'false', 'no', 'off'].includes(mode);
+  if (multiUserRequested) {
     throw new Error(
       [
         '安全启动失败：SINGLE_PLAYER_MODE=0 暂不受支持。',
