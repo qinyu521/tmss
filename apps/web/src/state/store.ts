@@ -59,6 +59,7 @@ interface AppState {
   saveGame: (label?: string) => Promise<void>;
   loadSave: (saveId: string) => Promise<void>;
   deleteGame: (gameId: string) => Promise<void>;
+  returnToStart: () => Promise<void>;
   setNav: (nav: NavKey) => void;
   setLayer: (layer: LayerKey) => void;
   select: (selection: Selection) => void;
@@ -279,6 +280,30 @@ export const useApp = create<AppState>((set, get) => ({
     } catch (err: any) {
       set({ busy: false });
       get().notify(err?.message ?? '读档失败', 'error');
+    }
+  },
+
+  returnToStart: async () => {
+    localStorage.removeItem(LAST_GAME);
+    set({
+      status: 'start',
+      gameId: null,
+      view: null,
+      persona: null,
+      events: [],
+      chronicle: [],
+      saves: [],
+      selected: null,
+      ordersOpen: false,
+      orderPreset: null,
+      nav: 'map',
+      busy: false,
+    });
+    try {
+      const games = await api.games();
+      set({ games: games.items });
+    } catch {
+      // 开始页仍可用当前列表继续；后端不可达时由开局操作提示错误。
     }
   },
 

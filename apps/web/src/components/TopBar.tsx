@@ -17,6 +17,7 @@ export default function TopBar() {
   const endTurn = useApp((s) => s.endTurn);
   const openOrders = useApp((s) => s.openOrders);
   const saveGame = useApp((s) => s.saveGame);
+  const returnToStart = useApp((s) => s.returnToStart);
   if (!view) return null;
   const res = view.own.resources;
   const tags = view.own.statusTags;
@@ -67,6 +68,15 @@ export default function TopBar() {
       </div>
 
       <div className="top-actions">
+        <button
+          className="btn ghost"
+          title="返回开始页，当前进度保留"
+          onClick={() => {
+            if (confirm('返回开始页？当前时间线会自动保留，稍后可继续。')) void returnToStart();
+          }}
+        >
+          返回
+        </button>
         <button className="btn" onClick={() => openOrders()} disabled={busy || ended}>
           命令{view.pendingOrders.length > 0 ? `（${view.pendingOrders.length}）` : ''}
         </button>
