@@ -175,6 +175,7 @@ export function createGame(
   const date = makeDate(0, 1);
   const armies = buildInitialArmies(ctx);
   const regions = buildRegions(ctx, INITIAL_RESOURCES);
+  const mapNodes = buildInitialMapNodes(ctx, regions);
   const persona = selectPlayerPerson(ctx, factionKey, opts.playerRole);
 
   const factions = {} as Record<FactionKey, FactionState>;
@@ -241,6 +242,7 @@ export function createGame(
     date,
     factions,
     regions,
+    mapNodes,
     armies,
     diplomacy,
     special,
@@ -326,6 +328,22 @@ export function migrateState(state: GameState, roster?: CharacterSeed[]): GameSt
     if (state.schemaVersion === m.from) {
       m.apply(state, roster);
       state.schemaVersion = m.to;
+    }
+  }
+  // 幂等兼容旧存档：不覆盖已有节点控制/驻军，也不打断仍在州府路线上行军的部队。
+  if (mapSeed) {
+    const ctx = buildContext(mapSeed);
+    state.mapNodes ??= buildInitialMapNodes(ctx, state.regions);
+    for (const army of state.armies ?? []) {
+      if (!army.mapNodeId) {
+        const regionName = state.regions[army.nodeId]?.name;
+        army.mapNodeId = ctx.seed.map_nodes.find(
+          (n) => n.region === regionName && n.node_type === '州府/主城',
+        )?.node_id;
+      }
+      army.mapPath ??= [];
+      army.mapHopCosts ??= [];
+      if (army.targetMapNodeId === undefined) army.targetMapNodeId = null;
     }
   }
   return state;
