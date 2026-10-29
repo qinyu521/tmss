@@ -7,6 +7,8 @@ import {
   ROLE_LABEL,
   SCHEME_LABELS,
   fmt,
+  type DiplomaticAction,
+  type FactionKey,
   type Order,
   type SchemeKind,
 } from '@tianming/shared';
@@ -18,6 +20,7 @@ const GROUPS = {
   military: ['move_army', 'dispatch_garrison', 'rest_army', 'scout'],
   civil: ['recruit', 'levy_grain', 'levy_tax', 'trade'],
   politics: ['appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
+  diplomacy: ['diplomatic_action'],
   scheme: ['scheme'],
 } as const;
 
@@ -79,6 +82,8 @@ export default function OrdersSheet() {
   const [scheme, setScheme] = useState<SchemeKind>('fire');
   const [schemeTarget, setSchemeTarget] = useState('');
   const [strategistId, setStrategistId] = useState('');
+  const [diplomaticTarget, setDiplomaticTarget] = useState<FactionKey>('YONG');
+  const [diplomaticAction, setDiplomaticAction] = useState<DiplomaticAction>('improve_relations');
   const [result, setResult] = useState<{ previews: string[]; issues: string[] } | null>(null);
 
   const ownArmies = useMemo(() => view?.armies.filter((a) => a.own && a.status !== 'marching') ?? [], [view]);
@@ -106,13 +111,14 @@ export default function OrdersSheet() {
     setTribeId((prev) => prev || view.special.tribes?.[0]?.tribeId || '');
     setHouseId((prev) => prev || view.special.houses?.[0]?.houseId || '');
     setStrategistId((prev) => prev || view.playerPersonId);
+    setDiplomaticTarget((prev) => prev !== view.factionKey ? prev : (view.factions.find((f) => f.key !== view.factionKey)?.key ?? 'HUN'));
     if (preset?.scheme) setScheme(preset.scheme as SchemeKind);
     if (preset?.targetArmyId) setSchemeTarget(`army:${preset.targetArmyId}`);
     if (preset?.targetRegionId) setSchemeTarget(`region:${preset.targetRegionId}`);
     if (preset?.kind) {
       setAction(preset.kind);
       setTab(
-        (preset.kind === 'scheme' ? 'scheme' : (GROUPS.politics as readonly string[]).includes(preset.kind) ? 'politics' : (GROUPS.civil as readonly string[]).includes(preset.kind) ? 'civil' : 'military') as TabKey,
+        (preset.kind === 'scheme' ? 'scheme' : (GROUPS.diplomacy as readonly string[]).includes(preset.kind) ? 'diplomacy' : (GROUPS.politics as readonly string[]).includes(preset.kind) ? 'politics' : (GROUPS.civil as readonly string[]).includes(preset.kind) ? 'civil' : 'military') as TabKey,
       );
     }
   }, [view, preset, ownRegions, garrisonRegions]);
@@ -145,6 +151,10 @@ export default function OrdersSheet() {
   }, [selectedGarrisonRegion?.regionId]);
 
   if (!view) return null;
+  const diplomacyRelation = view.diplomacy.find((item) =>
+    (item.a === view.factionKey && item.b === diplomaticTarget) ||
+    (item.b === view.factionKey && item.a === diplomaticTarget),
+  );
 
   const tabActions = (GROUPS[tab] as readonly string[]).filter(
     (kind) =>
@@ -231,6 +241,8 @@ export default function OrdersSheet() {
         return houseId ? { orderId, kind: 'negotiate_house', houseId, amount: 1 } : null;
       case 'appoint':
         return personId && appointRegion ? { orderId, kind: 'appoint', personId, regionId: appointRegion } : null;
+      case 'diplomatic_action':
+        return { orderId, kind: 'diplomatic_action', action: diplomaticAction, targetFaction: diplomaticTarget };
       case 'scheme': {
         if (!schemeTarget) return null;
         const [type, id] = schemeTarget.split(':');
@@ -281,7 +293,8 @@ export default function OrdersSheet() {
       tabs={[
         { key: 'military', label: '军事/州兵' },
         { key: 'civil', label: '民政财政' },
-        { key: 'politics', label: '政治交涉' },
+        { key: 'politics', label: '朝政/派系' },
+        { key: 'diplomacy', label: '对外外交' },
         { key: 'scheme', label: '计谋' },
       ]}
       activeTab={tab}
@@ -516,7 +529,41 @@ export default function OrdersSheet() {
               </>
             )}
 
-            {action === 'appease_tribe' && (
+                        {action === 'diplomatic_action' && (
+              <>
+                <div className="form-row">
+                  <label>交涉对象</label>
+                  <select value={diplomaticTarget} onChange={(e) => setDiplomaticTarget(e.target.value as FactionKey)}>
+                    {view.factions.filter((f) => f.key !== view.factionKey).map((f) => (
+                      <option key={f.key} value={f.key}>{f.name} · {f.stance}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>外交行动</label>
+                  <select value={diplomaticAction} onChange={(e) => setDiplomaticAction(e.target.value as DiplomaticAction)}>
+                    <option value="improve_relations">派使团修好</option>
+                    <option value="propose_alliance">提出防御盟约</option>
+                    <option value="offer_peace">派使团议和</option>
+                    <option value="declare_war">正式宣战</option>
+                    <option value="break_alliance">废止现有盟约</option>
+                  </select>
+                </div>
+                <div className="card small" style={{ lineHeight: 1.7 }}>
+                  <div className="gold">当前邦交：{diplomacyRelation?.label ?? '未定'}（{diplomacyRelation?.value ?? 0}/100）</div>
+                  <div className="muted">
+                    {diplomacyRelation?.allianceActive
+                      ? `有效防御盟约 · 至第 ${diplomacyRelation.allianceEndTurn} 回合`
+                      : '暂无有效盟约'}
+                  </div>
+                  <div className="muted" style={{ marginTop: 5 }}>
+                    修好耗银 12,000；议和使节耗银 5,000；缔盟使团耗银 25,000。宣战会损失声望与稳定；结盟须关系至少 25，成功与否按确定性外交评估。被宣战方的盟友会依约参战。
+                  </div>
+                </div>
+              </>
+            )}
+
+            {{action === 'appease_tribe' && (
               <>
                 <div className="form-row">
                   <label>部落</label>
@@ -696,6 +743,7 @@ function describeOrder(o: Order): string {
   if (o.kind === 'appease_tribe') return `${o.tribeId} · ${o.amount} 两`;
   if (o.kind === 'balance_princes') return '平衡皇子派系';
   if (o.kind === 'negotiate_house') return o.houseId;
+  if (o.kind === 'diplomatic_action') return `${o.action} → ${o.targetFaction}`;
   if (o.kind === 'appoint') return `${o.personId} → ${o.regionId}`;
   if (o.kind === 'rest_army') return o.armyId;
   if (o.kind === 'scout') return o.regionId;
