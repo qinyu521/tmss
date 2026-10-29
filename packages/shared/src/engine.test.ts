@@ -721,6 +721,77 @@ describe('正式外交行动', () => {
   });
 });
 
+describe('NPC 战略地图节点进攻', () => {
+  it('防御盟约响应会优先向敌方独立据点下令，而非只选州府主城', () => {
+    const state = newGame('HUN', 'ruler', 'npc-strategic-node-target');
+    state.date.turn = 2;
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|YONG'] = -40;
+    state.diplomacy['CHU|YONG'] = -40;
+    state.diplomacy['HUN|CHU'] = 50;
+    state.treaties = [{
+      treatyId: 'treaty-hun-chu-map-target',
+      kind: 'alliance',
+      a: 'HUN',
+      b: 'CHU',
+      startTurn: 1,
+      endTurn: 8,
+      status: 'active',
+    }];
+
+    const adjacency = buildMapAdjacency(ctx);
+    const mapSeedById = new Map(ctx.seed.map_nodes.map((node) => [node.node_id, node]));
+    const targetEdge = Object.entries(adjacency)
+      .flatMap(([from, links]) => links.map((link) => ({ from, to: link.to })))
+      .find(({ to }) => mapSeedById.get(to)?.node_type !== '州府/主城');
+    expect(targetEdge).toBeDefined();
+    const { from: sourceNodeId, to: targetNodeId } = targetEdge!;
+    const targetSeed = mapSeedById.get(targetNodeId)!;
+    const sourceSeed = mapSeedById.get(sourceNodeId)!;
+    expect(targetSeed.node_type).not.toBe('州府/主城');
+
+    for (const region of Object.values(state.regions)) region.faction = 'CHU';
+    for (const node of Object.values(state.mapNodes ?? {})) node.faction = 'CHU';
+    state.mapNodes![targetNodeId].faction = 'YONG';
+    state.mapNodes![targetNodeId].garrison = 0;
+    state.mapNodes![targetNodeId].fortification = 0;
+
+    const sourceRegionId = ctx.territories.find((region) => region.region === sourceSeed.region)?.region_id;
+    const targetRegionId = ctx.territories.find((region) => region.region === targetSeed.region)?.region_id;
+    if (!sourceRegionId || !targetRegionId) throw new Error('测试战略节点缺少对应州府。');
+
+    const chuArmies = state.armies.filter((army) => army.faction === 'CHU');
+    const activeArmyId = chuArmies[0]?.armyId;
+    if (!activeArmyId) throw new Error('测试缺少大楚军团。');
+    state.armies = state.armies.map((army) => {
+      if (army.faction !== 'CHU') return army;
+      if (army.armyId === activeArmyId) {
+        return {
+          ...army,
+          nodeId: sourceRegionId,
+          mapNodeId: sourceNodeId,
+          status: 'idle',
+          supply: 100,
+          fatigue: 0,
+          morale: 100,
+          training: 100,
+        };
+      }
+      return { ...army, status: 'marching' };
+    });
+
+    const orders = generateNpcOrders(state, ctx).filter(
+      (order) => order.kind === 'move_army' && order.orderId.startsWith('npc-CHU-'),
+    );
+    expect(orders).toContainEqual(expect.objectContaining({
+      kind: 'move_army',
+      armyId: activeArmyId,
+      targetRegionId,
+      targetMapNodeId: targetNodeId,
+    }));
+  });
+});
+
 describe('NPC 外交自主决策', () => {
   it('同一状态重复生成外交意图完全一致，战事与国库压力会触发议和', () => {
     const state = newGame('HUN', 'ruler', 'npc-diplomacy-determinism');
