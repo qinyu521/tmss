@@ -479,6 +479,7 @@ function handleStrategicNodeBattle(
 function processMovement(state: GameState, ctx: DerivedContext, events: GameEvent[]): void {
   // 夏季暑热：行军疲劳 +20%，匈奴骑兵不耐暑再 +15%（系数在 balance.seasons）
   const season = seasonOf(state.date.month);
+  processMapMovement(state, ctx, events, season);
   const movementArmies = state.armies.filter((a) => a.path.length > 0);
   for (const army of movementArmies) {
     if (!state.armies.some((a) => a.armyId === army.armyId)) continue;
