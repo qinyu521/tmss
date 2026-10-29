@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FACTION_VISUALS, fmt, type BattleReplay, type FactionKey } from '@tianming/shared';
 import { Modal } from './ui';
+import Battlefield3D from './Battlefield3D';
 
 const PLAY_INTERVAL_MS = 1800;
 
@@ -8,6 +9,7 @@ const PLAY_INTERVAL_MS = 1800;
 export default function BattleReplayModal({ replay, onClose }: { replay: BattleReplay; onClose: () => void }) {
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(true);
+  const [webglFailed, setWebglFailed] = useState(false);
   const lastIndex = replay.stages.length - 1;
 
   useEffect(() => {
@@ -29,6 +31,17 @@ export default function BattleReplayModal({ replay, onClose }: { replay: BattleR
   const defColor = defVisual?.primary ?? 'var(--muted)';
   const atkPct = replay.initialAttackerTroops > 0 ? (stage.attackerTroops / replay.initialAttackerTroops) * 100 : 0;
   const defPct = replay.initialDefenderTroops > 0 ? (stage.defenderTroops / replay.initialDefenderTroops) * 100 : 0;
+  const formationSize = 18;
+  const visibleAttackers = replay.initialAttackerTroops > 0
+    ? Math.round((stage.attackerTroops / replay.initialAttackerTroops) * formationSize)
+    : 0;
+  const visibleDefenders = replay.initialDefenderTroops > 0
+    ? Math.round((stage.defenderTroops / replay.initialDefenderTroops) * formationSize)
+    : 0;
+  const winnerClass = idx === lastIndex ? (replay.attackerWon ? 'winner-attacker' : 'winner-defender') : '';
+  const terrainClass = ['plain', 'hill', 'mountain', 'forest', 'river'].includes(replay.terrain)
+    ? `terrain-${replay.terrain}`
+    : 'terrain-plain';
 
   return (
     <Modal
@@ -37,6 +50,40 @@ export default function BattleReplayModal({ replay, onClose }: { replay: BattleR
       onClose={onClose}
       width={720}
     >
+      {webglFailed ? (
+        <div
+          className={`battlefield-fallback ${terrainClass} phase-${stage.key} ${winnerClass}`}
+          role="img"
+          aria-label={`${replay.terrainLabel}战场，${stage.name}阶段。攻方剩余${fmt(stage.attackerTroops)}人，守方剩余${fmt(stage.defenderTroops)}人。`}
+        >
+          <div className="fallback-sky" />
+          <div className="fallback-ridge" />
+          <div className="fallback-ground" />
+          <div className="fallback-center-mark">⚔</div>
+          <div className="fallback-formation attacker" style={{ color: atkColor }}>
+            <div className="fallback-banner">攻</div>
+            <div className="fallback-soldiers">
+              {Array.from({ length: formationSize }, (_, i) => (
+                <span key={i} className={`fallback-soldier ${i >= visibleAttackers ? 'fallen' : ''}`}><i /><b /></span>
+              ))}
+            </div>
+            <div className="fallback-label">{replay.attackerName}</div>
+          </div>
+          <div className="fallback-formation defender" style={{ color: defColor }}>
+            <div className="fallback-banner">守</div>
+            <div className="fallback-soldiers">
+              {Array.from({ length: formationSize }, (_, i) => (
+                <span key={i} className={`fallback-soldier ${i >= visibleDefenders ? 'fallen' : ''}`}><i /><b /></span>
+              ))}
+            </div>
+            <div className="fallback-label">{replay.defenderName}</div>
+          </div>
+          <div className="fallback-phase">{stage.name} · 小队阵列示意</div>
+          <div className="fallback-terrain">{replay.terrainLabel}{replay.fort > 0 ? ` · 城防 ${replay.fort}` : ''}</div>
+        </div>
+      ) : (
+        <Battlefield3D replay={replay} stageIndex={idx} onError={() => setWebglFailed(true)} />
+      )}
       <div className="replay-side">
         <div className="replay-side-head">
           <span style={{ color: atkVisual?.mapBorder ?? 'var(--gold-soft)' }}>
