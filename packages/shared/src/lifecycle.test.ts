@@ -76,20 +76,44 @@ describe('生命周期', () => {
     expect(isCharacterAlive(state, state.playerPersonId)).toBe(true);
   });
 
-  it('迁移框架：v1 存档补 characters（全在世）并迁移到当前 schema v4，且迁移幂等', () => {
+  it('迁移框架：v1 存档补 characters（全在世）并迁移到当前 schema v5，且迁移幂等', () => {
     const state = newGame('HUN');
     const legacy = JSON.parse(JSON.stringify(state)) as GameState;
     delete (legacy as Partial<GameState>).characters;
     legacy.schemaVersion = 1;
     const migrated = migrateState(legacy, seed.characters, seed);
-    expect(migrated.schemaVersion).toBe(4);
+    expect(migrated.schemaVersion).toBe(5);
     expect(Object.keys(migrated.characters)).toHaveLength(seed.characters.length);
     expect(Object.values(migrated.characters).every((c) => c.alive)).toBe(true);
     expect(migrated.characters[seed.characters[0].person_id].ageBand).toBe(seed.characters[0].age_band);
     // 幂等：再次迁移不产生变化
     const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters, seed);
-    expect(again.schemaVersion).toBe(4);
+    expect(again.schemaVersion).toBe(5);
     expect(again.characters).toEqual(migrated.characters);
+  });
+
+  it('v4 旧存档迁移到 v5 时补齐 idle 目标，且重复迁移不重置目标', () => {
+    const legacy = JSON.parse(JSON.stringify(newGame('HUN'))) as GameState;
+    legacy.schemaVersion = 4;
+    for (const runtime of Object.values(legacy.characters)) {
+      delete runtime.goal;
+      delete runtime.goalTargetId;
+      delete runtime.goalSinceTurn;
+      delete runtime.goalLastActionTurn;
+      delete runtime.goalReason;
+    }
+    const migrated = migrateState(legacy, seed.characters, seed);
+    expect(migrated.schemaVersion).toBe(5);
+    expect(Object.values(migrated.characters).every((runtime) => runtime.goal === 'idle')).toBe(true);
+    const selected = Object.values(migrated.characters)[0];
+    selected.goal = 'stabilize_region';
+    selected.goalTargetId = 'HUN-REG01';
+    selected.goalSinceTurn = 8;
+    const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters, seed);
+    expect(again.schemaVersion).toBe(5);
+    expect(again.characters[selected.personId].goal).toBe('stabilize_region');
+    expect(again.characters[selected.personId].goalTargetId).toBe('HUN-REG01');
+    expect(again.characters[selected.personId].goalSinceTurn).toBe(8);
   });
 
   it('确定性：同种子两局 60 回合死亡名单完全一致', () => {
@@ -154,13 +178,13 @@ describe('行军存档迁移', () => {
 
     const migrated = migrateState(legacy, seed.characters, seed);
     const migratedArmy = migrated.armies.find((a) => a.armyId === army.armyId)!;
-    expect(migrated.schemaVersion).toBe(4);
+    expect(migrated.schemaVersion).toBe(5);
     expect(migratedArmy.currentHopDaysTotal).toBe(10);
     expect(migratedArmy.hopCosts).toEqual([3, 4]);
     expect(migratedArmy.marchDaysLeft).toBe(7);
 
     const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters, seed);
-    expect(again.schemaVersion).toBe(4);
+    expect(again.schemaVersion).toBe(5);
     expect(again.armies.find((a) => a.armyId === army.armyId)).toEqual(migratedArmy);
   });
 });
