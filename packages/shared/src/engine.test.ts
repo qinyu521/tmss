@@ -763,21 +763,29 @@ describe('NPC 战略地图节点进攻', () => {
     const chuArmies = state.armies.filter((army) => army.faction === 'CHU');
     const activeArmyId = chuArmies[0]?.armyId;
     if (!activeArmyId) throw new Error('测试缺少大楚军团。');
+    const safeNodeId = Object.keys(state.mapNodes ?? {}).find(
+      (nodeId) => nodeId !== sourceNodeId && nodeId !== targetNodeId,
+    );
+    if (!safeNodeId) throw new Error('测试地图缺少可安置后方军团的节点。');
+    const safeRegionId = state.mapNodes![safeNodeId].regionId;
     state.armies = state.armies.map((army) => {
-      if (army.faction !== 'CHU') return army;
-      if (army.armyId === activeArmyId) {
-        return {
-          ...army,
-          nodeId: sourceRegionId,
-          mapNodeId: sourceNodeId,
-          status: 'idle',
-          supply: 100,
-          fatigue: 0,
-          morale: 100,
-          training: 100,
-        };
+      if (army.faction === 'CHU') {
+        if (army.armyId === activeArmyId) {
+          return {
+            ...army,
+            nodeId: sourceRegionId,
+            mapNodeId: sourceNodeId,
+            status: 'idle',
+            supply: 100,
+            fatigue: 0,
+            morale: 100,
+            training: 100,
+          };
+        }
+        return { ...army, status: 'marching' };
       }
-      return { ...army, status: 'marching' };
+      // 避免原始 YONG 军团偶然驻在测试目标节点，让本例只测节点选敌。
+      return { ...army, nodeId: safeRegionId, mapNodeId: safeNodeId, status: 'marching' };
     });
 
     const orders = generateNpcOrders(state, ctx).filter(
