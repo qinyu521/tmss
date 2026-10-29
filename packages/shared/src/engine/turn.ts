@@ -232,8 +232,11 @@ export function resolveCommanderDefectionThreats(
   for (const army of [...state.armies].sort((a, b) => a.faction.localeCompare(b.faction) || a.armyId.localeCompare(b.armyId))) {
     const runtime = state.characters[army.commanderId];
     const commander = ctx.charactersById[army.commanderId];
-    if (!runtime || !commander || runtime.allegianceFaction) continue;
-    if (commander.faction_key !== army.faction) continue;
+    if (!runtime || !commander) continue;
+    const currentCommanderFaction = runtime.allegianceFaction ?? commander.faction_key;
+    if (currentCommanderFaction !== army.faction) continue;
+    // A former defector only risks returning after an explicit amnesty offer sets a warning.
+    if (runtime.allegianceFaction && runtime.defectionWarningTurn === undefined) continue;
 
     const region = state.regions[army.nodeId];
     const hasExclusiveControl = Boolean(region && region.faction === army.faction) &&
@@ -253,6 +256,7 @@ export function resolveCommanderDefectionThreats(
           (personId, factionKey) =>
             state.characters[personId]?.alive !== false &&
             isAtWar(state.diplomacy, army.faction, factionKey),
+          runtime.defectionWarningTurn === undefined ? undefined : runtime.defectionTargetFaction,
         )
       : null;
 
@@ -268,20 +272,25 @@ export function resolveCommanderDefectionThreats(
     ) {
       runtime.defectionWarningTurn = turn;
       runtime.defectionTargetFaction = target.targetFaction;
+      const returnWarning = Boolean(runtime.allegianceFaction);
       events.push(emitEvent(state, {
         type: 'politics',
-        title: `倒戈风险预警·${commander.name}`,
-        summary: `${commander.name}军令忠诚仅 ${Math.round(loyalty)}，且与交战势力${state.factions[target.targetFaction].name}的${target.targetPersonName}存在明确强关系。其所部暂未叛离，但若下一旬前仍未恢复忠诚，可能携军倒戈并献出${region?.name ?? '驻地'}。君主可先行赏赐；战后待处置将领也可撤换。`,
+        title: returnWarning ? `归附关系动摇预警·${commander.name}` : `倒戈风险预警·${commander.name}`,
+        summary: returnWarning
+          ? `${commander.name}现归附${state.factions[army.faction].name}，军令忠诚仅 ${Math.round(loyalty)}。旧主势力${state.factions[target.targetFaction].name}凭与其的明确强关系发动招抚；若下一旬前仍未恢复忠诚，${commander.name}可能率军与驻地${region?.name ?? ''}归还旧主。归附方君主可继续赏赐或撤换统将。`
+          : `${commander.name}军令忠诚仅 ${Math.round(loyalty)}，且与交战势力${state.factions[target.targetFaction].name}的${target.targetPersonName}存在明确强关系。其所部暂未叛离，但若下一旬前仍未恢复忠诚，可能携军倒戈并献出${region?.name ?? '驻地'}。君主可先行赏赐；战后待处置将领也可撤换。`,
         actorId: commander.person_id,
         actorName: commander.name,
         factionKey: army.faction,
         targetId: army.armyId,
         targetLabel: army.name,
         before: { militaryLoyalty: loyalty, targetFaction: army.faction, regionFaction: region?.faction },
-        after: { warningTurn: turn, defectionTargetFaction: target.targetFaction, targetPersonId: target.targetPersonId },
-        evidence: '确定性预警条件：将领军令忠诚 ≤15、与交战势力在世人物存在明确强关系、军团独占本方驻地；未触发随机判定',
+        after: { warningTurn: turn, defectionTargetFaction: target.targetFaction, targetPersonId: target.targetPersonId, returnToOriginalFaction: returnWarning && target.targetFaction === commander.faction_key },
+        evidence: returnWarning
+          ? '旧主招抚后的确定性预警：归附将领忠诚 ≤15、与原属势力在世人物存在明确强关系、独占当前驻地；仍保留一整回合反制窗口'
+          : '确定性预警条件：将领军令忠诚 ≤15、与交战势力在世人物存在明确强关系、军团独占本方驻地；未触发随机判定',
         source: 'engine',
-        visibleToPlayer: state.factionKey === army.faction,
+        visibleToPlayer: state.factionKey === army.faction || state.factionKey === target.targetFaction,
       }));
       continue;
     }
@@ -321,6 +330,7 @@ export function resolveCommanderDefectionThreats(
     );
     const runtime = state.characters[army.commanderId];
     if (!runtime) continue;
+    const returningToOriginalFaction = Boolean(runtime.allegianceFaction && targetFaction === commander.faction_key);
     const before = {
       armyFaction: oldFaction,
       regionFaction: region.faction,
@@ -343,7 +353,8 @@ export function resolveCommanderDefectionThreats(
     army.marchDaysLeft = 0;
     army.marchDaysTotal = 0;
     army.currentHopDaysTotal = 0;
-    runtime.allegianceFaction = targetFaction;
+    runtime.allegianceFaction = returningToOriginalFaction ? undefined : targetFaction;
+    if (returningToOriginalFaction) runtime.militaryLoyalty = Math.max(30, loyalty);
     runtime.defectionWarningTurn = undefined;
     runtime.defectionTargetFaction = undefined;
     runtime.pendingBattleSettlement = false;
@@ -357,11 +368,11 @@ export function resolveCommanderDefectionThreats(
     region.garrisonCommanderId = army.commanderId;
     region.garrisonCommanderName = army.commanderName;
     region.garrisoned = true;
-    region.order = clamp(region.order - 15);
-    region.loyalty = clamp(region.loyalty - 12);
-    region.threat = clamp(region.threat + 12);
+    region.order = clamp(region.order - (returningToOriginalFaction ? 5 : 15));
+    region.loyalty = clamp(region.loyalty - (returningToOriginalFaction ? 5 : 12));
+    region.threat = clamp(region.threat + (returningToOriginalFaction ? 4 : 12));
     state.factions[oldFaction].stability = clamp(state.factions[oldFaction].stability - 5);
-    state.factions[targetFaction].stability = clamp(state.factions[targetFaction].stability - 2);
+    state.factions[targetFaction].stability = clamp(state.factions[targetFaction].stability + (returningToOriginalFaction ? 3 : -2));
     for (const key of FACTION_KEYS) {
       state.factions[key].control = Object.values(state.regions)
         .filter((ownedRegion) => ownedRegion.faction === key)
@@ -371,8 +382,12 @@ export function resolveCommanderDefectionThreats(
 
     events.push(emitEvent(state, {
       type: 'politics',
-      title: `将领倒戈·${region.name}归附${state.factions[targetFaction].name}`,
-      summary: `${army.commanderName}在忠诚长期跌至 ${Math.round(loyalty)}、且与${state.factions[targetFaction].name}的${targetPersonName}有强关系后，越过朝廷预警期限，率 ${Math.round(army.troops).toLocaleString()} 人倒戈。军团与${region.name}州府一并归附；地方秩序 ${Math.round(before.regionOrder)}→${Math.round(region.order)}、民心 ${Math.round(before.regionLoyalty)}→${Math.round(region.loyalty)}，旧势力稳定 -5，新势力稳定 -2。`,
+      title: returningToOriginalFaction
+        ? `旧主招抚成功·${region.name}归还${state.factions[targetFaction].name}`
+        : `将领倒戈·${region.name}归附${state.factions[targetFaction].name}`,
+      summary: returningToOriginalFaction
+        ? `${army.commanderName}接受旧主招抚，率 ${Math.round(army.troops).toLocaleString()} 人与${region.name}州府重归${state.factions[targetFaction].name}。回归后的军令忠诚托底至 30；地方秩序 ${Math.round(before.regionOrder)}→${Math.round(region.order)}、民心 ${Math.round(before.regionLoyalty)}→${Math.round(region.loyalty)}。当前归附势力稳定 -5，原属势力稳定 +3。`
+        : `${army.commanderName}在忠诚长期跌至 ${Math.round(loyalty)}、且与${state.factions[targetFaction].name}的${targetPersonName}有强关系后，越过朝廷预警期限，率 ${Math.round(army.troops).toLocaleString()} 人倒戈。军团与${region.name}州府一并归附；地方秩序 ${Math.round(before.regionOrder)}→${Math.round(region.order)}、民心 ${Math.round(before.regionLoyalty)}→${Math.round(region.loyalty)}，旧势力稳定 -5，新势力稳定 -2。`,
       actorId: army.commanderId,
       actorName: army.commanderName,
       factionKey: oldFaction,
@@ -389,12 +404,14 @@ export function resolveCommanderDefectionThreats(
         oldFactionStability: state.factions[oldFaction].stability,
         targetFactionStability: state.factions[targetFaction].stability,
         defectionTargetPersonId: targetPersonId,
+        returnedToOriginalFaction: returningToOriginalFaction,
       },
-      evidence: '同一倒戈条件需连续跨越预警回合；将领军团与其独占驻地同步改变势力，避免在原势力腹地生成无法交战的敌军团',
+      evidence: returningToOriginalFaction
+        ? '旧主招抚需先经过独立预警期限；到期后军团与独占驻地同步归还原属势力，归附将领忠诚托底 30，驻地承受较轻秩序惩罚'
+        : '同一倒戈条件需连续跨越预警回合；将领军团与其独占驻地同步改变势力，避免在原势力腹地生成无法交战的敌军团',
       source: 'engine',
       visibleToPlayer: state.factionKey === oldFaction || state.factionKey === targetFaction,
     }));
-
     // Explicitly recorded old subordinates may lose faith when their commander defects.
     // Limit the ripple to three active commanders; they must still pass the normal warning window.
     const subordinatePattern = /旧部|部属|主从|效忠|知遇|门生|追随|部下|恩主|副将|旧主/;
