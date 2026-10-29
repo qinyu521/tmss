@@ -155,6 +155,7 @@ export function assignMapMarch(
 ): void {
   army.path = [];
   army.hopCosts = [];
+  army.currentHopDaysTotal = 0;
   army.mapPath = path;
   army.mapHopCosts = dayCosts;
   army.mapCurrentHopDaysTotal = dayCosts[0] ?? 0;
@@ -310,6 +311,7 @@ export function dayCostsFor(
 export function assignMarch(army: Army, path: string[], dayCosts: number[], targetRegionId: string): void {
   army.mapPath = [];
   army.mapHopCosts = [];
+  army.mapCurrentHopDaysTotal = 0;
   army.targetMapNodeId = null;
   army.path = path;
   army.hopCosts = dayCosts;
