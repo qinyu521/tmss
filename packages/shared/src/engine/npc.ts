@@ -4,10 +4,11 @@ import type { DerivedContext } from '../dataset.js';
 import { diplomacyKey, isAtWar } from '../dataset.js';
 import { hashString, mulberry32 } from '../dataset.js';
 import { BALANCE, grainDemandForTroops, perThousandDemand } from '../balance.js';
-import { buildAdjacency, findPath } from './movement.js';
+import { buildAdjacency, estimatePathDays, findPath } from './movement.js';
 import type { Army, RegionState } from '../types.js';
 import { factionTroops } from './economy.js';
 import { clamp } from './state.js';
+import { seasonOf } from './season.js';
 
 /**
  * NPC 决策：基于自身利益、资源、已知边境与性格的启发式。
@@ -268,8 +269,9 @@ function pickEnemyAttack(
     const defenderPower = defenderArmies + region.garrison * 0.62 + region.fortification * 260;
 
     for (const army of armies) {
-      const path = findPath(state, ctx, factionKey, army.nodeId, regionId);
-      if (!path.ok || path.totalDays > BALANCE.turnDays * 2) continue;
+      const path = findPath(state, ctx, factionKey, army.nodeId, regionId, { troops: army.troops });
+      const estimatedDays = estimatePathDays(army, path, seasonOf(state.date.month));
+      if (!path.ok || estimatedDays > BALANCE.turnDays * 2) continue;
       const attackPower = armyReadiness(army, ctx);
       if (attackPower < Math.max(1, defenderPower) * 0.58) continue;
 
@@ -277,7 +279,7 @@ function pickEnemyAttack(
       const commandAdvantage = ((commander?.command ?? 50) + (commander?.strategy ?? 50)) / 200;
       const localUnrest = (100 - region.loyalty) / 100;
       const defenseRatio = defenderPower / Math.max(1, attackPower);
-      const travelPenalty = (path.totalDays / BALANCE.turnDays) * 0.08;
+      const travelPenalty = (estimatedDays / BALANCE.turnDays) * 0.08;
       const score = defenseRatio + travelPenalty - localUnrest * 0.08 - commandAdvantage * 0.025;
       candidates.push({ army, region, score });
     }
