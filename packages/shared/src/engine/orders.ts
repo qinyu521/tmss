@@ -36,6 +36,7 @@ import {
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
+import { applyDiplomaticAction, validateDiplomaticAction } from './diplomacy.js';
 
 const ROLE_ALLOWED: Record<PlayerRole, OrderKind[]> = ROLE_ALLOWED_ORDERS as Record<PlayerRole, OrderKind[]>;
 
@@ -81,6 +82,7 @@ function orderKindLimit(kind: OrderKind): number {
   if (kind === 'move_army' || kind === 'dispatch_garrison') return 3;
   if (kind === 'scheme') return 2;
   if (kind === 'rest_army') return 2;
+  if (kind === 'diplomatic_action') return 1;
   return 1;
 }
 
@@ -460,6 +462,9 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
   if (countPending(state, order.kind, order.orderId) >= orderKindLimit(order.kind)) {
     return issues('ORDER_LIMIT', '本回合该类型命令已达上限，请等待下回合。');
   }
+  if (order.kind === 'diplomatic_action' && state.pendingOrders.some((pending) => pending.kind === 'diplomatic_action' && pending.orderId !== order.orderId)) {
+    return issues('DIPLOMACY_LIMIT', '本回合只能提交一项外交行动，避免多项外交同时结算造成条件竞态。');
+  }
 
   switch (order.kind) {
     case 'move_army': {
@@ -641,6 +646,9 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         preview: `与 ${house.name} 协商，耗银 ${BALANCE.negotiateHouse.cashCost}，支持度 +${BALANCE.negotiateHouse.supportGain}。`,
       };
     }
+    case 'diplomatic_action':
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '正式外交属于国君权限；地方主官、将军与军师可通过朝议提出建议。');
+      return validateDiplomaticAction(state, order);
     case 'court_debate': {
       const validPairs: Record<CourtTopic, CourtResolution[]> = {
         military: ['mobilize', 'consolidate'],
@@ -1142,6 +1150,14 @@ export function applyOrder(
     }
     case 'court_debate': {
       applyCourtDebate(state, order, ctx, events, source, fk, actorId, actorName);
+      return;
+    }
+    case 'diplomatic_action': {
+      applyDiplomaticAction(state, order, events, source, fk, actorId, actorName);
+      return;
+    }
+    case 'diplomatic_action': {
+      applyDiplomaticAction(state, order, events, source, fk, actorId, actorName);
       return;
     }
     case 'appoint': {

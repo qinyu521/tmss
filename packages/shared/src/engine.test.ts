@@ -331,6 +331,137 @@ describe('正式朝议', () => {
   });
 });
 
+describe('正式外交行动', () => {
+  it('修好使团有明确成本并改变邦交关系', () => {
+    const state = newGame('HUN', 'ruler', 'diplomacy-improve');
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|CHU'] = 10;
+    state.factions.HUN.resources.cash = 80_000;
+    const order: Order = {
+      orderId: 'diplomacy-improve-1',
+      kind: 'diplomatic_action',
+      action: 'improve_relations',
+      targetFaction: 'CHU',
+    };
+    expect(validateOrder(state, ctx, order).ok).toBe(true);
+    const beforeCash = state.factions.HUN.resources.cash;
+    state.pendingOrders = [order];
+    const result = runTurn(state, ctx);
+    expect(result.state.diplomacy['HUN|CHU']).toBe(28);
+    const event = result.report.events.find((item) => item.payload?.action === 'improve_relations');
+    expect(event?.type).toBe('diplomacy');
+    expect(event?.before?.relation).toBe(10);
+    expect(event?.after?.relation).toBe(28);
+    expect((event?.before?.cash as number) - (event?.after?.cash as number)).toBe(12_000);
+    // 本回合后续经济结算可能增加国库；使团自身成本由事件账本精确断言。
+  });
+
+  it('宣战会立即跨过战争阈值，并留下声望/稳定代价', () => {
+    const state = newGame('HUN', 'ruler', 'diplomacy-war');
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|CHU'] = 0;
+    const beforeReputation = state.factions.HUN.reputation;
+    const beforeStability = state.factions.HUN.stability;
+    state.pendingOrders = [{
+      orderId: 'diplomacy-war-1',
+      kind: 'diplomatic_action',
+      action: 'declare_war',
+      targetFaction: 'CHU',
+    }];
+    const result = runTurn(state, ctx);
+    expect(result.state.diplomacy['HUN|CHU']).toBeLessThanOrEqual(-25);
+    const warEvent = result.report.events.find((item) => item.payload?.warDeclared === true);
+    expect(warEvent?.type).toBe('diplomacy');
+    expect(warEvent?.before?.reputation).toBe(beforeReputation);
+    expect(warEvent?.after?.reputation).toBe(beforeReputation - 3);
+    expect(warEvent?.before?.stability).toBe(beforeStability);
+    expect(warEvent?.after?.stability).toBe(beforeStability - 2);
+  });
+
+  it('关系接近且战事持续时，议和可停止战争', () => {
+    const state = newGame('HUN', 'ruler', 'diplomacy-peace');
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|YONG'] = -30;
+    state.factions.HUN.resources.cash = 80_000;
+    state.pendingOrders = [{
+      orderId: 'diplomacy-peace-1',
+      kind: 'diplomatic_action',
+      action: 'offer_peace',
+      targetFaction: 'YONG',
+    }];
+    const result = runTurn(state, ctx);
+    expect(result.state.diplomacy['HUN|YONG']).toBe(-5);
+    const event = result.report.events.find((item) => item.payload?.action === 'offer_peace');
+    expect(event?.payload?.accepted).toBe(true);
+    expect(event?.after?.atWar).toBe(false);
+  });
+
+  it('结盟成功后存在八回合防御盟约，期满会在下一回合记录并终止', () => {
+    const state = newGame('HUN', 'ruler', 'diplomacy-alliance');
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|CHU'] = 50;
+    state.factions.HUN.resources.cash = 100_000;
+    state.pendingOrders = [{
+      orderId: 'diplomacy-alliance-1',
+      kind: 'diplomatic_action',
+      action: 'propose_alliance',
+      targetFaction: 'CHU',
+    }];
+    const first = runTurn(state, ctx);
+    const treaty = first.state.treaties.find((item) => item.a === 'HUN' && item.b === 'CHU');
+    expect(treaty).toBeTruthy();
+    expect(treaty?.status).toBe('active');
+    expect(treaty?.endTurn).toBe(8);
+    expect(first.state.diplomacy['HUN|CHU']).toBeGreaterThanOrEqual(45);
+
+    const atExpiry = clone(first.state);
+    atExpiry.date.turn = 9;
+    const expired = runTurn(atExpiry, ctx);
+    expect(expired.state.treaties.find((item) => item.treatyId === treaty?.treatyId)?.status).toBe('expired');
+    expect(expired.report.events.some((item) => item.payload?.action === 'treaty_expired')).toBe(true);
+  });
+
+  it('宣战会召援目标的有效防御盟友', () => {
+    const state = newGame('HUN', 'ruler', 'diplomacy-call-to-arms');
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 0;
+    state.treaties = [{
+      treatyId: 'treaty-yong-chu',
+      kind: 'alliance',
+      a: 'YONG',
+      b: 'CHU',
+      startTurn: 1,
+      endTurn: 8,
+      status: 'active',
+    }];
+    state.pendingOrders = [{
+      orderId: 'diplomacy-call-to-arms-1',
+      kind: 'diplomatic_action',
+      action: 'declare_war',
+      targetFaction: 'YONG',
+    }];
+    const result = runTurn(state, ctx);
+    expect(result.state.diplomacy['HUN|YONG']).toBeLessThanOrEqual(-25);
+    expect(result.state.diplomacy['HUN|CHU']).toBeLessThanOrEqual(-25);
+    expect(result.report.events.some((item) => item.payload?.action === 'defensive_call_to_arms' && item.targetId === 'CHU')).toBe(true);
+  });
+
+  it('非君主不能下达正式外交，且同回合不能排队两项外交', () => {
+    const general = newGame('HUN', 'general', 'diplomacy-auth');
+    const order: Order = {
+      orderId: 'diplomacy-auth-1',
+      kind: 'diplomatic_action',
+      action: 'declare_war',
+      targetFaction: 'CHU',
+    };
+    expect(validateOrder(general, ctx, order).issues[0]?.code).toBe('ROLE_FORBIDDEN');
+
+    const ruler = newGame('HUN', 'ruler', 'diplomacy-limit');
+    ruler.pendingOrders = [order];
+    const second = validateOrder(ruler, ctx, { ...order, orderId: 'diplomacy-auth-2', action: 'offer_peace', targetFaction: 'YONG' });
+    expect(second.ok).toBe(false);
+  });
+});
+
 describe('人物目标与自主行动', () => {
   it('地方主官会付出银钱整饬低秩序地区，并记录行动前后事实', () => {
     const state = newGame('HUN', 'ruler', 'goal-governor');
@@ -677,7 +808,7 @@ describe('存档快照', () => {
     expect(restored.date.label).toBe(result.state.date.label);
     expect(restored.armies.length).toBe(result.state.armies.length);
     expect(restored.factions.YONG.resources).toEqual(result.state.factions.YONG.resources);
-    expect(restored.schemaVersion).toBe(5);
+    expect(restored.schemaVersion).toBe(6);
   });
 });
 
