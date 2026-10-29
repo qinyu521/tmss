@@ -90,6 +90,8 @@ export interface ArmyView {
   commanderCommand?: number;
   commanderStrategy?: number;
   nodeId: string;
+  /** 当前地图上的物理位置，可为州府或道路中途节点；行政归属仍由 nodeId 表示。 */
+  positionNodeId?: string;
   regionName: string;
   own: boolean;
   status: Army['status'];
