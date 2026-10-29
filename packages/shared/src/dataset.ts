@@ -239,16 +239,19 @@ export function buildInitialArmies(ctx: DerivedContext): Army[] {
 
       const units: Army['units'] = [];
       let allocated = 0;
+      // 两个成建制精锐编制；每个兵种的规模由 UNIT_PROFILES.initialFormationSize 决定。
+      // 精锐仍从军区原有总兵力中扣出，不增加国家名册兵力。
       const slots = [
-        { profile: profiles[(di * 2) % profiles.length], ratio: 0.0075 },
-        { profile: profiles[(di * 2 + 1) % profiles.length], ratio: 0.0045 },
+        { profile: profiles[(di * 2) % profiles.length] },
+        { profile: profiles[(di * 2 + 1) % profiles.length] },
       ];
       for (const slot of slots) {
         if (!slot.profile) continue;
         const remaining = remainingCap.get(slot.profile.unitId) ?? 0;
         const desired = Math.min(
           remaining,
-          Math.round((allocation.initial_force_count * slot.ratio) / 100) * 100,
+          slot.profile.initialFormationSize,
+          Math.max(0, allocation.initial_force_count - allocated),
         );
         if (desired <= 0) continue;
         remainingCap.set(slot.profile.unitId, remaining - desired);
