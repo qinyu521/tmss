@@ -4,6 +4,13 @@
  */
 export const BALANCE = {
   turnDays: 7,
+  /** 将领忠诚与倒戈危机；金额为两，忠诚为 0-100。 */
+  militaryLoyalty: {
+    rewardCost: 12_000,
+    rewardGain: 25,
+    defectionThreshold: 15,
+    minimumDefectionTroops: 5_000,
+  },
   /** 每千人每周粮耗（石） */
   grainPerThousandPerWeek: 120,
   /** 每千人每周盐耗（担） */
