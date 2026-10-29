@@ -820,6 +820,138 @@ describe('战略节点后勤补给', () => {
   });
 });
 
+describe('多回合围城与解围', () => {
+  function capitalSiegeScenario(gameId: string) {
+    const state = newGame('HUN', 'ruler', gameId);
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    state.diplomacy['HUN|YONG'] = -40;
+    const adjacency = buildMapAdjacency(ctx);
+    const seedNodes = new Map(ctx.seed.map_nodes.map((node) => [node.node_id, node]));
+    const pair = Object.entries(adjacency)
+      .filter(([from]) => seedNodes.get(from)?.node_type === '州府/主城')
+      .flatMap(([from, links]) => links
+        .filter((link) => seedNodes.get(link.to)?.node_type === '州府/主城')
+        .map((link) => ({ sourceNodeId: from, targetNodeId: link.to, cost: link.cost })))
+      .sort((a, b) => a.cost - b.cost || a.sourceNodeId.localeCompare(b.sourceNodeId))
+      .find(({ sourceNodeId, targetNodeId }) => sourceNodeId !== targetNodeId);
+    if (!pair) throw new Error('种子地图缺少相邻州府主城道路。');
+    const sourceSeed = seedNodes.get(pair.sourceNodeId)!;
+    const targetSeed = seedNodes.get(pair.targetNodeId)!;
+    const sourceRegionId = ctx.territories.find((region) => region.region === sourceSeed.region)?.region_id;
+    const targetRegionId = ctx.territories.find((region) => region.region === targetSeed.region)?.region_id;
+    if (!sourceRegionId || !targetRegionId) throw new Error('测试主城缺少对应州府。');
+
+    for (const region of Object.values(state.regions)) region.faction = 'HUN';
+    for (const node of Object.values(state.mapNodes ?? {})) node.faction = 'HUN';
+    state.regions[targetRegionId].faction = 'YONG';
+    const source = state.mapNodes![pair.sourceNodeId];
+    const target = state.mapNodes![pair.targetNodeId];
+    source.faction = 'HUN';
+    target.faction = 'YONG';
+    target.fortification = 60;
+    target.garrison = 60_000;
+    target.supplyLevel = 70;
+    state.regions[targetRegionId].fortification = 60;
+    state.regions[targetRegionId].garrison = 60_000;
+    state.regions[targetRegionId].garrisoned = true;
+
+    const army = clone(state.armies.find((item) => item.faction === 'HUN')!);
+    army.nodeId = sourceRegionId;
+    army.mapNodeId = source.nodeId;
+    army.status = 'idle';
+    army.stance = 'defend';
+    army.supply = 95;
+    army.fatigue = 0;
+    army.morale = 90;
+    army.training = 85;
+    army.path = [];
+    army.hopCosts = [];
+    army.mapPath = [];
+    army.mapHopCosts = [];
+    army.targetRegionId = null;
+    army.targetMapNodeId = null;
+    army.marchDaysTotal = 0;
+    army.marchDaysLeft = 0;
+    army.currentHopDaysTotal = 0;
+    army.mapCurrentHopDaysTotal = 0;
+    army.levies = 140_000;
+    army.troops = army.levies + army.units.reduce((sum, unit) => sum + unit.count, 0);
+    state.armies = [army];
+    state.pendingOrders = [{
+      orderId: 'siege-start',
+      kind: 'move_army',
+      armyId: army.armyId,
+      targetRegionId,
+      targetMapNodeId: pair.targetNodeId,
+    }];
+    return { state, sourceNodeId: pair.sourceNodeId, targetNodeId: pair.targetNodeId, targetRegionId, armyId: army.armyId };
+  }
+
+  it('攻入高城防主城会建立围城，下一回合才开始消耗城防、守军和储备', () => {
+    const scenario = capitalSiegeScenario('siege-start-progress');
+    const first = runTurn(scenario.state, ctx);
+    const node = first.state.mapNodes![scenario.targetNodeId];
+    const army = first.state.armies.find((item) => item.armyId === scenario.armyId);
+    expect(node.siege).toEqual(expect.objectContaining({
+      besiegerFaction: 'HUN',
+      besiegerArmyIds: [scenario.armyId],
+      startedTurn: 1,
+      progress: 0,
+      turns: 0,
+    }));
+    expect(node.faction).toBe('YONG');
+    expect(army?.mapNodeId).toBe(scenario.sourceNodeId);
+    expect(army?.stance).toBe('siege');
+    expect(army?.targetMapNodeId).toBe(scenario.targetNodeId);
+    expect(first.report.events.some((event) => event.payload?.action === 'siege_started')).toBe(true);
+
+    const second = runTurn(first.state, ctx);
+    const progressed = second.state.mapNodes![scenario.targetNodeId];
+    expect(progressed.siege?.progress).toBeGreaterThan(0);
+    expect(progressed.siege?.turns).toBe(1);
+    expect(progressed.fortification).toBeLessThan(60);
+    expect(progressed.garrison).toBeLessThan(60_000);
+    expect(progressed.supplyLevel).toBeLessThan(72);
+    expect(second.report.events.some((event) => event.payload?.action === 'siege_progress')).toBe(true);
+  });
+
+  it('围城突破后仍通过既有战斗规则攻城，不直接强制占领', () => {
+    const scenario = capitalSiegeScenario('siege-assault-capture');
+    const first = runTurn(scenario.state, ctx);
+    const next = first.state;
+    const node = next.mapNodes![scenario.targetNodeId];
+    const region = next.regions[scenario.targetRegionId];
+    node.siege!.progress = 99;
+    node.garrison = 0;
+    node.fortification = 0;
+    node.supplyLevel = 0;
+    region.garrison = 0;
+    region.fortification = 0;
+    region.garrisoned = false;
+    next.date.turn = Math.max(2, next.date.turn);
+
+    const result = runTurn(next, ctx);
+    expect(result.state.mapNodes![scenario.targetNodeId].siege).toBeNull();
+    expect(result.report.events.some((event) => event.payload?.action === 'siege_assault')).toBe(true);
+    expect(result.report.events.some((event) => event.type === 'battle' && event.targetId === scenario.targetRegionId)).toBe(true);
+    expect(result.state.regions[scenario.targetRegionId].faction).toBe('HUN');
+    expect(result.state.mapNodes![scenario.targetNodeId].faction).toBe('HUN');
+  });
+
+  it('旧版 v7 存档迁移添加空围城状态，且不覆盖节点控制者', () => {
+    const state = newGame('HUN', 'ruler', 'siege-v7-migration');
+    state.schemaVersion = 7;
+    const target = Object.values(state.mapNodes!)[0];
+    target.faction = 'CHU';
+    delete target.siege;
+    const migrated = migrateState(state, seed.characters, seed);
+    expect(migrated.schemaVersion).toBe(8);
+    expect(migrated.mapNodes![target.nodeId].faction).toBe('CHU');
+    expect(migrated.mapNodes![target.nodeId].siege).toBeNull();
+    expect(migrateState(migrated, seed.characters, seed).mapNodes![target.nodeId].siege).toBeNull();
+  });
+});
+
 describe('NPC 前线防御调兵', () => {
   it('敌军压到守备薄弱的友方主城时，NPC 会派另一支军团及时增援', () => {
     const state = newGame('HUN', 'ruler', 'npc-frontline-defense');
