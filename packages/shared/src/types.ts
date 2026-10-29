@@ -726,6 +726,14 @@ export interface OrderValidation {
   preview?: string;
 }
 
+export interface GameOutcome {
+  status: 'victory' | 'defeat';
+  winner: FactionKey;
+  reason: string;
+  turn: number;
+  dateLabel: string;
+}
+
 export interface GameState {
   schemaVersion: number;
   gameId: string;
@@ -763,6 +771,8 @@ export interface GameState {
     tribalRefusal: boolean;
     houseBoycott: boolean;
   };
+  /** 统一/覆灭后写入；旧存档缺失视为仍在进行。 */
+  outcome?: GameOutcome;
 }
 
 export type GameEventType =
@@ -782,7 +792,8 @@ export type GameEventType =
   | 'npc_action'
   | 'succession'
   | 'scheme'
-  | 'chronicle';
+  | 'chronicle'
+  | 'endgame';
 
 export interface GameEvent {
   eventId: string;

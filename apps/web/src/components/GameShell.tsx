@@ -24,6 +24,12 @@ export default function GameShell() {
   return (
     <div className="app-shell">
       <TopBar />
+      {view?.outcome && (
+        <div className={`endgame-banner ${view.outcome.status}`}>
+          <div className="t">{view.outcome.status === 'victory' ? '天下一统' : '社稷倾覆'}</div>
+          <div className="d">{view.outcome.reason} · {view.outcome.dateLabel}</div>
+        </div>
+      )}
       <div className="workspace">
         <LeftRail />
         <MapView />

@@ -27,6 +27,8 @@ export interface BattleOutcome {
     maneuverBonus?: number;
     ambushBonus?: number;
     diversionBonus?: number;
+    attackerStance?: Army['stance'];
+    defenderStance?: Army['stance'];
   };
 }
 
@@ -95,9 +97,27 @@ function armyPower(
     state.factions[army.faction].resources.salt <= 0 ? 1 - BALANCE.economy.saltShortageMorale / 100 : 1;
   const ironPenalty =
     state.factions[army.faction].resources.iron <= 0 ? BALANCE.economy.ironShortageEquipment : 1;
+  const stance = stanceModifier(army, side);
   const multiplier =
-    morale * training * supply * fatigue * command * cohesion * saltPenalty * ironPenalty * scale;
+    morale * training * supply * fatigue * command * cohesion * saltPenalty * ironPenalty * scale * stance;
   return { power: raw * multiplier, troops };
+}
+
+/** 姿态不是摆设：行军突击、驻防结阵与溃退都会改变战力。 */
+function stanceModifier(army: Army, side: 'attack' | 'defense'): number {
+  if (side === 'attack') {
+    if (army.stance === 'march') return 1 + BALANCE.battle.stanceMarchAttack;
+    if (army.stance === 'retreat') return 1 - BALANCE.battle.stanceRetreatPenalty;
+    return 1;
+  }
+  if (army.stance === 'defend') return 1 + BALANCE.battle.stanceDefendDefense;
+  if (army.stance === 'march') return 1 - BALANCE.battle.stanceMarchVulnerable;
+  if (army.stance === 'retreat') return 1 - BALANCE.battle.stanceRetreatPenalty;
+  return 1;
+}
+
+function stanceLabel(stance: Army['stance']): string {
+  return stance === 'march' ? '行军突击' : stance === 'defend' ? '结阵驻防' : stance === 'siege' ? '围城' : '溃退';
 }
 
 export function resolveBattle(
@@ -178,6 +198,7 @@ export function resolveBattle(
       ? `${attacker.name}于${region.name}击破守军，双方战损约 ${attackerLosses.toLocaleString()} 对 ${(defenderLosses + garrisonLosses).toLocaleString()} 人。`
       : `${attacker.name}在${region.name}受挫，被迫退却，战损约 ${attackerLosses.toLocaleString()} 人。`) +
     (trickLabels.length ? `战场变量：${trickLabels.join('、')}。` : '') +
+    `阵势：${stanceLabel(attacker.stance)}${defender ? `对${stanceLabel(defender.stance)}` : '对州兵守备'}。` +
     `统兵：${attacker.commanderName}（统率 ${attackerCommander?.command ?? '?'} / 谋略 ${attackerCommander?.strategy ?? '?'}）` +
     (defender
       ? ` 对 ${defender.commanderName}（统率 ${defenderCommander?.command ?? '?'} / 谋略 ${defenderCommander?.strategy ?? '?'}）。`
@@ -222,6 +243,8 @@ export function resolveBattle(
       maneuverBonus,
       ambushBonus,
       diversionBonus,
+      attackerStance: attacker.stance,
+      defenderStance: defender?.stance,
     },
   };
 }

@@ -511,6 +511,9 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   app.post('/api/games/:id/orders', async (req, reply) => {
     const state = getGameState(db, String((req.params as any).id), seed.characters, seed);
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
+    if (state.outcome) {
+      return reply.code(409).send({ error: 'GAME_OVER', message: state.outcome.reason });
+    }
     const parsed = ordersBodySchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.issues.map((i) => i.message).join(';') });
@@ -554,6 +557,9 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   app.delete('/api/games/:id/orders/:orderId', async (req, reply) => {
     const state = getGameState(db, String((req.params as any).id), seed.characters, seed);
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
+    if (state.outcome) {
+      return reply.code(409).send({ error: 'GAME_OVER', message: state.outcome.reason });
+    }
     const orderId = String((req.params as any).orderId);
     state.pendingOrders = state.pendingOrders.filter((o) => o.orderId !== orderId);
     withTransaction(db, () => saveGameState(db, state, { expectedTurn: state.date.turn }));
@@ -563,6 +569,9 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
   app.post('/api/games/:id/turn', async (req, reply) => {
     const state = getGameState(db, String((req.params as any).id), seed.characters, seed);
     if (!state) return reply.code(404).send({ error: 'NOT_FOUND', message: '游戏不存在。' });
+    if (state.outcome) {
+      return reply.code(409).send({ error: 'GAME_OVER', message: state.outcome.reason });
+    }
     // 结算、事件、史官、自动存档必须同进同退；中途失败回滚，避免脏档。
     const result = withTransaction(db, () => {
       const result = runTurn(state, ctx);

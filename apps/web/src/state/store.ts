@@ -239,6 +239,7 @@ export const useApp = create<AppState>((set, get) => ({
         events: [...res.report.events].reverse(),
         chronicle: res.report.chronicle.concat(get().chronicle),
         busy: false,
+        ordersOpen: res.view.outcome ? false : get().ordersOpen,
       });
       const saves = await api.saves(id);
       set({ saves: saves.items });
@@ -303,7 +304,13 @@ export const useApp = create<AppState>((set, get) => ({
   toggleLabels: () => set({ labels: !get().labels }),
   setQuality: (quality) => set({ quality }),
   setOrdersOpen: (ordersOpen) => set({ ordersOpen }),
-  openOrders: (preset = null) => set({ ordersOpen: true, orderPreset: preset }),
+  openOrders: (preset = null) => {
+    if (get().view?.outcome) {
+      get().notify('天下已定，不能再下达命令。', 'info');
+      return;
+    }
+    set({ ordersOpen: true, orderPreset: preset });
+  },
   notify: (message, kind = 'info') => {
     set({ toast: { message, kind } });
     setTimeout(() => {

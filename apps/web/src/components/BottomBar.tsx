@@ -43,7 +43,7 @@ export default function BottomBar() {
           {tab === 'orders' ? `待结算 ${view.pendingOrders.length} 条` : tab === 'report' ? `近期 ${events.length} 条` : `史官 ${chronicle.length} 条`}
         </div>
         <div style={{ marginTop: 'auto', display: 'flex', gap: 6 }}>
-          <button className="btn small primary" onClick={() => openOrders()}>下达命令</button>
+          <button className="btn small primary" disabled={Boolean(view.outcome)} onClick={() => openOrders()}>下达命令</button>
         </div>
       </div>
 

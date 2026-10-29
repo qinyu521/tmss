@@ -1030,3 +1030,85 @@ describe('NPC 命令校验', () => {
     expect(rest.ok).toBe(true);
   });
 });
+
+describe('终局、姿态与先手', () => {
+  it('州郡尽归玩家时判定胜利并写入终局事件', () => {
+    const state = newGame('YONG', 'ruler', 'endgame-victory');
+    for (const region of Object.values(state.regions)) region.faction = 'YONG';
+    state.armies = state.armies.filter((army) => army.faction === 'YONG');
+
+    const result = runTurn(state, ctx);
+    expect(result.state.outcome?.status).toBe('victory');
+    expect(result.state.outcome?.winner).toBe('YONG');
+    const endgame = result.report.events.find((event) => event.type === 'endgame');
+    expect(endgame).toBeTruthy();
+    expect(endgame!.title).toContain('一统');
+    expect(buildPlayerView(result.state, ctx).outcome?.status).toBe('victory');
+  });
+
+  it('玩家失尽州郡与野战军时判定覆灭', () => {
+    const state = newGame('CHU', 'ruler', 'endgame-defeat');
+    for (const region of Object.values(state.regions)) region.faction = 'YONG';
+    state.armies = state.armies.filter((army) => army.faction === 'YONG');
+
+    const result = runTurn(state, ctx);
+    expect(result.state.outcome?.status).toBe('defeat');
+    expect(result.state.outcome?.winner).toBe('YONG');
+    expect(result.report.events.some((event) => event.type === 'endgame')).toBe(true);
+  });
+
+  it('驻防姿态提升守军战力，行军姿态提升突击战力', () => {
+    const base = newGame('YONG', 'ruler', 'stance-battle');
+    const attacker = base.armies.find((army) => army.faction === 'YONG')!;
+    const defender = base.armies.find((army) => army.faction === 'CHU')!;
+    const region = base.regions['CHU-REG01'];
+    defender.nodeId = region.regionId;
+
+    const run = (attackStance: 'march' | 'defend', defendStance: 'march' | 'defend') => {
+      const state = clone(base);
+      const atk = state.armies.find((army) => army.armyId === attacker.armyId)!;
+      const def = state.armies.find((army) => army.armyId === defender.armyId)!;
+      atk.stance = attackStance;
+      def.stance = defendStance;
+      return resolveBattle(state, ctx, atk, def, state.regions[region.regionId], 12345);
+    };
+
+    const fortified = run('march', 'defend');
+    const caughtMarching = run('march', 'march');
+    expect(fortified.defenderPower).toBeGreaterThan(caughtMarching.defenderPower);
+
+    const restedAttack = run('defend', 'defend');
+    expect(fortified.attackerPower).toBeGreaterThan(restedAttack.attackerPower);
+    expect(fortified.replay.attackerStance).toBe('march');
+    expect(fortified.replay.defenderStance).toBe('defend');
+  });
+
+  it('签筹顺序可复现，且玩家不会永远先手', () => {
+    const base = newGame('HUN', 'ruler', 'initiative');
+    const summaryOf = (input: GameState) => {
+      const turn = runTurn(clone(input), ctx);
+      return turn.report.events.find((event) => event.type === 'turn_start')!.summary;
+    };
+    expect(summaryOf(base)).toBe(summaryOf(base));
+
+    let state = clone(base);
+    const firsts = new Set<string>();
+    for (let i = 0; i < 8; i += 1) {
+      const result = runTurn(state, ctx);
+      const summary = result.report.events.find((event) => event.type === 'turn_start')!.summary;
+      const match = summary.match(/本旬签筹：(.+?)；/);
+      expect(match).toBeTruthy();
+      firsts.add(match![1].split(' → ')[0]);
+      state = result.state;
+    }
+    expect([...firsts].some((first) => !first.includes('（你）'))).toBe(true);
+  });
+
+  it('楚军战马开局充足且常规周耗不会迅速枯竭', () => {
+    const state = newGame('CHU');
+    const totals = computeEconomy(state, ctx).CHU;
+    expect(state.factions.CHU.resources.horses).toBeGreaterThanOrEqual(1_500);
+    expect(totals.net.horses).toBeGreaterThanOrEqual(-10);
+    expect(shortageTags(state, 'CHU')).not.toContain('缺战马');
+  });
+});

@@ -9,6 +9,7 @@ const TYPE_LABELS: Record<string, string> = {
   turn_start: '旬始', season: '时令', resource: '账本', shortage: '短缺', order_accepted: '政令', order_rejected: '驳回',
   army_move: '行军', battle: '战斗', occupation: '易帜', politics: '朝局', succession: '夺嫡',
   scheme: '计谋', recruit: '征兵', intel: '情报', npc_action: '他国动向', diplomacy: '外交', chronicle: '史官',
+  endgame: '终局',
 };
 
 export default function EventsPanel() {

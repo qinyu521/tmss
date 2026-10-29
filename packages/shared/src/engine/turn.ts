@@ -31,6 +31,7 @@ import { runLifecycle } from './lifecycle.js';
 import { refreshCharacterGoals, advanceCharacterGoals } from './goals.js';
 import { expireDiplomaticTreaties } from './diplomacy.js';
 import { buildChronicle } from './chronicle.js';
+import { evaluateOutcome } from './endgame.js';
 import { clamp, factionNameOf } from './state.js';
 
 export interface TurnResult {
@@ -68,16 +69,23 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
     );
   }
 
+  // 每旬以确定性签筹决定势力行动顺序，玩家不保证先手；同一存档重放结果一致。
+  const initiative = initiativeScores(state, ctx);
+  const initiativeLabel = [...FACTION_KEYS]
+    .sort((a, b) => initiative[b] - initiative[a] || a.localeCompare(b))
+    .map((key) => `${FACTION_SHORT[key]}${key === state.factionKey ? '（你）' : ''}`)
+    .join(' → ');
+
   events.push(
     emitEvent(state, {
       type: 'turn_start',
       title: `${turnLabel} · 回合始`,
-      summary: `${seasonInfo.desc}，${seasonInfo.hint}。各势力在同一回合内提交命令，按规则统一结算；玩家不能无限抢先行动。`,
+      summary: `${seasonInfo.desc}，${seasonInfo.hint}。本旬签筹：${initiativeLabel}；公开外交先行生效，其余命令依签筹结算，玩家不再固定先手。`,
       actorId: 'system',
       actorName: '史官',
       factionKey: state.factionKey,
       targetLabel: '天下',
-      evidence: '一回合 = 7 天，命令按序结算',
+      evidence: '一回合 = 7 天；签筹由存档种子确定性生成，可复现',
       source: 'engine',
     }),
   );
@@ -85,54 +93,77 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   // 0.5) 盟约到期在本回合命令提交前结算；历史条约保留为 expired。
   expireDiplomaticTreaties(state, events);
 
-  // 1) 玩家命令：先校验，再按提交顺序结算
-  for (const order of state.pendingOrders) {
-    const check = validateOrder(state, ctx, order);
-    if (!check.ok) {
-      rejected.push({ orderId: order.orderId, issues: check.issues });
-      events.push(
-        emitEvent(state, {
-          type: 'order_rejected',
-          title: '命令被驳回',
-          summary: check.issues.map((i) => i.message).join('；'),
-          actorId: state.playerPersonId,
-          actorName: state.playerPersonName,
-          factionKey: state.factionKey,
-          targetId: order.orderId,
-          targetLabel: order.kind,
-          after: { issues: check.issues },
-          evidence: '后端权限/资源/地形校验',
-          source: 'engine',
-        }),
-      );
+  const rejectPlayerOrder = (order: Order, issues: OrderIssue[]) => {
+    rejected.push({ orderId: order.orderId, issues });
+    events.push(
+      emitEvent(state, {
+        type: 'order_rejected',
+        title: '命令被驳回',
+        summary: issues.map((i) => i.message).join('；'),
+        actorId: state.playerPersonId,
+        actorName: state.playerPersonName,
+        factionKey: state.factionKey,
+        targetId: order.orderId,
+        targetLabel: order.kind,
+        after: { issues },
+        evidence: '后端权限/资源/地形校验',
+        source: 'engine',
+      }),
+    );
+  };
+
+  // 1) 公开外交宣示在旬初先行生效，NPC 才能对同回合的宣战/结盟作出反应。
+  type ScheduledOrder = { order: Order; factionKey: FactionKey; npc: boolean; seq: number };
+  const scheduled: ScheduledOrder[] = [];
+  for (const [seq, order] of state.pendingOrders.entries()) {
+    if (order.kind === 'diplomatic_action') {
+      const check = validateOrder(state, ctx, order);
+      if (check.ok) applyOrder(state, ctx, order, events, 'player_order');
+      else rejectPlayerOrder(order, check.issues);
       continue;
     }
-    applyOrder(state, ctx, order, events, 'player_order');
+    scheduled.push({ order, factionKey: state.factionKey, npc: false, seq });
+  }
+
+  // 其余国内外命令与 NPC 意图基于同一份局面生成，再按签筹交错结算，避免玩家固定先手。
+  const npcOrders = generateNpcOrders(state, ctx);
+  for (const order of npcOrders) {
+    const factionKey = npcFactionOf(order);
+    if (!factionKey) continue;
+    scheduled.push({ order, factionKey, npc: true, seq: scheduled.length });
+  }
+  scheduled.sort(
+    (a, b) => initiative[b.factionKey] - initiative[a.factionKey] || a.seq - b.seq,
+  );
+
+  for (const entry of scheduled) {
+    const { order } = entry;
+    if (!entry.npc) {
+      const check = validateOrder(state, ctx, order);
+      if (!check.ok) {
+        rejectPlayerOrder(order, check.issues);
+        continue;
+      }
+      applyOrder(state, ctx, order, events, 'player_order');
+      continue;
+    }
+    if (!npcAffordable(state, order)) continue;
+    // NPC 同样必须通过权限/资源/路径校验，不能绕过玩家命令使用的规则。
+    const check = validateOrderForFaction(state, ctx, order, entry.factionKey);
+    if (!check.ok) continue;
+    applyOrder(state, ctx, order, events, 'npc_ai', entry.factionKey);
   }
 
   // 1.5) 关键人物刷新持久化目标；目标用于 NPC 决策，真实效果仍在后续规则结算。
   refreshCharacterGoals(state, ctx, events);
 
-  // 2) NPC 行动
-  const npcOrders = generateNpcOrders(state, ctx);
-  const npcEventStart = events.length;
-  for (const order of npcOrders) {
-    const factionKey = npcFactionOf(order);
-    if (!factionKey) continue;
-    if (!npcAffordable(state, order)) continue;
-    // NPC 同样必须通过权限/资源/路径校验，不能绕过玩家命令使用的规则。
-    const check = validateOrderForFaction(state, ctx, order, factionKey);
-    if (!check.ok) continue;
-    applyOrder(state, ctx, order, events, 'npc_ai', factionKey);
-  }
   // NPC 的内部命令默认不可见；玩家只能通过斥候、烽燧与战报获知。
-  for (let i = npcEventStart; i < events.length; i++) {
-    if (events[i].source === 'npc_ai' && events[i].factionKey !== state.factionKey) {
-      // 对玩家公开的外交使团/停战/宣战结果必须可见；其他 NPC 内政与军令仍受战争迷雾保护。
-      const diplomacyTouchesPlayer = events[i].type === 'diplomacy' &&
-        (events[i].factionKey === state.factionKey || events[i].targetId === state.factionKey);
-      if (!diplomacyTouchesPlayer) events[i].visibleToPlayer = false;
-    }
+  for (const event of events) {
+    if (event.source !== 'npc_ai' || event.factionKey === state.factionKey) continue;
+    // 对玩家公开的外交使团/停战/宣战结果必须可见；其他 NPC 内政与军令仍受战争迷雾保护。
+    const diplomacyTouchesPlayer = event.type === 'diplomacy' &&
+      (event.factionKey === state.factionKey || event.targetId === state.factionKey);
+    if (!diplomacyTouchesPlayer) event.visibleToPlayer = false;
   }
 
   // 2.5) 重要人物按目标、阈值和四回合冷却执行自主行动。
@@ -160,6 +191,31 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
     state.factions[key].statusTags = Array.from(new Set(tags));
   }
 
+  // 7.5) 终局判定：州郡尽归一家，或玩家失尽州郡与野战军。
+  let outcome = state.outcome ?? null;
+  if (!outcome) {
+    const evaluated = evaluateOutcome(state);
+    if (evaluated) {
+      outcome = evaluated;
+      state.outcome = evaluated;
+      events.push(
+        emitEvent(state, {
+          type: 'endgame',
+          title: evaluated.status === 'victory' ? '天下一统' : '社稷倾覆',
+          summary: evaluated.reason,
+          actorId: 'system',
+          actorName: '史官',
+          factionKey: evaluated.winner,
+          targetLabel: '天下',
+          after: { status: evaluated.status, winner: evaluated.winner },
+          evidence: `终局判定于 ${evaluated.dateLabel}，按州郡归属与可战之兵统计`,
+          source: 'engine',
+          visibleToPlayer: true,
+        }),
+      );
+    }
+  }
+
   // 8) 史官记录（事实层与文学层分离）
   const chronicle = buildChronicle(state, events, turn, turnLabel);
 
@@ -169,9 +225,12 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   state.pendingOrders = [];
 
   const battles = events.filter((e) => e.type === 'battle');
+  const outcomeSuffix = outcome
+    ? `；${outcome.status === 'victory' ? '天下一统' : '社稷倾覆'}（${FACTION_SHORT[outcome.winner]}）`
+    : '';
   const summary =
     `${turnLabel}结算：事件 ${events.length} 条，战斗 ${battles.length} 次，` +
-    `驳回命令 ${rejected.length} 条；新回合为 ${state.date.label}。`;
+    `驳回命令 ${rejected.length} 条${outcomeSuffix}；新回合为 ${state.date.label}。`;
   const report: TurnReport = {
     turn,
     dateLabel: turnLabel,
@@ -186,6 +245,32 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
 function npcFactionOf(order: Order): FactionKey | undefined {
   const match = order.orderId.match(/^npc-(HUN|YONG|CHU)-/);
   return (match?.[1] as FactionKey | undefined) ?? undefined;
+}
+
+/** 签筹 = 确定性批次 + 君主统率/谋略修正；同档重放顺序完全一致。 */
+function initiativeScores(state: GameState, ctx: DerivedContext): Record<FactionKey, number> {
+  const scores = {} as Record<FactionKey, number>;
+  for (const key of FACTION_KEYS) {
+    const leaderId =
+      key === state.factionKey
+        ? state.playerPersonId
+        : ctx.seed.characters.find(
+            (character) => character.faction_key === key && character.identity_type === '君主',
+          )?.person_id;
+    const leader = leaderId ? ctx.charactersById[leaderId] : undefined;
+    const lot = hashString(`${state.seed}-init-${state.date.turn}-${key}`) % 1000;
+    scores[key] = lot + (leader?.command ?? 50) * 2 + (leader?.strategy ?? 50);
+  }
+  return scores;
+}
+
+/** 行军与战斗按种子顺序处理，避免玩家部队固定先动。 */
+function seededArmyOrder(state: GameState, armies: Army[]): Army[] {
+  return [...armies].sort(
+    (a, b) =>
+      hashString(`${state.seed}-move-${state.date.turn}-${a.armyId}`) -
+      hashString(`${state.seed}-move-${state.date.turn}-${b.armyId}`),
+  );
 }
 
 function npcAffordable(state: GameState, order: Order): boolean {
@@ -219,7 +304,7 @@ function npcAffordable(state: GameState, order: Order): boolean {
 
 /** 处理 72 节点路线；规则结算仍是确定性的，附属据点战只改节点控制权。 */
 function processMapMovement(state: GameState, ctx: DerivedContext, events: GameEvent[], season: ReturnType<typeof seasonOf>): void {
-  const armies = state.armies.filter((army) => (army.mapPath?.length ?? 0) > 0);
+  const armies = seededArmyOrder(state, state.armies.filter((army) => (army.mapPath?.length ?? 0) > 0));
   for (const army of armies) {
     if (!state.armies.some((item) => item.armyId === army.armyId)) continue;
     let remainingDays = TURN_DAYS;
@@ -417,6 +502,8 @@ function handleStrategicNodeBattle(
         maneuverBonus: outcome.replay.maneuverBonus,
         ambushBonus: outcome.replay.ambushBonus,
         diversionBonus: outcome.replay.diversionBonus,
+        attackerStance: outcome.replay.attackerStance,
+        defenderStance: outcome.replay.defenderStance,
       },
       evidence: '战略节点 ' + node.nodeId + '；确定性战斗种子 ' + outcome.seed,
       source: 'engine',
@@ -504,7 +591,7 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
   // 夏季暑热：行军疲劳 +20%，匈奴骑兵不耐暑再 +15%（系数在 balance.seasons）
   const season = seasonOf(state.date.month);
   processMapMovement(state, ctx, events, season);
-  const movementArmies = state.armies.filter((a) => a.path.length > 0);
+  const movementArmies = seededArmyOrder(state, state.armies.filter((a) => a.path.length > 0));
   for (const army of movementArmies) {
     if (!state.armies.some((a) => a.armyId === army.armyId)) continue;
     let remainingDays = TURN_DAYS;
@@ -699,6 +786,8 @@ function handleBattle(
         maneuverBonus: outcome.replay.maneuverBonus,
         ambushBonus: outcome.replay.ambushBonus,
         diversionBonus: outcome.replay.diversionBonus,
+        attackerStance: outcome.replay.attackerStance,
+        defenderStance: outcome.replay.defenderStance,
       },
       evidence: `随机种子 ${outcome.seed}；兵力比 ${outcome.attackerPower} : ${outcome.defenderPower}，可重放`,
       source: 'engine',

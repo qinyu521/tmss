@@ -3,6 +3,7 @@ import type {
   FactionKey,
   FactionSpecial,
   GameDate,
+  GameOutcome,
   GameState,
   IntelEntry,
   Order,
@@ -164,6 +165,8 @@ export interface PlayerView {
   flags: GameState['flags'];
   /** 本国已故人物名单（他国讣闻只能通过事件/情报获知，不在此下发） */
   deceased: DeceasedEntry[];
+  /** 终局结果；未结束的存档不下发。 */
+  outcome?: GameOutcome;
   schemaVersion: number;
 }
 
@@ -388,6 +391,7 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
         deathCause: r.deathCause,
         deathTurn: r.deathTurn,
       })),
+    outcome: state.outcome,
     schemaVersion: state.schemaVersion,
   };
 }

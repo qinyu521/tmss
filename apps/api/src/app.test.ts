@@ -556,6 +556,39 @@ describe('API 集成', () => {
       StaleGameStateError,
     );
   });
+
+  it('终局后拒绝继续下达命令或推进回合', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/games',
+      payload: { factionKey: 'CHU', playerRole: 'ruler', seed: 6161 },
+    });
+    const gid = created.json().gameId as string;
+    const state = getGameState(built.db, gid, built.seed.characters, built.seed)!;
+    state.outcome = {
+      status: 'defeat',
+      winner: 'YONG',
+      reason: '测试用终局：社稷倾覆。',
+      turn: state.date.turn,
+      dateLabel: state.date.label,
+    };
+    saveGameState(built.db, state);
+
+    const view = await app.inject({ method: 'GET', url: `/api/games/${gid}` });
+    expect(view.json().view.outcome?.status).toBe('defeat');
+
+    const orders = await app.inject({
+      method: 'POST',
+      url: `/api/games/${gid}/orders`,
+      payload: { orders: [] },
+    });
+    expect(orders.statusCode).toBe(409);
+    expect(orders.json().error).toBe('GAME_OVER');
+
+    const turn = await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
+    expect(turn.statusCode).toBe(409);
+    expect(turn.json().error).toBe('GAME_OVER');
+  });
 });
 
 describe('LLM 史官（可选 Provider）', () => {

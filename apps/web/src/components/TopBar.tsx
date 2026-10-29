@@ -22,6 +22,7 @@ export default function TopBar() {
   const tags = view.own.statusTags;
   const low = (name: string) => tags.includes(name);
   const faction = FACTION_VISUALS[view.factionKey];
+  const ended = Boolean(view.outcome);
 
   return (
     <header className="topbar">
@@ -66,12 +67,12 @@ export default function TopBar() {
       </div>
 
       <div className="top-actions">
-        <button className="btn" onClick={() => openOrders()} disabled={busy}>
+        <button className="btn" onClick={() => openOrders()} disabled={busy || ended}>
           命令{view.pendingOrders.length > 0 ? `（${view.pendingOrders.length}）` : ''}
         </button>
         <button className="btn" onClick={() => void saveGame()} disabled={busy}>存档</button>
-        <button className="btn primary" onClick={() => void endTurn()} disabled={busy}>
-          {busy ? '推演中…' : '结束本旬'}
+        <button className="btn primary" onClick={() => void endTurn()} disabled={busy || ended}>
+          {ended ? '天下已定' : busy ? '推演中…' : '结束本旬'}
         </button>
       </div>
     </header>

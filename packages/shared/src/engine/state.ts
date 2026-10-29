@@ -199,7 +199,7 @@ export function createGame(
           ? ['缺粮', '缺盐', '铁料受限', '联盟协调度']
           : key === 'YONG'
             ? ['缺盐', '缺优质战马', '皇子争储']
-            : ['缺战马', '缺铁', '世家掣肘'],
+            : ['缺铁', '世家掣肘'],
       notes:
         key === 'HUN'
           ? fs.strategic_doctrine.strategic_rules.slice()

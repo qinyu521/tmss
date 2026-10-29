@@ -44,11 +44,14 @@ function mountedTroopsOf(state: GameState, key: FactionKey): number {
 export function shortageTags(state: GameState, key: FactionKey): string[] {
   const f = state.factions[key];
   const troops = Math.max(1, factionTroops(state, key));
+  const mounted = mountedTroopsOf(state, key);
+  const horseWeekly = perThousandDemand(mounted, BALANCE.horsePerThousandCavalry) + (key === 'HUN' ? 40 : 10);
   const tags: string[] = [];
   if (f.resources.grain < grainDemandForTroops(troops, 3)) tags.push('粮草紧张');
   if (f.resources.salt < perThousandDemand(troops, BALANCE.saltPerThousandPerWeek, 3)) tags.push('缺盐');
   if (f.resources.iron < perThousandDemand(troops, BALANCE.ironPerThousandPerWeek, 3)) tags.push('铁料不足');
-  if (f.resources.horses < troops * 0.02) tags.push('缺战马');
+  // 战马库存按骑兵实际周耗衡量；按全军人数会误伤以步兵为主的势力。
+  if (f.resources.horses < horseWeekly * 3) tags.push('缺战马');
   if (f.resources.cash < troops * 0.06 * 2) tags.push('军饷紧张');
   return tags;
 }

@@ -346,7 +346,7 @@ export default function RightPanel() {
           </div>
         </div>
         <div className="rp-foot">
-          <button className="btn small primary" onClick={() => openOrders()}>下达命令</button>
+          <button className="btn small primary" disabled={Boolean(view!.outcome)} onClick={() => openOrders()}>下达命令</button>
           <button className="btn small" onClick={() => setNav('characters')}>人物</button>
           <button className="btn small" onClick={() => setNav('events')}>史官</button>
         </div>

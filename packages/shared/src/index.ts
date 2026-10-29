@@ -17,5 +17,6 @@ export * from './engine/diplomacy.js';
 export * from './engine/orders.js';
 export * from './engine/npc.js';
 export * from './engine/chronicle.js';
+export * from './engine/endgame.js';
 export * from './engine/turn.js';
 export * from './engine/view.js';

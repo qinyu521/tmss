@@ -11,7 +11,7 @@ export const BALANCE = {
   /** 每千人每周铁耗（担，军械维护） */
   ironPerThousandPerWeek: 0.8,
   /** 每千骑兵每周战马补充/损耗（匹） */
-  horsePerThousandCavalry: 2.4,
+  horsePerThousandCavalry: 1.2,
   /** 每名士兵每周军饷（两） */
   cashPerSoldierPerWeek: 0.06,
   /** 每名新兵招募成本（两、粮、铁、盐） */
@@ -79,6 +79,11 @@ export const BALANCE = {
     winnerLossRate: 0.06,
     loserLossRate: 0.18,
     maxLossRate: 0.42,
+    /** 行军突击加成；驻防加成；行军遇袭减益；溃退减益 */
+    stanceMarchAttack: 0.06,
+    stanceDefendDefense: 0.08,
+    stanceMarchVulnerable: 0.05,
+    stanceRetreatPenalty: 0.15,
   },
 
   /** 经济与补给 */
@@ -99,7 +104,7 @@ export const BALANCE = {
     arrearsStability: 2,
     /** 每回合按辖区人口恢复兵员的比例；季节修正另行相乘。 */
     manpowerRegenPerPopulation: 0.0007,
-    horsesPerCavalryRatio: { HUN: 0.52, YONG: 0.16, CHU: 0.11 } as Record<string, number>,
+    horsesPerCavalryRatio: { HUN: 0.52, YONG: 0.16, CHU: 0.08 } as Record<string, number>,
   },
 
   /** 政治系统 */
@@ -234,5 +239,5 @@ export function grainDemandForTroops(troops: number, weeks = 1, modifier = 1): n
 export const INITIAL_RESOURCES: Record<string, { grain: number; salt: number; iron: number; horses: number; cash: number; manpower: number }> = {
   HUN: { grain: 78_000, salt: 820, iron: 740, horses: 26_400, cash: 118_000, manpower: 92_000 },
   YONG: { grain: 486_000, salt: 3_050, iron: 12_800, horses: 2_600, cash: 884_000, manpower: 268_000 },
-  CHU: { grain: 268_000, salt: 14_600, iron: 520, horses: 900, cash: 712_000, manpower: 148_000 },
+  CHU: { grain: 268_000, salt: 14_600, iron: 520, horses: 1_800, cash: 712_000, manpower: 148_000 },
 };
