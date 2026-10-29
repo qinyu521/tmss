@@ -31,7 +31,7 @@ import { runLifecycle } from './lifecycle.js';
 import { refreshCharacterGoals, advanceCharacterGoals } from './goals.js';
 import { expireDiplomaticTreaties } from './diplomacy.js';
 import { buildChronicle } from './chronicle.js';
-import { clamp, factionNameOf } from './state.js';
+import { clamp, factionNameOf, isCharacterAlive } from './state.js';
 
 export interface TurnResult {
   state: GameState;
@@ -136,6 +136,9 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
   // 3) 行军与战斗
   processMovement(state, ctx, events);
 
+  // 3.5) 低忠诚且与交战敌方存在强关系的军团可能倒戈；先给君主一整回合应对。
+  resolveCommanderDefectionThreats(state, ctx, events);
+
   // 4) 经济账本
   const economy = runEconomy(state, ctx, events);
 
@@ -176,6 +179,143 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
     rejectedOrders: rejected,
   };
   return { state, report, rejected };
+}
+
+
+/**
+ * 倒戈是规则事件而非随机剧情：低忠诚、明确跨阵营强关系、双方交战、
+ * 且驻地没有其他本方军团，缺一不可。先预警整回合，未能挽回才转移军团和州府。
+ */
+export function resolveCommanderDefectionThreats(
+  state: GameState,
+  ctx: DerivedContext,
+  events: GameEvent[],
+): void {
+  const rules = BALANCE.militaryLoyalty;
+  const turn = state.date.turn;
+  const activeCommanders = new Set(state.armies.map((army) => army.commanderId));
+  for (const runtime of Object.values(state.characters)) {
+    if (runtime.defectionWarningTurn === undefined || activeCommanders.has(runtime.personId)) continue;
+    runtime.defectionWarningTurn = undefined;
+    runtime.defectionTargetFaction = undefined;
+  }
+
+  const completedFactions = new Set<FactionKey>();
+  const armies = [...state.armies].sort(
+    (a, b) => a.faction.localeCompare(b.faction) || a.armyId.localeCompare(b.armyId),
+  );
+  for (const army of armies) {
+    if (completedFactions.has(army.faction)) continue;
+    if (army.status !== 'idle' || army.troops < rules.minimumDefectionTroops) continue;
+
+    const runtime = state.characters[army.commanderId];
+    const commander = ctx.charactersById[army.commanderId];
+    if (!runtime || !commander || !isCharacterAlive(state, commander.person_id)) continue;
+    const currentFaction = runtime.allegianceFaction ?? commander.faction_key;
+    if (currentFaction !== army.faction) continue;
+    // 已倒戈者不会在尚未实现“招抚归降”之前连续跳槽。
+    if (runtime.allegianceFaction && runtime.defectionWarningTurn === undefined) continue;
+
+    const region = state.regions[army.nodeId];
+    if (!region || region.faction !== army.faction) continue;
+    if (state.armies.some((other) =>
+      other.armyId !== army.armyId &&
+      other.faction === army.faction &&
+      other.nodeId === army.nodeId,
+    )) continue;
+
+    const loyalty = runtime.militaryLoyalty ?? commander.loyalty ?? 50;
+    if (loyalty > rules.defectionThreshold) {
+      runtime.defectionWarningTurn = undefined;
+      runtime.defectionTargetFaction = undefined;
+      continue;
+    }
+
+    const candidates = ctx.seed.relationships
+      .filter((relationship) =>
+        relationship.strength === '强' &&
+        (relationship.source_person_id === commander.person_id || relationship.target_person_id === commander.person_id),
+      )
+      .map((relationship) => {
+        const otherId = relationship.source_person_id === commander.person_id
+          ? relationship.target_person_id
+          : relationship.source_person_id;
+        const other = ctx.charactersById[otherId];
+        if (!other || !isCharacterAlive(state, otherId)) return null;
+        const otherFaction = state.characters[otherId]?.allegianceFaction ?? other.faction_key;
+        if (otherFaction === army.faction || !isAtWar(state.diplomacy, army.faction, otherFaction)) return null;
+        if (runtime.defectionTargetFaction && runtime.defectionTargetFaction !== otherFaction) return null;
+        return { faction: otherFaction, personId: otherId, personName: other.name };
+      })
+      .filter((candidate): candidate is { faction: FactionKey; personId: string; personName: string } => candidate !== null)
+      .sort((a, b) => a.faction.localeCompare(b.faction) || a.personId.localeCompare(b.personId));
+    const target = candidates[0];
+    if (!target) {
+      runtime.defectionWarningTurn = undefined;
+      runtime.defectionTargetFaction = undefined;
+      continue;
+    }
+
+    if (runtime.defectionWarningTurn === undefined || runtime.defectionTargetFaction !== target.faction) {
+      runtime.defectionWarningTurn = turn;
+      runtime.defectionTargetFaction = target.faction;
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: `${commander.name}倒戈预警`,
+        summary: `${commander.name}所部 ${army.name} 的军令忠诚仅 ${Math.round(loyalty)}；其与敌方人物 ${target.personName} 存在明确强关系。若下一回合仍未稳住军心，可能携军倒向${factionNameOf(ctx, target.faction)}。本回合仍可赏赐挽回。`,
+        actorId: commander.person_id,
+        actorName: commander.name,
+        factionKey: army.faction,
+        targetId: army.armyId,
+        targetLabel: army.name,
+        before: { loyalty },
+        after: { loyalty, warningTurn: turn, targetFaction: target.faction },
+        evidence: '规则触发：军令忠诚不高于阈值、强关系明确指向交战敌方、州府无其他本方军团驻守；预警至少延续一回合。',
+        source: 'engine',
+        visibleToPlayer: state.factionKey === army.faction,
+      }));
+      continue;
+    }
+
+    if (turn <= runtime.defectionWarningTurn) continue;
+    const previousFaction = army.faction;
+
+    army.faction = target.faction;
+    army.name = `${commander.name}降将军团`;
+    army.stance = 'defend';
+    army.status = 'idle';
+    clearMarch(army);
+    runtime.allegianceFaction = target.faction;
+    runtime.defectionWarningTurn = undefined;
+    runtime.defectionTargetFaction = undefined;
+    runtime.goal = 'idle';
+    runtime.goalTargetId = undefined;
+    runtime.goalReason = '因军令忠诚崩溃与敌方强关系，携所属军团倒戈。';
+
+    region.faction = target.faction;
+    region.order = clamp(region.order - 10);
+    region.loyalty = clamp(region.loyalty - 15);
+    for (const node of Object.values(state.mapNodes ?? {})) {
+      if (node.regionId === region.regionId) node.faction = target.faction;
+    }
+
+    completedFactions.add(previousFaction);
+    events.push(emitEvent(state, {
+      type: 'politics',
+      title: `${commander.name}携军倒戈`,
+      summary: `${commander.name}率 ${army.troops.toLocaleString()} 人转投${factionNameOf(ctx, target.faction)}，${region.name}州府随军易手；地方秩序 -10、民心 -15。该结果由预警与规则条件决定，不是随机战果。`,
+      actorId: commander.person_id,
+      actorName: commander.name,
+      factionKey: previousFaction,
+      targetId: army.armyId,
+      targetLabel: region.name,
+      before: { faction: previousFaction, regionFaction: previousFaction, troops: army.troops, loyalty },
+      after: { faction: target.faction, regionFaction: target.faction, troops: army.troops, order: region.order, loyalty: region.loyalty },
+      evidence: `倒戈结算：忠诚 ${Math.round(loyalty)}、目标势力 ${target.faction} 仍与本方交战；军团及其所在州府控制权一并转移。`,
+      source: 'engine',
+      visibleToPlayer: state.factionKey === previousFaction || state.factionKey === target.faction,
+    }));
+  }
 }
 
 function npcFactionOf(order: Order): FactionKey | undefined {
