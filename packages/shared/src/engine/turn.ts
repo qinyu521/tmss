@@ -16,7 +16,7 @@ import { FACTION_SHORT, makeDate, TURN_DAYS } from '../constants.js';
 import { emitEvent } from './events.js';
 import { applyOrder, validateOrder } from './orders.js';
 import { generateNpcOrders } from './npc.js';
-import { clearMarch, buildAdjacency } from './movement.js';
+import { clearMarch, buildAdjacency, isRouteWaypointId, ROUTE_WAYPOINT_PREFIX } from './movement.js';
 import { marchFatigueSeasonFactor, SEASON_LABELS, seasonOf } from './season.js';
 import { retreatRegion as retreatGuard, resolveBattle } from './battle.js';
 import { runEconomy, politicalTags, shortageTags } from './economy.js';
@@ -492,16 +492,42 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
         break;
       }
       remainingDays -= hop;
-      const nextRegionId = army.path.shift() as string;
+      const nextNodeId = army.path.shift() as string;
       army.hopCosts.shift();
       army.currentHopDaysTotal = army.hopCosts[0] ?? 0;
       army.marchDaysLeft = army.hopCosts.reduce((s, d) => s + d, 0);
-      const previous = army.nodeId;
-      army.nodeId = nextRegionId;
-      army.originRegionId = previous;
-      const region = state.regions[nextRegionId];
       army.supply = clamp(army.supply - hop * BALANCE.army.marchSupplyDrainPerDay);
       army.fatigue = clamp(army.fatigue + hop * BALANCE.army.fatigueMarchPerDay * marchFatigueSeasonFactor(season, army.faction));
+
+      if (isRouteWaypointId(nextNodeId)) {
+        army.positionNodeId = nextNodeId;
+        const edgeId = nextNodeId.slice(ROUTE_WAYPOINT_PREFIX.length);
+        const edge = ctx.edges.find((item) => item.edge_id === edgeId);
+        events.push(
+          emitEvent(state, {
+            type: 'army_move',
+            title: \`${army.name}推进至道路中段\`,
+            summary: \`${army.name}已沿\${edge?.route_type ?? '道路'}推进至中途节点，仍需 \${army.marchDaysLeft} 日抵达目标州府。\`,
+            actorId: army.commanderId,
+            actorName: army.commanderName,
+            factionKey: army.faction,
+            targetId: army.armyId,
+            targetLabel: edge?.route_type ?? '道路中段',
+            after: { positionNodeId: nextNodeId, remainingDays: army.marchDaysLeft },
+            evidence: '中途节点由长道路确定性拆分生成；不改变行政控制区或战斗结果',
+            source: 'engine',
+            visibleToPlayer: army.faction === state.factionKey,
+          }),
+        );
+        continue;
+      }
+
+      const nextRegionId = nextNodeId;
+      const previous = army.nodeId;
+      army.nodeId = nextRegionId;
+      army.positionNodeId = nextRegionId;
+      army.originRegionId = previous;
+      const region = state.regions[nextRegionId];
 
       if (region.faction !== army.faction) {
         if (isAtWar(state.diplomacy, army.faction, region.faction)) {

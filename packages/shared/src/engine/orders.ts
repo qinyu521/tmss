@@ -21,7 +21,7 @@ import { BALANCE } from '../balance.js';
 import { FACTION_SHORT, ROLE_ALLOWED_ORDERS, ROLE_LABEL, SCHEME_LABELS } from '../constants.js';
 import { emitEvent } from './events.js';
 import { clamp, isCharacterAlive } from './state.js';
-import { assignMarch, dayCostsFor, estimatePathDays, findPath, regionNameById } from './movement.js';
+import { assignMarch, dayCostsFor, estimatePathDays, expandLongRouteSegments, findPath, isRouteWaypointId, regionNameById, ROUTE_WAYPOINT_PREFIX } from './movement.js';
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
@@ -389,6 +389,15 @@ const SCHEME_COST: Record<SchemeKind, number> = {
   ambush: 4_000,
   feint: 5_000,
 };
+
+function routeNodeLabel(ctx: DerivedContext, nodeId: string): string {
+  if (isRouteWaypointId(nodeId)) {
+    const edgeId = nodeId.slice(ROUTE_WAYPOINT_PREFIX.length);
+    const edge = ctx.edges.find((item) => item.edge_id === edgeId);
+    return edge ? \${edge.route_type}中途 : '道路中途';
+  }
+  return regionNameById(ctx, nodeId);
+}
 
 export function governedRegionId(state: GameState): string | null {
   const region = Object.values(state.regions).find((r) => r.governorId === state.playerPersonId);
@@ -1189,19 +1198,20 @@ export function applyOrder(
           visibleToPlayer: mover.faction === state.factionKey,
         }));
       }
-      assignMarch(mover, path.path, days, order.targetRegionId);
+      const expandedRoute = expandLongRouteSegments(path, days);
+      assignMarch(mover, expandedRoute.path, expandedRoute.dayCosts, order.targetRegionId);
       events.push(
         emitEvent(state, {
           type: 'army_move',
-          title: `${mover.name}奉命开拔`,
-          summary: `兵力 ${mover.troops.toLocaleString()}，目标${regionNameById(ctx, order.targetRegionId)}，行程 ${days.reduce((s, d) => s + d, 0)} 日。`,
+          title: \`${mover.name}奉命开拔\`,
+          summary: \`兵力 \${mover.troops.toLocaleString()}，路线 \${expandedRoute.path.map((id) => routeNodeLabel(ctx, id)).join(' → ')}，行程 \${expandedRoute.dayCosts.reduce((s, d) => s + d, 0)} 日。\`,
           actorId,
           actorName,
           factionKey: mover.faction,
           targetId: mover.armyId,
           targetLabel: mover.name,
-          after: { path: path.path, target: order.targetRegionId, days, troops: mover.troops },
-          evidence: '路径由地图边权与行军速度计算',
+          after: { path: expandedRoute.path, target: order.targetRegionId, days: expandedRoute.dayCosts, troops: mover.troops },
+          evidence: '路径由地图边权与行军速度计算；长路段拆分为道路中途节点',
           source,
           visibleToPlayer: mover.faction === fk || source === 'player_order',
         }),
@@ -2113,7 +2123,8 @@ export function applyOrder(
       region.garrisoned = region.garrison > 0;
       state.armies.push(army);
       const days = dayCostsFor(army, path.costs, { routeTypes: path.routeTypes, season: seasonOf(state.date.month) });
-      assignMarch(army, path.path, days, order.targetRegionId);
+      const expandedRoute = expandLongRouteSegments(path, days);
+      assignMarch(army, expandedRoute.path, expandedRoute.dayCosts, order.targetRegionId);
       events.push(
         emitEvent(state, {
           type: 'order_accepted',

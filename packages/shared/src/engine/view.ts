@@ -215,6 +215,7 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
         ? effectiveAttr(state, army.commanderId, 'strategy', ctx.charactersById[army.commanderId]?.strategy ?? 0)
         : undefined,
       nodeId: army.nodeId,
+      positionNodeId: own ? (army.positionNodeId ?? army.nodeId) : army.nodeId,
       regionName: region?.name ?? '',
       own,
       status: army.status,
