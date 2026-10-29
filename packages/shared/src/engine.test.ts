@@ -388,7 +388,7 @@ describe('平衡常量', () => {
 
 describe('跨旬行军与当前路段进度', () => {
   it('10 天路段在 7 天旬末保留 3 天，下一旬再走 3 天抵达，地图显示 70% 进度', () => {
-    let state = newGame('HUN', 'cross-turn-march');
+    let state = newGame('HUN', 'ruler', 'cross-turn-march');
     // 隔离测试变量：其他部队静止，外交全为和平，避免 NPC 战局影响目标节点。
     for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
     state.armies = state.armies.map((a) => ({
