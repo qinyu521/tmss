@@ -48,7 +48,7 @@
 | --- | --- | --- |
 | `data/derived/map_extra.json` | 派生地图边（本版 0 条） | 31 条原始边已使 24 州府完全连通；若扩充需写 `derived_reason` |
 | `data/derived/map_art.json` | 河流、湖泊、山脉、森林、海岸线、首都标记 | 原创架空地理，仅视觉表现，不改变道路与控制 |
-| `packages/shared/src/unitProfiles.ts` | 22 兵种攻防/远程/机动/补给/地形/克制/上限/招募 | 名称与描述来自种子，数值为原创平衡 |
+| `packages/shared/src/unitProfiles.ts` | 22 兵种攻防/远程/机动/补给/地形/克制/初始编制/全国上限/招募 | 名称与描述来自种子，数值与编制为原创平衡 |
 | `packages/shared/src/dataset.ts` | 州府人口/产出/地形推导 | 由 `regional_profile`、`key_locations` 关键词 + 势力修正；公式固定可审查 |
 | `packages/shared/src/dataset.ts` | 军区驻地映射 | 军区名称与防区语义（别名表 `DISTRICT_REGION_ALIASES`）；未改种子 |
 | `apps/web/src/three/mapScene.ts` | 州府显示偏移 | 原始种子中赤河州（HUN）与辽东州（YONG）同为 `(5,2)`；仅前端将后出现的辽东州及其节点/部队偏移 `(+0.38,+0.42)`，避免显示重叠。原始 JSON 与引擎坐标不变。 |
@@ -68,7 +68,7 @@
 
 ### 4.2 初始部队
 
-以 18 条 `national_force_allocations.initial_force_count` 为唯一兵员总量来源。每个军区编成一个军团，驻地由军区名称/防区推导。每个军团编入 1-2 支特殊兵种分遣队，数量为分配兵力的约 0.75% / 0.45%，且受兵种上限约束；其余为征集兵。特殊兵种分遣队**计入**该军团总兵力，不额外增加兵力。
+以 18 条 `national_force_allocations.initial_force_count` 为唯一兵员总量来源。每个军区编成一个军团，驻地由军区名称/防区推导。每个军团初始编入两支精锐编制，人数由 `packages/shared/src/unitProfiles.ts` 的 `initialFormationSize` 明确规定：常规精锐通常为 8,000–10,000 人，稀有禁卫、突击、水寨或专门用途兵种可为 3,000–5,000 人。`capPerFaction` 表示全势力该兵种同时部署总上限，独立于单支初始编制。精锐兵员从原军区分配兵力中扣出，其余为征集兵；特殊兵种分遣队**计入**军团总兵力，不额外增加兵力。验收必须维持匈奴 400,000、大雍 800,000、大楚 300,000 的初始总兵力守恒。
 
 ### 4.3 数据缺失记录
 
