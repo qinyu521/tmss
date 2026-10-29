@@ -663,6 +663,74 @@ describe('将领倒戈与挽回', () => {
     }
   });
 
+  it('叛将倒戈会削弱有明确旧部关系的将领忠诚，并让连锁倒戈仍经过独立预警期', () => {
+    const state = newGame('CHU', 'ruler', 'defection-old-subordinate-ripple');
+    state.diplomacy['HUN|CHU'] = -100;
+    const chuArmies = state.armies.filter((item) => item.faction === 'CHU');
+    const defectingArmy = chuArmies[0]!;
+    const followerArmy = chuArmies.find(
+      (item) => item.commanderId !== defectingArmy.commanderId && item.nodeId !== defectingArmy.nodeId,
+    )!;
+    expect(followerArmy).toBeTruthy();
+    const defectorId = defectingArmy.commanderId;
+    const followerId = followerArmy.commanderId;
+    const rivalRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    const previous = ctx.seed.relationships;
+    ctx.seed.relationships = [
+      ...previous,
+      {
+        faction: '大楚—匈奴',
+        source_person_id: defectorId,
+        source_name: ctx.charactersById[defectorId]!.name,
+        relation: '旧主恩情',
+        target_person_id: rivalRuler.person_id,
+        target_name: rivalRuler.name,
+        strength: '强',
+        notes: '昔日主从、效忠与知遇之恩',
+      },
+      {
+        faction: '大楚',
+        source_person_id: followerId,
+        source_name: ctx.charactersById[followerId]!.name,
+        relation: '旧部效忠',
+        target_person_id: defectorId,
+        target_name: ctx.charactersById[defectorId]!.name,
+        strength: '强',
+        notes: '明确旧部、部属与效忠关系',
+      },
+    ];
+    state.characters[defectorId].militaryLoyalty = 10;
+    state.characters[followerId].militaryLoyalty = 20;
+    try {
+      const warningEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, warningEvents);
+      expect(state.characters[defectorId].defectionWarningTurn).toBe(state.date.turn);
+      expect(state.characters[followerId].militaryLoyalty).toBe(20);
+
+      state.date.turn += 1;
+      const defectionEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, defectionEvents);
+      expect(defectingArmy.faction).toBe('HUN');
+      expect(state.characters[followerId].militaryLoyalty).toBe(14);
+      const followerEvent = defectionEvents.find((event) => event.title.includes('旧部动摇'));
+      expect(followerEvent).toBeTruthy();
+      expect(followerEvent?.targetId).toBe(followerArmy.armyId);
+      expect(followerEvent?.after?.defectionWarningRequired).toBe(true);
+      expect(followerEvent?.summary).toContain('忠诚由 20 降至 14');
+
+      state.date.turn += 1;
+      const chainWarningEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, chainWarningEvents);
+      expect(state.characters[followerId].defectionWarningTurn).toBe(state.date.turn);
+      expect(state.characters[followerId].defectionTargetFaction).toBe('HUN');
+      expect(followerArmy.faction).toBe('CHU');
+      expect(chainWarningEvents.some((event) => event.title.includes('倒戈风险预警'))).toBe(true);
+      expect(chainWarningEvents.some((event) => event.title.includes('将领倒戈'))).toBe(false);
+    } finally {
+      ctx.seed.relationships = previous;
+    }
+  });
+
   it('低忠诚将领先收到一旬预警；若无人挽回，会携军献城并改变势力归属', () => {
     const state = newGame('CHU', 'ruler', 'defection-resolution');
     const army = state.armies.find((item) => item.faction === 'CHU')!;
