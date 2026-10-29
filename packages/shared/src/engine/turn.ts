@@ -198,6 +198,11 @@ function npcAffordable(state: GameState, order: Order): boolean {
       return res.cash >= BALANCE.balancePrinces.cashCost;
     case 'negotiate_house':
       return res.cash >= BALANCE.negotiateHouse.cashCost;
+    case 'diplomatic_action':
+      if (order.action === 'improve_relations') return res.cash >= 12_000;
+      if (order.action === 'offer_peace') return res.cash >= 5_000;
+      if (order.action === 'propose_alliance') return res.cash >= 25_000;
+      return true;
     case 'levy_grain':
       return Object.values(state.regions)
         .filter((r) => r.faction === factionKey)
