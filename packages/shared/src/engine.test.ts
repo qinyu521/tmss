@@ -969,6 +969,132 @@ describe('将领倒戈与挽回', () => {
       restore();
     }
   });
+
+  it('旧主招抚会触发独立预警，归附方赏赐可反制将领回归', () => {
+    const state = newGame('CHU', 'ruler', 'amnesty-return-countered');
+    state.diplomacy['HUN|CHU'] = -100;
+    state.factions.CHU.resources.cash = 100_000;
+    state.factions.HUN.resources.cash = 50_000;
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const region = state.regions[army.nodeId];
+    const commanderId = army.commanderId;
+    const commander = ctx.charactersById[commanderId]!;
+    const oldRuler = seed.characters.find((person) => person.faction_key === 'CHU' && person.identity_type === '君主')!;
+    const previous = ctx.seed.relationships;
+    ctx.seed.relationships = [...previous, {
+      faction: '大楚',
+      source_person_id: commanderId,
+      source_name: commander.name,
+      relation: '旧主恩情',
+      target_person_id: oldRuler.person_id,
+      target_name: oldRuler.name,
+      strength: '强',
+      notes: '旧主知遇，明确主从效忠关系',
+    }];
+    state.characters[commanderId].allegianceFaction = 'HUN';
+    state.characters[commanderId].militaryLoyalty = 31;
+    army.faction = 'HUN';
+    region.faction = 'HUN';
+    const hunRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    region.governorId = hunRuler.person_id;
+    region.governorName = hunRuler.name;
+    region.garrisonCommanderId = commanderId;
+    region.garrisonCommanderName = army.commanderName;
+    region.garrisoned = true;
+    for (const key of ['HUN', 'YONG', 'CHU'] as const) {
+      state.factions[key].control = Object.values(state.regions).filter((item) => item.faction === key).map((item) => item.regionId);
+    }
+    try {
+      const amnesty = { orderId: 'amnesty-countered', kind: 'offer_defector_amnesty' as const, personId: commanderId, amount: 40_000 };
+      expect(validateOrder(state, ctx, amnesty).ok).toBe(true);
+      const events: GameEvent[] = [];
+      applyOrder(state, ctx, amnesty, events);
+      expect(state.characters[commanderId].militaryLoyalty).toBe(13);
+      expect(state.characters[commanderId].defectionWarningTurn).toBe(state.date.turn);
+      expect(state.characters[commanderId].defectionTargetFaction).toBe('CHU');
+      expect(army.faction).toBe('HUN');
+      expect(region.faction).toBe('HUN');
+      expect(events.some((event) => event.title.includes('旧主招抚') && event.summary.includes('忠诚 31 → 13'))).toBe(true);
+
+      const counterEvents: GameEvent[] = [];
+      applyOrder(state, ctx, {
+        orderId: 'npc-counter-amnesty',
+        kind: 'reward_commander',
+        personId: commanderId,
+        amount: 5_000,
+      }, counterEvents, 'npc_ai', 'HUN');
+      expect(state.characters[commanderId].militaryLoyalty).toBe(18);
+      state.date.turn += 1;
+      const nextEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, nextEvents);
+      expect(state.characters[commanderId].defectionWarningTurn).toBeUndefined();
+      expect(army.faction).toBe('HUN');
+      expect(region.faction).toBe('HUN');
+      expect(counterEvents.some((event) => event.title.includes('赏赐将领'))).toBe(true);
+    } finally {
+      ctx.seed.relationships = previous;
+    }
+  });
+
+  it('无人回应招抚时，旧将会越过完整预警回合并携军、驻地归还旧主', () => {
+    const state = newGame('CHU', 'ruler', 'amnesty-return-success');
+    state.diplomacy['HUN|CHU'] = -100;
+    state.factions.CHU.resources.cash = 100_000;
+    const army = state.armies.find((item) => item.faction === 'CHU')!;
+    const region = state.regions[army.nodeId];
+    const commanderId = army.commanderId;
+    const commander = ctx.charactersById[commanderId]!;
+    const oldRuler = seed.characters.find((person) => person.faction_key === 'CHU' && person.identity_type === '君主')!;
+    const previous = ctx.seed.relationships;
+    ctx.seed.relationships = [...previous, {
+      faction: '大楚',
+      source_person_id: commanderId,
+      source_name: commander.name,
+      relation: '旧主恩情',
+      target_person_id: oldRuler.person_id,
+      target_name: oldRuler.name,
+      strength: '强',
+      notes: '旧主知遇，明确主从效忠关系',
+    }];
+    state.characters[commanderId].allegianceFaction = 'HUN';
+    state.characters[commanderId].militaryLoyalty = 31;
+    army.faction = 'HUN';
+    region.faction = 'HUN';
+    const hunRuler = seed.characters.find((person) => person.faction_key === 'HUN' && person.identity_type === '君主')!;
+    region.governorId = hunRuler.person_id;
+    region.governorName = hunRuler.name;
+    region.garrisonCommanderId = commanderId;
+    region.garrisonCommanderName = army.commanderName;
+    region.garrisoned = true;
+    for (const key of ['HUN', 'YONG', 'CHU'] as const) {
+      state.factions[key].control = Object.values(state.regions).filter((item) => item.faction === key).map((item) => item.regionId);
+    }
+    try {
+      const amnesty = { orderId: 'amnesty-succeeds', kind: 'offer_defector_amnesty' as const, personId: commanderId, amount: 40_000 };
+      expect(validateOrder(state, ctx, amnesty).ok).toBe(true);
+      applyOrder(state, ctx, amnesty, []);
+      const sameTurnEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, sameTurnEvents);
+      expect(army.faction).toBe('HUN');
+      expect(region.faction).toBe('HUN');
+      expect(state.characters[commanderId].defectionWarningTurn).toBe(state.date.turn);
+
+      state.date.turn += 1;
+      const returnEvents: GameEvent[] = [];
+      resolveCommanderDefectionThreats(state, ctx, returnEvents);
+      expect(army.faction).toBe('CHU');
+      expect(region.faction).toBe('CHU');
+      expect(state.characters[commanderId].allegianceFaction).toBeUndefined();
+      expect(state.characters[commanderId].militaryLoyalty).toBe(30);
+      expect(state.characters[commanderId].defectionWarningTurn).toBeUndefined();
+      expect(state.factions.CHU.control).toContain(region.regionId);
+      expect(state.factions.HUN.control).not.toContain(region.regionId);
+      expect(returnEvents.some((event) => event.title.includes('旧主招抚成功') && event.after?.returnedToOriginalFaction === true)).toBe(true);
+    } finally {
+      ctx.seed.relationships = previous;
+    }
+  });
+
 });
 
 describe('政治裁决的派系站队后果', () => {
