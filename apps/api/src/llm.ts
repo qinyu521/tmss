@@ -6,7 +6,7 @@ import type { ChronicleEntry, GameEvent } from '@tianming/shared';
  * 规则约束：
  * - 只读：仅把史官条目的事实层与事件摘要发给 LLM，绝不发送其他世界状态；
  * - LLM 只产出 literary / inference 表达层文本，facts 永不回写；
- * - 无密钥时 Provider 不可用，游戏仍完整可玩（本地模板史官）。
+ * - 远程接口无密钥或本地服务未启动时 Provider 不可用，游戏仍完整可玩（本地模板史官）。
  * fetch 实现可注入，便于测试；默认使用全局 fetch，不新增依赖。
  */
 
@@ -80,19 +80,87 @@ function normalizeStyle(style: string | undefined, envStyle: string | undefined)
   return value === 'shiji' || value === 'pingshu' || value === 'yanyi' ? value : 'yanyi';
 }
 
-/** 从环境变量与本机设置读取配置；缺少 PROVIDER 或 API_KEY 时返回 null（视为未启用）。 */
+function isPrivateHost(host: string): boolean {
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '0.0.0.0' ||
+    host === '::1' ||
+    host === '[::1]' ||
+    host.endsWith('.local') ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^169\.254\./.test(host)
+  );
+}
+
+export function isLocalLlmEndpoint(baseUrl: string): boolean {
+  try {
+    return isPrivateHost(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 规范 OpenAI 兼容 Base URL：
+ * - 只填域名时补 https://（本机地址用 http://）；
+ * - 去掉误粘贴的 /chat/completions、/models 等后缀；
+ * - 只有域名、没有路径时补 /v1。
+ */
+export function normalizeBaseUrl(input: string): string {
+  const raw = input.trim();
+  if (!raw) return '';
+  const localLike = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(raw);
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)
+    ? raw
+    : `${localLike ? 'http' : 'https'}://${raw}`;
+  let url: URL;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    return raw.replace(/\/+$/, '');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return raw.replace(/\/+$/, '');
+  let path = url.pathname.replace(/\/+$/, '');
+  path = path.replace(/\/(?:chat\/completions|completions|models)$/i, '');
+  if (!path) path = '/v1';
+  url.pathname = path;
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/+$/, '');
+}
+
+function authHeaders(config: LlmConfig): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+  };
+}
+
+/** 从环境变量与本机设置读取配置；远程接口缺 API_KEY 或提供商无法识别时返回 null。 */
 export function loadLlmConfig(
   env: NodeJS.ProcessEnv = process.env,
   stored?: StoredLlmSettings | null,
 ): LlmConfig | null {
-  const provider = stored?.provider?.trim() || env.LLM_PROVIDER?.trim();
-  const apiKey = stored?.apiKey?.trim() || env.LLM_API_KEY?.trim();
-  if (!provider || !apiKey) return null;
+  const baseUrl = normalizeBaseUrl(
+    stored?.baseUrl?.trim() || env.LLM_BASE_URL?.trim() || DEFAULT_BASE_URL,
+  );
+  const apiKey = stored?.apiKey?.trim() || env.LLM_API_KEY?.trim() || '';
+  const local = isLocalLlmEndpoint(baseUrl);
+  const provider =
+    stored?.provider?.trim() ||
+    env.LLM_PROVIDER?.trim() ||
+    (apiKey ? 'custom' : local ? 'ollama' : '');
+  if (!provider) return null;
+  // 远程服务必须有密钥；本机 / 局域网端点（Ollama 等）允许免密钥。
+  if (!apiKey && !local && provider !== 'ollama') return null;
   const timeout = Number(stored?.timeoutMs ?? env.LLM_TIMEOUT_MS);
   return {
     provider,
     apiKey,
-    baseUrl: (stored?.baseUrl?.trim() || env.LLM_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, ''),
+    baseUrl,
     model: stored?.model?.trim() || env.LLM_MODEL?.trim() || DEFAULT_MODEL,
     timeoutMs: Number.isFinite(timeout) && timeout >= 5000 ? Math.min(timeout, 120_000) : DEFAULT_TIMEOUT,
     style: normalizeStyle(stored?.style, env.LLM_STYLE),
@@ -106,15 +174,19 @@ export function describeLlmConfig(
   stored?: StoredLlmSettings | null,
 ): LlmStatusView {
   const config = loadLlmConfig(env, stored);
-  const source: LlmStatusView['source'] = stored?.provider || stored?.apiKey
+  const hasStored = Boolean(stored && (stored.provider || stored.apiKey || stored.baseUrl || stored.model));
+  const source: LlmStatusView['source'] = hasStored
     ? 'settings'
     : env.LLM_PROVIDER || env.LLM_API_KEY
       ? 'env'
       : 'none';
+  const baseUrl = normalizeBaseUrl(
+    config?.baseUrl || stored?.baseUrl || env.LLM_BASE_URL || DEFAULT_BASE_URL,
+  );
   return {
     configured: Boolean(config),
-    provider: config?.provider ?? stored?.provider ?? env.LLM_PROVIDER?.trim() ?? '',
-    baseUrl: config?.baseUrl ?? (stored?.baseUrl || env.LLM_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ''),
+    provider: config?.provider ?? stored?.provider?.trim() ?? env.LLM_PROVIDER?.trim() ?? '',
+    baseUrl,
     model: config?.model ?? (stored?.model || env.LLM_MODEL || DEFAULT_MODEL),
     timeoutMs: config?.timeoutMs ?? DEFAULT_TIMEOUT,
     style: config?.style ?? normalizeStyle(stored?.style, env.LLM_STYLE),
@@ -129,13 +201,50 @@ export function describeLlmConfig(
 export interface LlmFetchResponse {
   ok: boolean;
   status: number;
+  headers?: { get?: (name: string) => string | null };
+  text?: () => Promise<string>;
   json: () => Promise<any>;
 }
 
-export type LlmFetcher = (
-  url: string,
-  init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal },
-) => Promise<LlmFetchResponse>;
+export interface LlmFetchInit {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  signal?: AbortSignal;
+}
+
+export type LlmFetcher = (url: string, init: LlmFetchInit) => Promise<LlmFetchResponse>;
+
+async function readErrorSnippet(res: LlmFetchResponse): Promise<string> {
+  if (!res.text) return '';
+  try {
+    const raw = await res.text();
+    return raw
+      .replace(/\s+/g, ' ')
+      .replace(/\bsk-[A-Za-z0-9_-]{6,}\b/g, 'sk-***')
+      .trim()
+      .slice(0, 180);
+  } catch {
+    return '';
+  }
+}
+
+function httpFailureReason(status: number, res: LlmFetchResponse): string {
+  if (res.headers?.get?.('x-render-routing') === 'no-server') {
+    return '目标 Render 服务不存在或已停止';
+  }
+  if (status === 401 || status === 403) return '密钥无效、已过期或无权访问该模型';
+  if (status === 404) return '接口地址不存在；请检查 Base URL 是否需要 /v1，或服务是否已下线';
+  if (status === 429) return '请求被限流或额度不足，请稍后再试';
+  if (status === 500 || status === 502 || status === 503 || status === 504) {
+    return '上游服务不可用；代理或网关可能已停止、冷启动中或地址已迁移';
+  }
+  return `服务返回 HTTP ${status}`;
+}
+
+function withSnippet(reason: string, snippet: string): string {
+  return snippet ? `${reason}（${snippet}）` : reason;
+}
 
 export interface LlmPolishItem {
   entryId: string;
@@ -259,10 +368,7 @@ export async function polishChronicle(
     const send = (jsonMode: boolean) =>
       fetcher(`${config.baseUrl}/chat/completions`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${config.apiKey}`,
-        },
+        headers: authHeaders(config),
         body: JSON.stringify({
           model: config.model,
           messages: [
@@ -279,13 +385,11 @@ export async function polishChronicle(
     // 部分兼容接口不支持 response_format，退回纯提示词约束。
     if (!res.ok && (res.status === 400 || res.status === 422)) res = await send(false);
     if (!res.ok) {
+      const snippet = await readErrorSnippet(res);
       return {
         ok: false,
         code: 'LLM_FAILED',
-        message:
-          res.status === 401 || res.status === 403
-            ? 'LLM 密钥无效或无权访问该模型，请到「设置 → AI 史官」检查。'
-            : `LLM 服务返回 HTTP ${res.status}。`,
+        message: `LLM 润色失败：${withSnippet(httpFailureReason(res.status, res), snippet)}，已保留原模板条目。`,
       };
     }
     const data = await res.json();
@@ -333,10 +437,7 @@ export async function testLlmConnection(
   try {
     const res = await fetcher(`${config.baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
-      },
+      headers: authHeaders(config),
       body: JSON.stringify({
         model: config.model,
         messages: [
@@ -350,15 +451,12 @@ export async function testLlmConnection(
     });
     const latencyMs = Date.now() - started;
     if (!res.ok) {
-      const reason =
-        res.status === 401 || res.status === 403
-          ? '密钥无效或无权访问该模型'
-          : res.status === 404
-            ? '接口地址或模型不存在'
-            : res.status === 429
-              ? '请求被限流，请稍后再试'
-              : `HTTP ${res.status}`;
-      return { ok: false, latencyMs, message: `连接失败：${reason}（${config.baseUrl}）` };
+      const snippet = await readErrorSnippet(res);
+      return {
+        ok: false,
+        latencyMs,
+        message: `连接失败：${withSnippet(httpFailureReason(res.status, res), snippet)} · ${config.baseUrl}`,
+      };
     }
     const data = await res.json();
     const content = data?.choices?.[0]?.message?.content;
@@ -371,8 +469,69 @@ export async function testLlmConnection(
       ok: false,
       latencyMs: Date.now() - started,
       message: controller.signal.aborted
-        ? `连接超时（${Math.min(config.timeoutMs, 15_000)}ms）`
-        : '连接失败：网络异常或接口地址不可达。',
+        ? `连接超时（${Math.min(config.timeoutMs, 15_000)}ms） · ${config.baseUrl}`
+        : `连接失败：网络异常、DNS 解析失败或接口地址不可达 · ${config.baseUrl}`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export interface LlmModelsResult {
+  ok: boolean;
+  latencyMs: number;
+  models: string[];
+  message: string;
+}
+
+/** 拉取 /models 列表，帮助确认地址与密钥有效，并选择正确模型名。 */
+export async function listLlmModels(
+  config: LlmConfig,
+  opts: { fetcher?: LlmFetcher } = {},
+): Promise<LlmModelsResult> {
+  const started = Date.now();
+  const fetcher = opts.fetcher ?? (globalThis.fetch as unknown as LlmFetcher);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.min(config.timeoutMs, 15_000));
+  try {
+    const res = await fetcher(`${config.baseUrl}/models`, {
+      method: 'GET',
+      headers: authHeaders(config),
+      signal: controller.signal,
+    });
+    const latencyMs = Date.now() - started;
+    if (!res.ok) {
+      const snippet = await readErrorSnippet(res);
+      return {
+        ok: false,
+        latencyMs,
+        models: [],
+        message: `获取模型失败：${withSnippet(httpFailureReason(res.status, res), snippet)} · ${config.baseUrl}`,
+      };
+    }
+    const data = await res.json();
+    const raw = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : [];
+    const models = raw
+      .map((item: any) => (typeof item === 'string' ? item : item?.id))
+      .filter((id: any): id is string => typeof id === 'string' && id.trim().length > 0)
+      .slice(0, 300);
+    return {
+      ok: true,
+      latencyMs,
+      models,
+      message:
+        models.length > 0
+          ? `服务可达，发现 ${models.length} 个模型。`
+          : '服务可达，但未返回模型列表；可直接手动填写模型名。',
+    };
+  } catch {
+    return {
+      ok: false,
+      latencyMs: Date.now() - started,
+      models: [],
+      message: controller.signal.aborted
+        ? `获取模型超时（${Math.min(config.timeoutMs, 15_000)}ms） · ${config.baseUrl}`
+        : `获取模型失败：网络异常、DNS 解析失败或接口地址不可达 · ${config.baseUrl}`,
     };
   } finally {
     clearTimeout(timer);

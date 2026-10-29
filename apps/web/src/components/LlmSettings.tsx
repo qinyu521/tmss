@@ -13,7 +13,24 @@ const PRESETS: { label: string; provider: string; baseUrl: string; model: string
     model: 'qwen-plus',
   },
   { label: '智谱 GLM', provider: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus' },
+  {
+    label: '硅基流动',
+    provider: 'siliconflow',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    model: 'Qwen/Qwen2.5-72B-Instruct',
+  },
+  {
+    label: 'OpenRouter',
+    provider: 'openrouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: 'openai/gpt-4o-mini',
+  },
+  { label: 'Ollama 本机', provider: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b' },
 ];
+
+function looksLocal(baseUrl: string): boolean {
+  return /(?:^|:\/\/)(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/i.test(baseUrl) || /^https?:\/\/(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/i.test(baseUrl);
+}
 
 const STYLE_LABELS: Record<LlmStyle, string> = {
   shiji: '史记体（简练冷峻）',
@@ -61,7 +78,10 @@ export default function LlmSettings() {
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
   const [probe, setProbe] = useState<{ ok: boolean; message: string } | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [modelMessage, setModelMessage] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -96,7 +116,16 @@ export default function LlmSettings() {
     try {
       const next = await api.saveLlmConfig(patch());
       setStatus(next);
-      setForm((prev) => ({ ...prev, apiKey: '' }));
+      setForm((prev) => ({
+        ...prev,
+        provider: next.provider,
+        baseUrl: next.baseUrl,
+        model: next.model,
+        timeoutMs: next.timeoutMs,
+        style: next.style,
+        autoPolish: next.autoPolish,
+        apiKey: '',
+      }));
       await refreshConfig();
       notify(next.configured ? 'AI 史官设置已保存' : '设置已保存，但尚缺服务商或密钥', next.configured ? 'success' : 'info');
     } catch (err: any) {
@@ -135,6 +164,26 @@ export default function LlmSettings() {
     }
   };
 
+  const loadModels = async () => {
+    setFetchingModels(true);
+    setProbe(null);
+    setModelMessage('');
+    try {
+      const result = await api.listLlmModels({ ...patch(), apiKey: form.apiKey.trim() });
+      setModels(result.models);
+      setModelMessage(result.message);
+      if (!result.ok) setProbe({ ok: false, message: result.message });
+      else if (!form.model.trim() && result.models[0]) setForm((prev) => ({ ...prev, model: result.models[0] }));
+    } catch (err: any) {
+      setModels([]);
+      const message = err?.message ?? '获取模型失败';
+      setModelMessage(message);
+      setProbe({ ok: false, message });
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
   const applyPreset = (preset: (typeof PRESETS)[number]) => {
     setForm((prev) => ({
       ...prev,
@@ -142,6 +191,9 @@ export default function LlmSettings() {
       baseUrl: preset.baseUrl,
       model: preset.model,
     }));
+    setModels([]);
+    setModelMessage('');
+    setProbe(null);
   };
 
   return (
@@ -157,6 +209,7 @@ export default function LlmSettings() {
             </span>
             {status.configured && <span className="chip gold">{status.model}</span>}
             {status.hasKey && <span className="small muted">密钥 {status.keyHint}</span>}
+            {status.configured && !status.hasKey && <span className="chip">免密钥（本地）</span>}
           </>
         ) : (
           <span className="small muted">{loadError || '读取设置中…'}</span>
@@ -176,7 +229,7 @@ export default function LlmSettings() {
         <label>服务商标识</label>
         <input
           value={form.provider}
-          placeholder="如 openai / deepseek；仅作标记，不校验"
+          placeholder="如 openai / deepseek / ollama；仅作标记"
           onChange={(e) => setForm({ ...form, provider: e.target.value })}
         />
       </div>
@@ -185,8 +238,16 @@ export default function LlmSettings() {
         <input
           value={form.baseUrl}
           placeholder="https://api.example.com/v1"
-          onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+          onChange={(e) => {
+            setForm({ ...form, baseUrl: e.target.value });
+            setModels([]);
+            setModelMessage('');
+            setProbe(null);
+          }}
         />
+      </div>
+      <div className="form-note" style={{ marginLeft: 100 }}>
+        填到 /v1 为止。只填域名会自动补 /v1，误粘贴的 /chat/completions 会自动去掉；本机地址自动使用 http。
       </div>
       <div className="form-row">
         <label>模型</label>
@@ -195,14 +256,47 @@ export default function LlmSettings() {
           placeholder="如 gpt-4o-mini / deepseek-chat"
           onChange={(e) => setForm({ ...form, model: e.target.value })}
         />
+        <button
+          className="btn small ghost"
+          style={{ flex: '0 0 auto' }}
+          disabled={fetchingModels || saving || testing}
+          onClick={() => void loadModels()}
+        >
+          {fetchingModels ? '获取中…' : '获取模型'}
+        </button>
       </div>
+      {models.length > 0 && (
+        <div className="form-row">
+          <label>可用模型</label>
+          <select
+            value={models.includes(form.model) ? form.model : ''}
+            onChange={(e) => {
+              if (e.target.value) setForm({ ...form, model: e.target.value });
+            }}
+          >
+            <option value="">选择已发现的模型…</option>
+            {models.map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {modelMessage && <div className="form-note">{modelMessage}</div>}
       <div className="form-row">
         <label>API Key</label>
         <input
           type="password"
           value={form.apiKey}
           autoComplete="new-password"
-          placeholder={status?.hasKey ? `已保存 ${status.keyHint}，留空则不修改` : '粘贴 API Key'}
+          placeholder={
+            status?.hasKey
+              ? `已保存 ${status.keyHint}，留空则不修改`
+              : looksLocal(form.baseUrl)
+                ? '本地 Ollama 等端点可留空'
+                : '粘贴 API Key'
+          }
           onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
         />
       </div>
@@ -258,6 +352,12 @@ export default function LlmSettings() {
           {probe.message}
         </div>
       )}
+
+      <div className="form-note">
+        连不上时依次检查：① 服务是否仍在线（Render 等免费实例会休眠或删除，根路径也 404 通常表示服务已停）；
+        ② 地址是否以 /v1 结尾；③ 密钥是否有效、有余额；④ 模型名是否出现在「获取模型」列表中。
+        本机 Ollama 填 http://127.0.0.1:11434/v1，密钥可留空。
+      </div>
 
       <div className="form-note">
         支持任意 OpenAI 兼容的 Chat Completions 接口。密钥只保存在本机 SQLite（data/runtime/tianming.db），

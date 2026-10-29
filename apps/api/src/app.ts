@@ -55,7 +55,9 @@ import {
 } from './gameRepo.js';
 import {
   describeLlmConfig,
+  listLlmModels,
   loadLlmConfig,
+  normalizeBaseUrl,
   parseStoredLlmSettings,
   polishChronicle,
   testLlmConnection,
@@ -197,7 +199,9 @@ function mergeLlmSettings(
 ): StoredLlmSettings {
   const next: StoredLlmSettings = { ...(existing ?? {}) };
   if (patch.provider !== undefined) next.provider = patch.provider;
-  if (patch.baseUrl !== undefined) next.baseUrl = patch.baseUrl;
+  if (patch.baseUrl !== undefined) {
+    next.baseUrl = patch.baseUrl.trim() ? normalizeBaseUrl(patch.baseUrl) : '';
+  }
   if (patch.model !== undefined) next.model = patch.model;
   if (patch.timeoutMs !== undefined) next.timeoutMs = patch.timeoutMs;
   if (patch.style !== undefined) next.style = patch.style;
@@ -334,11 +338,26 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
     if (!candidate) {
       return reply.code(400).send({
         error: 'LLM_INCOMPLETE',
-        message: '请先填写服务商与 API Key，或设置 LLM_PROVIDER / LLM_API_KEY。',
+        message: '请填写 API 地址与 API Key；本机 Ollama 等本地端点可免密钥。',
       });
     }
     const probe = await testLlmConnection(candidate, { fetcher: options.llmFetcher });
     return probe;
+  });
+
+  app.post('/api/llm/models', async (req, reply) => {
+    const parsed = llmSettingsSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.issues.map((i) => i.message).join(';') });
+    }
+    const candidate = loadLlmConfig(process.env, mergeLlmSettings(readLlmSettings(), parsed.data));
+    if (!candidate) {
+      return reply.code(400).send({
+        error: 'LLM_INCOMPLETE',
+        message: '请填写 API 地址与 API Key；本机 Ollama 等本地端点可免密钥。',
+      });
+    }
+    return listLlmModels(candidate, { fetcher: options.llmFetcher });
   });
 
   app.get('/api/map', async () => {
@@ -900,21 +919,23 @@ function readDerivedMap(): { edges: any[]; note: string } {
 
 function registerStatic(app: FastifyInstance, serveWeb: boolean): void {
   const assetsDir = path.join(ROOT, 'apps/web/public/assets');
+  const distDir = path.join(ROOT, 'apps/web/dist');
+  if (serveWeb && fs.existsSync(distDir)) {
+    // dist 已由 Vite 复制 public 资源；若再单独挂载 public/assets，会遮蔽 dist/assets 下的哈希包。
+    app.register(fastifyStatic, {
+      root: distDir,
+      prefix: '/',
+      decorateReply: false,
+      wildcard: false,
+    });
+    return;
+  }
   if (fs.existsSync(assetsDir)) {
     app.register(fastifyStatic, {
       root: assetsDir,
       prefix: '/assets/',
       decorateReply: false,
       maxAge: '7d',
-    });
-  }
-  const distDir = path.join(ROOT, 'apps/web/dist');
-  if (serveWeb && fs.existsSync(distDir)) {
-    app.register(fastifyStatic, {
-      root: distDir,
-      prefix: '/',
-      decorateReply: false,
-      wildcard: false,
     });
   }
 }

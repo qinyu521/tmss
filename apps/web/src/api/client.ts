@@ -248,6 +248,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(patch),
     }),
+  listLlmModels: (patch: LlmSettingsPatch) =>
+    request<{ ok: boolean; latencyMs: number; models: string[]; message: string }>('/api/llm/models', {
+      method: 'POST',
+      body: JSON.stringify(patch),
+    }),
   save: (id: string, label?: string) =>
     request<{ save: any; items: SaveMeta[] }>(`/api/games/${id}/save`, {
       method: 'POST',

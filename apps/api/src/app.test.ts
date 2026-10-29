@@ -599,11 +599,18 @@ describe('API 集成', () => {
 describe('AI 史官本机设置（SQLite）', () => {
   const savedEnv = { provider: process.env.LLM_PROVIDER, key: process.env.LLM_API_KEY };
   let built3: BuiltApp | null = null;
-  let fetcherCalls: { url: string; body: any }[] = [];
+  let fetcherCalls: { url: string; body: any; method?: string }[] = [];
   let polishEntryId = '';
   const fakeFetcher: LlmFetcher = async (url, init) => {
-    const body = JSON.parse(init.body);
-    fetcherCalls.push({ url, body });
+    const body = JSON.parse(init.body ?? '{}');
+    fetcherCalls.push({ url, body, method: init.method });
+    if (init.method === 'GET') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }] }),
+      };
+    }
     const prompt = JSON.stringify(body);
     const isProbe = prompt.includes('回复 OK');
     return {
@@ -660,7 +667,7 @@ describe('AI 史官本机设置（SQLite）', () => {
       payload: {
         provider: 'deepseek',
         apiKey: 'secret-key-abcd',
-        baseUrl: 'https://api.deepseek.com/v1',
+        baseUrl: 'api.deepseek.com',
         model: 'deepseek-chat',
         timeoutMs: 15000,
         style: 'yanyi',
@@ -675,6 +682,7 @@ describe('AI 史官本机设置（SQLite）', () => {
     expect(status.source).toBe('settings');
     expect(status.style).toBe('yanyi');
     expect(status.autoPolish).toBe(true);
+    expect(status.baseUrl).toBe('https://api.deepseek.com/v1');
     expect(JSON.stringify(status)).not.toContain('secret-key-abcd');
 
     const config = (await built3!.app.inject({ method: 'GET', url: '/api/config' })).json();
@@ -683,11 +691,18 @@ describe('AI 史官本机设置（SQLite）', () => {
     expect(config.llmStyle).toBe('yanyi');
     expect(config.llmModel).toBe('deepseek-chat');
 
+    const modelList = await built3!.app.inject({ method: 'POST', url: '/api/llm/models' });
+    expect(modelList.statusCode).toBe(200);
+    expect(modelList.json().ok).toBe(true);
+    expect(modelList.json().models).toEqual(['deepseek-chat', 'deepseek-reasoner']);
+    expect(fetcherCalls.some((call) => call.method === 'GET' && call.url === 'https://api.deepseek.com/v1/models')).toBe(true);
+
     const probe = await built3!.app.inject({ method: 'POST', url: '/api/llm/test' });
     expect(probe.statusCode).toBe(200);
     expect(probe.json().ok).toBe(true);
-    expect(fetcherCalls[0].url).toBe('https://api.deepseek.com/v1/chat/completions');
-    expect(fetcherCalls[0].body.model).toBe('deepseek-chat');
+    const chatCall = fetcherCalls.find((call) => call.url.endsWith('/chat/completions'));
+    expect(chatCall?.url).toBe('https://api.deepseek.com/v1/chat/completions');
+    expect(chatCall?.body.model).toBe('deepseek-chat');
 
     const created = await built3!.app.inject({
       method: 'POST',
@@ -716,6 +731,63 @@ describe('AI 史官本机设置（SQLite）', () => {
     expect(cleared.statusCode).toBe(200);
     expect(cleared.json().configured).toBe(false);
     expect(cleared.json().hasKey).toBe(false);
+  });
+
+  it('本机端点允许免密钥，并自动补全 /v1', async () => {
+    const local = await built3!.app.inject({
+      method: 'PUT',
+      url: '/api/llm/config',
+      payload: { provider: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'qwen2.5:7b' },
+    });
+    expect(local.statusCode).toBe(200);
+    expect(local.json().configured).toBe(true);
+    expect(local.json().hasKey).toBe(false);
+    expect(local.json().baseUrl).toBe('http://127.0.0.1:11434/v1');
+
+    const probe = await built3!.app.inject({ method: 'POST', url: '/api/llm/test' });
+    expect(probe.statusCode).toBe(200);
+    expect(probe.json().ok).toBe(true);
+    const calls = fetcherCalls.filter((call) => call.url === 'http://127.0.0.1:11434/v1/chat/completions');
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls[calls.length - 1].body.model).toBe('qwen2.5:7b');
+  });
+
+  it('对已下线端点给出可操作诊断', async () => {
+    const deadFetcher: LlmFetcher = async () => ({
+      ok: false,
+      status: 404,
+      headers: { get: (name) => (name.toLowerCase() === 'x-render-routing' ? 'no-server' : null) },
+      text: async () => 'Not Found',
+      json: async () => ({}),
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tianming-llm-dead-'));
+    const deadApp = await buildApp({
+      dbPath: path.join(dir, 'test.db'),
+      logger: false,
+      serveWeb: false,
+      llmFetcher: deadFetcher,
+    });
+    try {
+      await deadApp.app.ready();
+      await deadApp.app.inject({
+        method: 'PUT',
+        url: '/api/llm/config',
+        payload: { provider: 'proxy', apiKey: 'dead-key', baseUrl: 'https://dead.example.com/v1' },
+      });
+      const probe = await deadApp.app.inject({ method: 'POST', url: '/api/llm/test' });
+      expect(probe.statusCode).toBe(200);
+      expect(probe.json().ok).toBe(false);
+      expect(probe.json().message).toContain('Render 服务不存在');
+      expect(probe.json().message).toContain('Not Found');
+
+      const models = await deadApp.app.inject({ method: 'POST', url: '/api/llm/models' });
+      expect(models.statusCode).toBe(200);
+      expect(models.json().ok).toBe(false);
+      expect(models.json().message).toContain('获取模型失败');
+    } finally {
+      await deadApp.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -760,7 +832,7 @@ describe('LLM 史官（可选 Provider）', () => {
     let captured: { url: string; body: any } | null = null;
     let responseEntries: { entryId: string; literary: string; inference: string }[] = [];
     const fakeFetcher: LlmFetcher = async (url, init) => {
-      captured = { url, body: JSON.parse(init.body) };
+      captured = { url, body: JSON.parse(init.body ?? '{}') };
       return {
         ok: true,
         status: 200,
