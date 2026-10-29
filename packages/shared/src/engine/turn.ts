@@ -16,7 +16,13 @@ import { FACTION_SHORT, makeDate, TURN_DAYS } from '../constants.js';
 import { emitEvent } from './events.js';
 import { applyOrder, validateOrder } from './orders.js';
 import { generateNpcOrders } from './npc.js';
-import { clearMarch, buildAdjacency } from './movement.js';
+import {
+  clearMarch,
+  buildAdjacency,
+  capitalMapNodeId,
+  mapNodeNameById,
+  retreatMapNode,
+} from './movement.js';
 import { marchFatigueSeasonFactor, SEASON_LABELS, seasonOf } from './season.js';
 import { retreatRegion as retreatGuard, resolveBattle } from './battle.js';
 import { runEconomy, politicalTags, shortageTags } from './economy.js';
@@ -217,6 +223,7 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
       army.marchDaysLeft = army.hopCosts.reduce((s, d) => s + d, 0);
       const previous = army.nodeId;
       army.nodeId = nextRegionId;
+      army.mapNodeId = capitalMapNodeId(ctx, nextRegionId);
       army.originRegionId = previous;
       const region = state.regions[nextRegionId];
       army.supply = clamp(army.supply - hop * BALANCE.army.marchSupplyDrainPerDay);
@@ -296,7 +303,10 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
   for (const army of state.armies) {
     if (army.status === 'idle' && army.nodeId) {
       const region = state.regions[army.nodeId];
-      if (region && region.faction === army.faction) {
+      const locationFaction = army.mapNodeId && state.mapNodes
+        ? state.mapNodes[army.mapNodeId]?.faction
+        : region?.faction;
+      if (region && locationFaction === army.faction) {
         army.supply = clamp(army.supply + 8);
         army.fatigue = clamp(army.fatigue - 8);
         army.morale = clamp(army.morale + 1);
@@ -308,12 +318,23 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
   state.armies = state.armies.filter((a) => a.troops >= 60);
 }
 
-function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, regionId: string): GameEvent[] {
+function handleBattle(
+  state: GameState,
+  ctx: DerivedContext,
+  attacker: Army,
+  regionId: string,
+  mapNodeId?: string,
+): GameEvent[] {
   const events: GameEvent[] = [];
   const region = state.regions[regionId];
+  const capitalNode = mapNodeId ? state.mapNodes?.[mapNodeId] : state.mapNodes?.[capitalMapNodeId(ctx, regionId) ?? ''];
   const originalOwner = region.faction;
   const defender = state.armies.find(
-    (a) => a.faction === region.faction && a.nodeId === regionId && a.troops > 0 && a.armyId !== attacker.armyId,
+    (a) =>
+      a.faction === region.faction &&
+      a.troops > 0 &&
+      a.armyId !== attacker.armyId &&
+      (mapNodeId ? (a.mapNodeId ? a.mapNodeId === mapNodeId : a.nodeId === regionId) : a.nodeId === regionId),
   );
   const seed = hashString(`${state.seed}-${attacker.armyId}-${regionId}-${state.date.turn}`);
   const before = {
@@ -381,6 +402,11 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     region.threat = 30;
     region.garrison = 0;
     region.garrisoned = false;
+    const heldCapital = state.mapNodes?.[capitalMapNodeId(ctx, regionId) ?? ''];
+    if (heldCapital?.nodeType === '州府/主城') {
+      heldCapital.faction = attacker.faction;
+      heldCapital.garrison = 0;
+    }
     for (const key of FACTION_KEYS) {
       state.factions[key].control = Object.values(state.regions)
         .filter((r) => r.faction === key)
@@ -388,6 +414,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     }
     state.statistics.occupiedRegions += 1;
     attacker.nodeId = regionId;
+    attacker.mapNodeId = mapNodeId ?? capitalMapNodeId(ctx, regionId);
     clearMarch(attacker);
     attacker.supply = clamp(attacker.supply - 6);
     attacker.fatigue = clamp(attacker.fatigue + 8);
@@ -401,6 +428,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
         const retreat = retreatGuard(state, ctx, defender, regionId);
         if (retreat) {
           defender.nodeId = retreat;
+          defender.mapNodeId = capitalMapNodeId(ctx, retreat);
           defender.supply = clamp(defender.supply - 18);
           defender.morale = clamp(defender.morale - 12);
           clearMarch(defender);
@@ -433,6 +461,7 @@ function handleBattle(state: GameState, ctx: DerivedContext, attacker: Army, reg
     const retreat = retreatGuard(state, ctx, attacker, regionId);
     if (retreat) {
       attacker.nodeId = retreat;
+      attacker.mapNodeId = capitalMapNodeId(ctx, retreat);
     } else {
       state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
     }
