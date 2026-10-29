@@ -24,7 +24,7 @@ import { runPolitics } from './politics.js';
 import { courtCost } from './court.js';
 import { runLifecycle } from './lifecycle.js';
 import { buildChronicle } from './chronicle.js';
-import { clamp, factionNameOf } from './state.js';
+import { clamp, factionNameOf, isCharacterAlive } from './state.js';
 import { battleLoyaltyDelta, findDefectionAllegiance } from './relationships.js';
 
 export interface TurnResult {
