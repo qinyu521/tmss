@@ -741,6 +741,11 @@ function handleStrategicNodeBattle(
   const region = state.regions[node.regionId];
   if (!region) return events;
   const originalOwner = node.faction;
+  if (node.siege) {
+    const endedSiege = node.siege;
+    node.siege = null;
+    releaseSiegeOrders(state, node.nodeId, endedSiege);
+  }
   const defender = state.armies.find(
     (a) =>
       a.faction === originalOwner &&
@@ -1175,6 +1180,11 @@ function handleBattle(
   const region = state.regions[regionId];
   const capitalNode = mapNodeId ? state.mapNodes?.[mapNodeId] : state.mapNodes?.[capitalMapNodeId(ctx, regionId) ?? ''];
   const originalOwner = region.faction;
+  if (capitalNode?.siege) {
+    const endedSiege = capitalNode.siege;
+    capitalNode.siege = null;
+    releaseSiegeOrders(state, capitalNode.nodeId, endedSiege);
+  }
   const defender = state.armies.find(
     (a) =>
       a.faction === region.faction &&
