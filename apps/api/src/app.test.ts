@@ -216,6 +216,10 @@ describe('API 集成', () => {
     });
     expect(enemyDetail.statusCode).toBe(200);
     expect(Object.prototype.hasOwnProperty.call(enemyDetail.json().runtime ?? {}, 'goal')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(enemyDetail.json().runtime ?? {}, 'militaryLoyalty')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(enemyDetail.json().runtime ?? {}, 'allegianceFaction')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(enemyDetail.json().runtime ?? {}, 'defectionWarningTurn')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(enemyDetail.json().runtime ?? {}, 'defectionTargetFaction')).toBe(false);
   });
 
   it('API 可直接向 72 节点中的附属据点下达行军命令', async () => {
