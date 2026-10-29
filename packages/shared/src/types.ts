@@ -483,7 +483,7 @@ export interface Army {
   /** 当前行军路线上的战略节点 ID（不含起点）。 */
   mapPath?: string[];
   mapHopCosts?: number[];
-  /** 当前地图路段的完整日数，用于跨旬位置显示。 */
+  /** 当前地图路段的完整日数，用于跨回合位置显示。 */
   mapCurrentHopDaysTotal?: number;
   targetMapNodeId?: string | null;
   units: ArmyUnitStack[];
