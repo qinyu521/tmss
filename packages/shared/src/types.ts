@@ -370,6 +370,8 @@ export interface UnitProfile {
     cash: number;
     minTraining: number;
   };
+  /** 初始部署时的成建制人数；与全势力可部署上限 capPerFaction 分开配置 */
+  initialFormationSize: number;
   capPerFaction: number;
   visual: {
     icon: string;
