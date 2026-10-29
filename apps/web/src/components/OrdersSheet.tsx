@@ -23,7 +23,7 @@ import { Modal, Portrait, UnitIcon } from './ui';
 const GROUPS = {
   military: ['move_army', 'dispatch_garrison', 'rest_army', 'scout'],
   civil: ['recruit', 'levy_grain', 'levy_tax', 'trade'],
-  politics: ['hold_court', 'reward_commander', 'replace_warned_commander', 'settle_defeated_commander', 'appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
+  politics: ['hold_court', 'reward_commander', 'offer_defector_amnesty', 'replace_warned_commander', 'settle_defeated_commander', 'appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
   scheme: ['scheme'],
 } as const;
 
@@ -88,6 +88,9 @@ export default function OrdersSheet() {
   const [courtOppositionId, setCourtOppositionId] = useState('');
   const [rewardCommanderId, setRewardCommanderId] = useState('');
   const [rewardAmount, setRewardAmount] = useState(10_000);
+  const [amnestyCandidates, setAmnestyCandidates] = useState<CharacterSummary[]>([]);
+  const [amnestyCommanderId, setAmnestyCommanderId] = useState('');
+  const [amnestyAmount, setAmnestyAmount] = useState(20_000);
   const [defectionArmyId, setDefectionArmyId] = useState('');
   const [defectionReplacementId, setDefectionReplacementId] = useState('');
   const [settlementCommanderId, setSettlementCommanderId] = useState('');
@@ -173,6 +176,38 @@ export default function OrdersSheet() {
   }, [view?.factionKey, view?.gameId, view?.date.turn]);
 
   useEffect(() => {
+    if (!view || view.playerRole !== 'ruler') {
+      setAmnestyCandidates([]);
+      setAmnestyCommanderId('');
+      return;
+    }
+    let cancelled = false;
+    const loadAmnestyCandidates = async () => {
+      const params = view.gameId ? { gameId: view.gameId } : {};
+      const first = await api.characters({ ...params, page: '1', pageSize: '100' });
+      const pageCount = Math.ceil(first.total / Math.max(1, first.pageSize));
+      const remaining = await Promise.all(
+        Array.from({ length: Math.max(0, pageCount - 1) }, (_, index) =>
+          api.characters({ ...params, page: String(index + 2), pageSize: '100' }),
+        ),
+      );
+      const candidates = [first, ...remaining]
+        .flatMap((page) => page.items)
+        .filter((person) => person.alive !== false && person.originalFactionKey === view.factionKey && Boolean(person.allegianceFaction) && person.allegianceFaction !== view.factionKey)
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+      if (cancelled) return;
+      setAmnestyCandidates(candidates);
+      setAmnestyCommanderId((previous) => candidates.some((person) => person.person_id === previous) ? previous : candidates[0]?.person_id ?? '');
+    };
+    loadAmnestyCandidates().catch(() => {
+      if (cancelled) return;
+      setAmnestyCandidates([]);
+      setAmnestyCommanderId('');
+    });
+    return () => { cancelled = true; };
+  }, [view?.gameId, view?.factionKey, view?.date.turn, view?.playerRole]);
+
+  useEffect(() => {
     if (!selectedArmy) return;
     setMoveAmount((prev) => {
       const total = selectedArmy.troops ?? 0;
@@ -229,6 +264,8 @@ export default function OrdersSheet() {
   const courtOfficials = commanders.filter((person) => person.alive !== false);
   const rewardCandidates = courtOfficials.filter((person) => ownArmies.some((army) => army.commanderId === person.person_id));
   const selectedRewardCommander = rewardCandidates.find((person) => person.person_id === rewardCommanderId);
+  const selectedAmnestyCommander = amnestyCandidates.find((person) => person.person_id === amnestyCommanderId);
+  const amnestyCurrentFaction = view.factions.find((faction) => faction.key === selectedAmnestyCommander?.allegianceFaction)?.shortName ?? selectedAmnestyCommander?.allegianceFaction ?? '未知势力';
   const warnedCommanderCandidates = courtOfficials.filter((person) =>
     person.defectionWarningTurn !== undefined &&
     Boolean(person.defectionTargetFaction) &&
@@ -339,6 +376,10 @@ export default function OrdersSheet() {
       case 'reward_commander':
         return rewardCommanderId && rewardCandidates.some((person) => person.person_id === rewardCommanderId)
           ? { orderId, kind: 'reward_commander', personId: rewardCommanderId, amount: rewardAmount }
+          : null;
+      case 'offer_defector_amnesty':
+        return amnestyCommanderId && amnestyCandidates.some((person) => person.person_id === amnestyCommanderId)
+          ? { orderId, kind: 'offer_defector_amnesty', personId: amnestyCommanderId, amount: amnestyAmount }
           : null;
       case 'replace_warned_commander':
         return selectedWarnedArmy && selectedWarnedCommander &&
@@ -775,6 +816,35 @@ export default function OrdersSheet() {
                   {selectedRewardCommander
                     ? `当前军令忠诚 ${Math.round(selectedRewardCommander.militaryLoyalty ?? selectedRewardCommander.loyalty)}，赏后最多升至 100。将领忠诚会影响大雍夺嫡危机中的拒命风险。`
                     : '只能赏赐目前统领本国军团的在世将领。'}
+                </div>
+              </>
+            )}
+
+            {action === 'offer_defector_amnesty' && (
+              <>
+                <div className="form-row">
+                  <label>招抚旧将</label>
+                  <select value={amnestyCommanderId} onChange={(e) => setAmnestyCommanderId(e.target.value)}>
+                    <option value="">请选择已倒戈的旧将</option>
+                    {amnestyCandidates.map((person) => (
+                      <option key={person.person_id} value={person.person_id}>
+                        {person.name} · 现归附{view.factions.find((faction) => faction.key === person.allegianceFaction)?.shortName ?? person.allegianceFaction} · 忠诚 {Math.round(person.militaryLoyalty ?? person.loyalty)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>招抚规格</label>
+                  <select value={amnestyAmount} onChange={(e) => setAmnestyAmount(Number(e.target.value))}>
+                    <option value={10_000}>10000 两 · 忠诚 -6</option>
+                    <option value={20_000}>20000 两 · 忠诚 -10</option>
+                    <option value={40_000}>40000 两 · 忠诚 -18</option>
+                  </select>
+                </div>
+                <div className="form-note">
+                  {selectedAmnestyCommander
+                    ? `该将领现归附${amnestyCurrentFaction}，军令忠诚 ${Math.round(selectedAmnestyCommander.militaryLoyalty ?? selectedAmnestyCommander.loyalty)}。招抚需本方与归附方交战、并存在明确强旧主关系；忠诚降至 15 及以下会启动完整一回合预警，归附方可通过赏赐或撤换反制。`
+                    : '这里只列出原属本方、当前效忠其他势力的人物。只有仍统领军团、独占归附方驻地的将领可被招抚；招抚并非立即夺回州府。'}
                 </div>
               </>
             )}
