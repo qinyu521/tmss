@@ -14,6 +14,7 @@ import {
   buildAdjacency,
   buildMapAdjacency,
   capitalMapNodeId,
+  dayCostsFor,
   findMapPath,
   findPath,
   routeCapacityMultiplier,
@@ -391,6 +392,16 @@ describe('道路通行能力与大军寻路', () => {
     expect(largeMapPath.ok).toBe(true);
     expect(smallMapPath.path).toEqual([middleNode, destinationNode]);
     expect(largeMapPath.path).toEqual([destinationNode]);
+
+    const sampleArmy = {
+      ...state.armies.find((army) => army.faction === 'HUN')!,
+      troops: 60_000,
+      levies: 60_000,
+      units: [],
+    };
+    expect(dayCostsFor(sampleArmy, [1], { season: 'spring' })).toEqual([1]);
+    // 如果逐段四舍五入，1.4 / 当前速度很可能仍只有 1 天；容量成本累计后至少落实为额外整日。
+    expect(dayCostsFor(sampleArmy, [1.4], { season: 'spring' })).toEqual([2]);
   });
 });
 
