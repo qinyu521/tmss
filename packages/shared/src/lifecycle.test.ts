@@ -184,7 +184,7 @@ describe('生命周期', () => {
 
 
 describe('行军存档迁移', () => {
-  it('v2 旧档可恢复已记录的当前路段进度，迁移可重复执行', () => {
+  it('v2 旧档的节点行军会转换为等价格子路线，迁移可重复执行', () => {
     const legacy = JSON.parse(JSON.stringify(newGame('HUN', 'movement-migration'))) as GameState;
     legacy.schemaVersion = 2;
     const army = legacy.armies.find((a) => a.faction === 'HUN')!;
@@ -204,9 +204,14 @@ describe('行军存档迁移', () => {
     const migrated = migrateState(legacy, seed.characters, seed);
     const migratedArmy = migrated.armies.find((a) => a.armyId === army.armyId)!;
     expect(migrated.schemaVersion).toBe(6);
-    expect(migratedArmy.currentHopDaysTotal).toBe(10);
-    expect(migratedArmy.hopCosts).toEqual([3, 4]);
-    expect(migratedArmy.marchDaysLeft).toBe(7);
+    expect(migratedArmy.status).toBe('marching');
+    expect(migratedArmy.path).toEqual([]);
+    expect(migratedArmy.hopCosts).toEqual([]);
+    expect(migratedArmy.tilePath!.length).toBeGreaterThan(0);
+    expect(migratedArmy.targetTile).toBeTruthy();
+    expect(migratedArmy.tileX).toBeTypeOf('number');
+    expect(migratedArmy.tileY).toBeTypeOf('number');
+    expect(migratedArmy.targetRegionId).toBe(destinations[destinations.length - 1]);
 
     const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters, seed);
     expect(again.schemaVersion).toBe(6);

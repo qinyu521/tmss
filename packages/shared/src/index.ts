@@ -6,6 +6,7 @@ export * from './dataset.js';
 export * from './engine/state.js';
 export * from './engine/events.js';
 export * from './engine/movement.js';
+export * from './engine/tilemap.js';
 export * from './engine/season.js';
 export * from './engine/battle.js';
 export * from './engine/replay.js';

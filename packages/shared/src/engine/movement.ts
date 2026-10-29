@@ -4,6 +4,7 @@ import { isAtWar } from '../dataset.js';
 import { BALANCE } from '../balance.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
 import { isRiverRoute, type Season } from './season.js';
+import { TILE_MP_BASE, tilePathDays, type ArmyTile, type TileStep } from './tilemap.js';
 
 export interface AdjacentRegion {
   to: string;
@@ -159,6 +160,9 @@ export function assignMapMarch(
   army.mapPath = path;
   army.mapHopCosts = dayCosts;
   army.mapCurrentHopDaysTotal = dayCosts[0] ?? 0;
+  army.tilePath = [];
+  army.targetTile = null;
+  army.tileMpLeft = 0;
   army.targetMapNodeId = targetMapNodeId;
   army.targetRegionId = targetRegionId;
   army.stance = 'march';
@@ -215,6 +219,38 @@ export function marchSpeedMultiplier(army: Army): number {
   const mobility = armyMobility(army);
   const fatigue = 1 + army.fatigue / 220;
   return Math.max(0.55, Math.min(1.45, (0.72 + mobility / 130) / fatigue));
+}
+
+/** 一旬可用的格子移动力：机动性越高，走得越远；重甲与疲劳会明显拖慢。 */
+export function tileMpBudget(army: Army): number {
+  return Math.max(6, Math.min(36, Math.round(TILE_MP_BASE * marchSpeedMultiplier(army))));
+}
+
+/** 格子行军：tilePath 保存剩余格（不含当前格），旧节点路线字段同时清空。 */
+export function assignTileMarch(
+  army: Army,
+  steps: TileStep[],
+  target: ArmyTile,
+  targetRegionId: string,
+  targetMapNodeId: string | null,
+  mpBudget: number,
+): void {
+  army.path = [];
+  army.hopCosts = [];
+  army.currentHopDaysTotal = 0;
+  army.mapPath = [];
+  army.mapHopCosts = [];
+  army.mapCurrentHopDaysTotal = 0;
+  army.tilePath = steps.map((step) => ({ x: step.x, y: step.y }));
+  army.targetTile = { x: target.x, y: target.y };
+  army.tileMpLeft = mpBudget;
+  army.targetMapNodeId = targetMapNodeId;
+  army.targetRegionId = targetRegionId;
+  army.stance = 'march';
+  army.status = 'marching';
+  const days = tilePathDays(steps.reduce((sum, step) => sum + step.cost, 0));
+  army.marchDaysTotal = days;
+  army.marchDaysLeft = days;
 }
 
 export function findPath(
@@ -312,6 +348,9 @@ export function assignMarch(army: Army, path: string[], dayCosts: number[], targ
   army.mapPath = [];
   army.mapHopCosts = [];
   army.mapCurrentHopDaysTotal = 0;
+  army.tilePath = [];
+  army.targetTile = null;
+  army.tileMpLeft = 0;
   army.targetMapNodeId = null;
   army.path = path;
   army.hopCosts = dayCosts;
@@ -330,6 +369,9 @@ export function clearMarch(army: Army): void {
   army.mapPath = [];
   army.mapHopCosts = [];
   army.mapCurrentHopDaysTotal = 0;
+  army.tilePath = [];
+  army.targetTile = null;
+  army.tileMpLeft = 0;
   army.targetMapNodeId = null;
   army.targetRegionId = null;
   army.marchDaysLeft = 0;

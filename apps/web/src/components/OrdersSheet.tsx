@@ -6,7 +6,10 @@ import {
   ROLE_ALLOWED_ORDERS,
   ROLE_LABEL,
   SCHEME_LABELS,
+  buildTileMapFromMapData,
+  describeTile,
   fmt,
+  tileAt,
   type DiplomaticAction,
   type FactionKey,
   type Order,
@@ -57,6 +60,7 @@ export default function OrdersSheet() {
   const [action, setAction] = useState<string>('move_army');
   const [armyId, setArmyId] = useState('');
   const [target, setTarget] = useState('');
+  const [targetTile, setTargetTile] = useState<{ x: number; y: number } | null>(null);
   const [moveAmount, setMoveAmount] = useState(0);
   const [unitPlan, setUnitPlan] = useState<Record<string, number>>({});
   const [commanderId, setCommanderId] = useState('');
@@ -94,6 +98,7 @@ export default function OrdersSheet() {
   );
   const enemyRegions = useMemo(() => view?.regions.filter((r) => !r.owned) ?? [], [view]);
   const enemyArmies = useMemo(() => view?.armies.filter((a) => !a.own) ?? [], [view]);
+  const tileMap = useMemo(() => (mapData ? buildTileMapFromMapData(mapData) : null), [mapData]);
 
   const selectedArmy = ownArmies.find((a) => a.armyId === armyId) ?? ownArmies[0];
   const selectedGarrisonRegion = ownRegions.find((r) => r.regionId === garrisonRegionId) ?? garrisonRegions[0];
@@ -105,7 +110,11 @@ export default function OrdersSheet() {
     setGarrisonRegionId((prev) => prev || (preset?.regionId as string) || '');
     setRecruitRegionId((prev) => prev || (preset?.regionId as string) || ownRegions[0]?.regionId || '');
     setRegionId((prev) => prev || (preset?.regionId as string) || '');
-    setTarget((prev) => (preset?.targetMapNodeId as string) || (preset?.targetRegionId as string) || prev || '');
+    setTarget((prev) =>
+      preset?.targetTile
+        ? ''
+        : (preset?.targetMapNodeId as string) || (preset?.targetRegionId as string) || prev || '',
+    );
     setGarrisonTarget((prev) => prev || (preset?.targetRegionId as string) || '');
     setAppointRegion((prev) => prev || (preset?.regionId as string) || ownRegions[0]?.regionId || '');
     setTribeId((prev) => prev || view.special.tribes?.[0]?.tribeId || '');
@@ -122,6 +131,14 @@ export default function OrdersSheet() {
       );
     }
   }, [view, preset, ownRegions, garrisonRegions]);
+
+  useEffect(() => {
+    if (preset?.targetTile && typeof preset.targetTile.x === 'number' && typeof preset.targetTile.y === 'number') {
+      setTargetTile({ x: preset.targetTile.x, y: preset.targetTile.y });
+    } else {
+      setTargetTile(null);
+    }
+  }, [preset]);
 
   useEffect(() => {
     if (!view) return;
@@ -184,12 +201,35 @@ export default function OrdersSheet() {
   const selectedTargetTerritory = selectedTargetNode
     ? mapData?.territories.find((territory) => territory.region === selectedTargetNode.region)
     : undefined;
+  const targetTileInfo = targetTile && tileMap ? tileAt(tileMap, targetTile.x, targetTile.y) : undefined;
+  const targetTileLabel = targetTile
+    ? tileMap
+      ? describeTile(tileMap, targetTile)
+      : `(${targetTile.x},${targetTile.y})`
+    : '';
 
   const buildOrder = (): Order | null => {
     const orderId = `o-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     switch (action) {
-      case 'move_army':
-        if (!selectedArmy || !selectedTargetNode || !selectedTargetTerritory) return null;
+      case 'move_army': {
+        if (!selectedArmy) return null;
+        const units = Object.entries(unitPlan)
+          .filter(([, count]) => count > 0)
+          .map(([unitId, count]) => ({ unitId, count }));
+        if (targetTile) {
+          if (!targetTileInfo) return null;
+          return {
+            orderId,
+            kind: 'move_army',
+            armyId: selectedArmy.armyId,
+            targetRegionId: targetTileInfo.regionId,
+            targetTile,
+            amount: moveAmount,
+            units,
+            commanderId: partial ? commanderId || undefined : undefined,
+          };
+        }
+        if (!selectedTargetNode || !selectedTargetTerritory) return null;
         return {
           orderId,
           kind: 'move_army',
@@ -197,11 +237,10 @@ export default function OrdersSheet() {
           targetRegionId: selectedTargetTerritory.region_id,
           targetMapNodeId: selectedTargetNode.node_id,
           amount: moveAmount,
-          units: Object.entries(unitPlan)
-            .filter(([, count]) => count > 0)
-            .map(([unitId, count]) => ({ unitId, count })),
+          units,
           commanderId: partial ? commanderId || undefined : undefined,
         };
+      }
       case 'dispatch_garrison':
         if (!selectedGarrisonRegion || !garrisonTarget) return null;
         return {
@@ -322,7 +361,7 @@ export default function OrdersSheet() {
               <>
                 <div className="form-row">
                   <label>部队</label>
-                  <select value={selectedArmy.armyId} onChange={(e) => { setArmyId(e.target.value); setTarget(''); }}>
+                  <select value={selectedArmy.armyId} onChange={(e) => { setArmyId(e.target.value); setTarget(''); setTargetTile(null); }}>
                     {ownArmies.map((a) => (
                       <option key={a.armyId} value={a.armyId}>
                         {a.name} · {a.regionName} · {a.troopsLabel}
@@ -376,8 +415,19 @@ export default function OrdersSheet() {
                   </select>
                 </div>
                 <div className="form-row">
+                  <label>地图目标格</label>
+                  {targetTile ? (
+                    <>
+                      <span className="gold" style={{ flex: 1 }}>{targetTileLabel}</span>
+                      <button className="btn small" type="button" onClick={() => setTargetTile(null)}>改用据点</button>
+                    </>
+                  ) : (
+                    <span className="small muted" style={{ flex: 1 }}>未指定：可在地图上选中部队后单击目标格，或从下方选择据点。</span>
+                  )}
+                </div>
+                <div className="form-row">
                   <label>目标地图节点</label>
-                  <select value={selectedTargetNodeId} onChange={(e) => setTarget(e.target.value)}>
+                  <select value={selectedTargetNodeId} onChange={(e) => { setTarget(e.target.value); setTargetTile(null); }}>
                     <option value="">选择目标据点</option>
                     {(mapData?.nodes ?? []).map((node) => {
                       const territory = mapData?.territories.find((t) => t.region === node.region);
@@ -395,7 +445,7 @@ export default function OrdersSheet() {
                 </div>
                 <div className="form-note">
                   不调整滑条即全军移动；调低兵力或指定特殊兵种会自动分遣，由所选统兵官统带。统率与谋略直接影响战斗，分兵可同时经营多条战线。
-                  特殊兵种计入总兵力，不会被复制。路线按 72 个地图节点、州府道路和据点支路计算；粮仓、关隘、港埠可独立争夺，州府仍按整州规则结算。
+                  特殊兵种计入总兵力，不会被复制。路线在 72×82 的真·格子地图上按地形、道路、关隘与势力边境逐格寻路；粮仓、关隘、港埠可独立争夺，州府仍按整州规则结算。
                 </div>
               </>
             )}

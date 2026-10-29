@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FACTION_VISUALS } from '@tianming/shared';
+import { FACTION_VISUALS, buildTileMapFromMapData, tileAt, tileOfNode } from '@tianming/shared';
 import { useApp, type LayerKey } from '../state/store';
 import { MapScene } from '../three/mapScene';
 
@@ -49,7 +49,49 @@ export default function MapView() {
     const scene = new MapScene(containerRef.current, {
       onSelectRegion: (regionId) => useApp.getState().select({ type: 'region', id: regionId }),
       onSelectArmy: (armyId) => useApp.getState().select({ type: 'army', id: armyId }),
-      onSelectNode: (nodeId) => useApp.getState().select({ type: 'node', id: nodeId }),
+      onSelectNode: (nodeId) => {
+        const state = useApp.getState();
+        const selection = state.selected;
+        const army = selection?.type === 'army'
+          ? state.view?.armies.find((item) => item.armyId === selection.id)
+          : undefined;
+        if (army?.own && army.status !== 'marching' && state.mapData) {
+          const tileMap = buildTileMapFromMapData(state.mapData);
+          const tile = tileOfNode(tileMap, nodeId);
+          const tileInfo = tile ? tileAt(tileMap, tile.x, tile.y) : undefined;
+          if (tile && tileInfo) {
+            state.openOrders({
+              kind: 'move_army',
+              armyId: army.armyId,
+              targetRegionId: tileInfo.regionId,
+              targetTile: tile,
+            });
+            return;
+          }
+        }
+        state.select({ type: 'node', id: nodeId });
+      },
+      onSelectTile: (tile, regionId) => {
+        const state = useApp.getState();
+        const selection = state.selected;
+        const army = selection?.type === 'army'
+          ? state.view?.armies.find((item) => item.armyId === selection.id)
+          : undefined;
+        if (army?.own) {
+          if (army.status === 'marching') {
+            state.notify(`${army.name}正在行军，抵达或回师前不能再改派。`, 'info');
+            state.select({ type: 'region', id: regionId });
+            return;
+          }
+          if (army.tileX === tile.x && army.tileY === tile.y) {
+            state.select({ type: 'region', id: regionId });
+            return;
+          }
+          state.openOrders({ kind: 'move_army', armyId: army.armyId, targetRegionId: regionId, targetTile: tile });
+          return;
+        }
+        state.select({ type: 'region', id: regionId });
+      },
       onHover: (info) => setTooltip(info),
     });
     sceneRef.current = scene;
@@ -120,6 +162,11 @@ export default function MapView() {
   }, [selected, mapData]);
 
   const legend = LEGEND_TEXT[layer];
+  const selectedArmy = selected?.type === 'army' ? view?.armies.find((army) => army.armyId === selected.id) : undefined;
+  const selectedArmyTile =
+    selectedArmy?.own && selectedArmy.tileX !== undefined && selectedArmy.tileY !== undefined
+      ? `(${selectedArmy.tileX},${selectedArmy.tileY})`
+      : null;
 
   return (
     <div className="map-stage" ref={containerRef}>
@@ -172,10 +219,20 @@ export default function MapView() {
               拖拽平移 · 右键/Shift 旋转 · 滚轮缩放 · 双击定位
             </div>
           </div>
-          <div className="legend" style={{ maxWidth: 260 }}>
+          <div className="legend" style={{ maxWidth: 280 }}>
             <strong style={{ color: 'var(--gold-soft)' }}>{view?.own.shortName} · 本旬</strong>
             <div>第 {view?.date.turn ?? 0} 回合 · {view?.date.label}</div>
-            <div className="muted">点击州府/军队查看详情；军队行军路径与旗标随回合推进。</div>
+            <div className="muted" style={{ marginTop: 4 }}>
+              选中我方部队后，单击地图任意格即可下达行军命令；路线按地形、道路与关隘逐格计算。
+            </div>
+            {selectedArmy?.own && (
+              <div style={{ marginTop: 4 }}>
+                <span className="gold">{selectedArmy.name}</span>
+                {selectedArmyTile ? ` · 格 ${selectedArmyTile}` : ''}
+                {selectedArmy.tileMpLeft !== undefined ? ` · 本旬余 ${selectedArmy.tileMpLeft} 点移动力` : ''}
+                {selectedArmy.status === 'marching' ? ' · 行军中' : ''}
+              </div>
+            )}
           </div>
         </div>
       </div>

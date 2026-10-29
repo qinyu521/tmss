@@ -6,6 +6,7 @@ import type {
   GameState,
   Order,
   OrderIssue,
+  RegionState,
   TurnReport,
 } from '../types.js';
 import { FACTION_KEYS } from '../types.js';
@@ -22,7 +23,20 @@ import {
   capitalMapNodeId,
   mapNodeNameById,
   retreatMapNode,
+  tileMpBudget,
 } from './movement.js';
+import {
+  TILE_COST_DAYS,
+  canEnterTile,
+  describeTile,
+  getTileMap,
+  syncArmyTileFromNode,
+  tileAt,
+  tileOfArmy,
+  terrainLabel,
+  type ArmyTile,
+  type TileTerrain,
+} from './tilemap.js';
 import { marchFatigueSeasonFactor, SEASON_LABELS, seasonOf } from './season.js';
 import { retreatRegion as retreatGuard, resolveBattle } from './battle.js';
 import { runEconomy, politicalTags, shortageTags } from './economy.js';
@@ -302,6 +316,316 @@ function npcAffordable(state: GameState, order: Order): boolean {
   }
 }
 
+function fieldTerrain(terrain: TileTerrain): RegionState['terrain'] {
+  if (terrain === 'forest') return 'forest';
+  if (terrain === 'hill' || terrain === 'mountain' || terrain === 'pass') return 'hill';
+  if (terrain === 'river' || terrain === 'lake' || terrain === 'sea') return 'river';
+  return 'plain';
+}
+
+/** 剩余格子路线的移动力与行军日数，用于界面进度与到达判定。 */
+function tilePathRemaining(
+  state: GameState,
+  ctx: DerivedContext,
+  army: Army,
+): { cost: number; steps: number } {
+  const map = getTileMap(ctx);
+  let cost = 0;
+  let previous = tileOfArmy(state, ctx, army);
+  for (const step of army.tilePath ?? []) {
+    const tile = tileAt(map, step.x, step.y);
+    if (!tile) continue;
+    const diagonal = Math.abs(step.x - previous.x) === 1 && Math.abs(step.y - previous.y) === 1;
+    cost += diagonal ? Math.round(tile.cost * 14) / 10 : tile.cost;
+    previous = { x: step.x, y: step.y };
+  }
+  return { cost, steps: army.tilePath?.length ?? 0 };
+}
+
+/** 真·格子行军：每旬按移动力逐格推进，途中触发野战、攻城与关隘争夺。 */
+function processTileMovement(
+  state: GameState,
+  ctx: DerivedContext,
+  events: GameEvent[],
+  season: ReturnType<typeof seasonOf>,
+): void {
+  const map = getTileMap(ctx);
+  const armies = seededArmyOrder(
+    state,
+    state.armies.filter((army) => (army.tilePath?.length ?? 0) > 0),
+  );
+  for (const army of armies) {
+    if (!state.armies.some((item) => item.armyId === army.armyId)) continue;
+    if ((army.tilePath?.length ?? 0) === 0) continue;
+
+    let mpLeft =
+      (army.tileMpLeft ?? 0) > 0 ? (army.tileMpLeft as number) : tileMpBudget(army);
+
+    while (mpLeft > 0 && (army.tilePath?.length ?? 0) > 0) {
+      const next = army.tilePath![0];
+      const tile = tileAt(map, next.x, next.y);
+      if (!tile) {
+        clearMarch(army);
+        break;
+      }
+      const current = tileOfArmy(state, ctx, army);
+      const diagonal =
+        Math.abs(next.x - current.x) === 1 && Math.abs(next.y - current.y) === 1;
+      const stepMp = diagonal ? Math.round(tile.cost * 14) / 10 : tile.cost;
+      if (stepMp > mpLeft + 1e-9) break;
+
+      const node = tile.nodeId ? state.mapNodes?.[tile.nodeId] : undefined;
+      const region = state.regions[tile.regionId];
+      const blockedByRegion =
+        Boolean(region) &&
+        region!.faction !== army.faction &&
+        !isAtWar(state.diplomacy, army.faction, region!.faction);
+      if (!canEnterTile(state, army.faction, tile) || blockedByRegion) {
+        const blocker =
+          node && node.faction !== army.faction
+            ? node.name
+            : region?.name ?? describeTile(map, { x: tile.x, y: tile.y });
+        clearMarch(army);
+        events.push(
+          emitEvent(state, {
+            type: 'army_move',
+            title: `${army.name}被边境拒止`,
+            summary: `前方${blocker}由未交战势力控制，部队停止于${describeTile(map, current)}。`,
+            actorId: army.commanderId,
+            actorName: army.commanderName,
+            factionKey: army.faction,
+            targetId: army.armyId,
+            targetLabel: army.name,
+            payload: { tile: current, blockedTile: { x: tile.x, y: tile.y }, reason: 'border' },
+            source: 'engine',
+            visibleToPlayer: army.faction === state.factionKey,
+          }),
+        );
+        break;
+      }
+
+      mpLeft -= stepMp;
+      army.tilePath!.shift();
+      army.tileX = next.x;
+      army.tileY = next.y;
+      const previousRegionId = army.nodeId;
+      army.nodeId = tile.regionId;
+      army.originRegionId = previousRegionId;
+      if (tile.nodeId) army.mapNodeId = tile.nodeId;
+
+      const stepDays = tile.cost * TILE_COST_DAYS;
+      army.supply = clamp(
+        army.supply - stepDays * BALANCE.army.marchSupplyDrainPerDay,
+      );
+      army.fatigue = clamp(
+        army.fatigue +
+          stepDays *
+            BALANCE.army.fatigueMarchPerDay *
+            marchFatigueSeasonFactor(season, army.faction),
+      );
+
+      // 进入敌军队所在格：野战先于攻城结算。
+      const enemy = state.armies.find(
+        (other) =>
+          other.armyId !== army.armyId &&
+          other.faction !== army.faction &&
+          other.troops >= 60 &&
+          isAtWar(state.diplomacy, army.faction, other.faction) &&
+          tileOfArmy(state, ctx, other).x === tile.x &&
+          tileOfArmy(state, ctx, other).y === tile.y,
+      );
+      if (enemy) {
+        events.push(...handleFieldBattle(state, ctx, army, enemy, tile));
+        break;
+      }
+
+      if (node && node.faction !== army.faction) {
+        if (node.nodeType === '州府/主城') {
+          events.push(...handleBattle(state, ctx, army, node.regionId, node.nodeId));
+        } else {
+          events.push(...handleStrategicNodeBattle(state, ctx, army, node.nodeId));
+        }
+        break;
+      }
+
+      if ((army.tilePath?.length ?? 0) === 0) {
+        const arrived = describeTile(map, { x: army.tileX, y: army.tileY });
+        army.supply = clamp(army.supply + 4);
+        clearMarch(army);
+        events.push(
+          emitEvent(state, {
+            type: 'army_move',
+            title: `${army.name}抵达${region?.name ?? arrived}`,
+            summary: `部队完成行军，驻于${arrived}；补给 ${Math.round(army.supply)}，疲劳 ${Math.round(army.fatigue)}。`,
+            actorId: army.commanderId,
+            actorName: army.commanderName,
+            factionKey: army.faction,
+            targetId: army.armyId,
+            targetLabel: army.name,
+            payload: { tile: { x: army.tileX, y: army.tileY } },
+            source: 'engine',
+            visibleToPlayer: army.faction === state.factionKey,
+          }),
+        );
+      }
+    }
+
+    if (army.status === 'marching') {
+      army.tileMpLeft = 0;
+      const remaining = tilePathRemaining(state, ctx, army);
+      army.marchDaysLeft = Math.max(1, Math.round(remaining.cost * TILE_COST_DAYS));
+      army.supply = clamp(army.supply - 5);
+      army.fatigue = clamp(army.fatigue + 6);
+      if (army.supply < BALANCE.army.attritionSupplyBelow) {
+        const lose = Math.round(
+          army.troops * BALANCE.army.attritionRatePerDay * TURN_DAYS,
+        );
+        army.levies = Math.max(0, army.levies - Math.min(army.levies, lose));
+        army.troops = army.levies + army.units.reduce((sum, unit) => sum + unit.count, 0);
+        events.push(
+          emitEvent(state, {
+            type: 'shortage',
+            title: `${army.name}行军减员`,
+            summary: `补给不足导致约 ${lose} 人流亡/掉队。`,
+            actorId: army.commanderId,
+            actorName: army.commanderName,
+            factionKey: army.faction,
+            targetId: army.armyId,
+            targetLabel: army.name,
+            source: 'engine',
+            visibleToPlayer: army.faction === state.factionKey,
+          }),
+        );
+      }
+    }
+  }
+}
+
+/** 野战：两军在格子地图上遭遇，战场地形取所在格；败方退往相邻本国州府。 */
+function handleFieldBattle(
+  state: GameState,
+  ctx: DerivedContext,
+  attacker: Army,
+  defender: Army,
+  tile: ArmyTile,
+): GameEvent[] {
+  const events: GameEvent[] = [];
+  const map = getTileMap(ctx);
+  const tileData = tileAt(map, tile.x, tile.y);
+  const region = state.regions[tileData?.regionId ?? attacker.nodeId];
+  if (!tileData || !region) return events;
+  const battlefield: RegionState = {
+    ...region,
+    name: `${region.name}·${terrainLabel(tileData.terrain)}`,
+    terrain: fieldTerrain(tileData.terrain),
+    garrison: 0,
+    garrisoned: false,
+    fortification: 0,
+    ambushBonus: 0,
+    diversionBonus: 0,
+    diversionFor: null,
+  };
+  const seed = hashString(
+    `${state.seed}-field-${attacker.armyId}-${defender.armyId}-${state.date.turn}-${tile.x}-${tile.y}`,
+  );
+  const before = {
+    tile,
+    terrain: battlefield.terrain,
+    attackerTroops: attacker.troops,
+    defenderTroops: defender.troops,
+  };
+  const outcome = resolveBattle(state, ctx, attacker, defender, battlefield, seed);
+  attacker.lastBattleTurn = state.date.turn;
+  defender.lastBattleTurn = state.date.turn;
+  state.statistics.battles += 1;
+  state.statistics.casualties += outcome.attackerLosses + outcome.defenderLosses;
+  const visible =
+    attacker.faction === state.factionKey || defender.faction === state.factionKey;
+  events.push(
+    emitEvent(state, {
+      type: 'battle',
+      title: `${attacker.name}与${defender.name}会战于${battlefield.name}`,
+      summary: outcome.narrative,
+      actorId: attacker.commanderId,
+      actorName: attacker.commanderName,
+      factionKey: attacker.faction,
+      targetId: defender.armyId,
+      targetLabel: defender.name,
+      before,
+      after: {
+        totalLosses: outcome.attackerLosses + outcome.defenderLosses,
+        attackerLosses: outcome.attackerLosses,
+        defenderLosses: outcome.defenderLosses,
+        attackerRemaining: outcome.attackerRemaining,
+        defenderRemaining: outcome.defenderRemaining,
+        attackerWon: outcome.attackerWon,
+      },
+      payload: {
+        fieldBattle: true,
+        tile,
+        regionId: region.regionId,
+        ratio: outcome.replay.ratio,
+        terrain: outcome.replay.terrain,
+        seed: outcome.seed,
+        attackerPower: outcome.attackerPower,
+        defenderPower: outcome.defenderPower,
+        defenderFaction: defender.faction,
+        defenderArmy: defender.name,
+        attackerCommander: outcome.replay.attackerCommander,
+        defenderCommander: outcome.replay.defenderCommander,
+        maneuverBonus: outcome.replay.maneuverBonus,
+        attackerStance: outcome.replay.attackerStance,
+        defenderStance: outcome.replay.defenderStance,
+      },
+      evidence: `格子野战 (${tile.x},${tile.y})；确定性战斗种子 ${outcome.seed}`,
+      source: 'engine',
+      visibleToPlayer: visible,
+    }),
+  );
+
+  if (outcome.attackerWon) {
+    if (defender.troops >= 60) {
+      const retreat = retreatGuard(state, ctx, defender, defender.nodeId);
+      if (retreat) {
+        defender.nodeId = retreat;
+        defender.mapNodeId = capitalMapNodeId(ctx, retreat);
+        defender.supply = clamp(defender.supply - 18);
+        defender.morale = clamp(defender.morale - 12);
+        clearMarch(defender);
+        syncArmyTileFromNode(state, ctx, defender);
+      } else {
+        state.armies = state.armies.filter((a) => a.armyId !== defender.armyId);
+      }
+    } else {
+      state.armies = state.armies.filter((a) => a.armyId !== defender.armyId);
+    }
+    attacker.mapNodeId = tileData.nodeId ?? capitalMapNodeId(ctx, tileData.regionId) ?? attacker.mapNodeId;
+    clearMarch(attacker);
+    attacker.supply = clamp(attacker.supply - 4);
+    attacker.fatigue = clamp(attacker.fatigue + 10);
+    if (attacker.troops < 60) {
+      state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
+    }
+  } else {
+    const retreat = retreatGuard(state, ctx, attacker, attacker.nodeId);
+    if (retreat) {
+      attacker.nodeId = retreat;
+      attacker.mapNodeId = capitalMapNodeId(ctx, retreat);
+      syncArmyTileFromNode(state, ctx, attacker);
+    } else {
+      state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
+    }
+    clearMarch(attacker);
+    attacker.morale = clamp(attacker.morale - 10);
+    attacker.supply = clamp(attacker.supply - 12);
+    defender.fatigue = clamp(defender.fatigue + 8);
+    if (attacker.troops < 60) {
+      state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
+    }
+  }
+  return events;
+}
+
 /** 处理 72 节点路线；规则结算仍是确定性的，附属据点战只改节点控制权。 */
 function processMapMovement(state: GameState, ctx: DerivedContext, events: GameEvent[], season: ReturnType<typeof seasonOf>): void {
   const armies = seededArmyOrder(state, state.armies.filter((army) => (army.mapPath?.length ?? 0) > 0));
@@ -339,6 +663,7 @@ function processMapMovement(state: GameState, ctx: DerivedContext, events: GameE
       army.mapNodeId = node.nodeId;
       army.nodeId = node.regionId;
       army.originRegionId = previousRegionId;
+      syncArmyTileFromNode(state, ctx, army);
       army.supply = clamp(army.supply - hop * BALANCE.army.marchSupplyDrainPerDay);
       army.fatigue = clamp(
         army.fatigue + hop * BALANCE.army.fatigueMarchPerDay * marchFatigueSeasonFactor(season, army.faction),
@@ -355,6 +680,7 @@ function processMapMovement(state: GameState, ctx: DerivedContext, events: GameE
 
         army.mapNodeId = previousMapNodeId;
         army.nodeId = previousRegionId;
+        syncArmyTileFromNode(state, ctx, army);
         clearMarch(army);
         events.push(
           emitEvent(state, {
@@ -518,6 +844,7 @@ function handleStrategicNodeBattle(
     state.statistics.occupiedMapNodes = (state.statistics.occupiedMapNodes ?? 0) + 1;
     attacker.mapNodeId = node.nodeId;
     attacker.nodeId = node.regionId;
+    syncArmyTileFromNode(state, ctx, attacker);
     clearMarch(attacker);
     attacker.supply = clamp(attacker.supply - 6);
     attacker.fatigue = clamp(attacker.fatigue + 8);
@@ -532,6 +859,7 @@ function handleStrategicNodeBattle(
           defender.supply = clamp(defender.supply - 18);
           defender.morale = clamp(defender.morale - 12);
           clearMarch(defender);
+          syncArmyTileFromNode(state, ctx, defender);
         } else {
           const retreat = retreatGuard(state, ctx, defender, node.regionId);
           if (retreat) {
@@ -540,6 +868,7 @@ function handleStrategicNodeBattle(
             defender.supply = clamp(defender.supply - 18);
             defender.morale = clamp(defender.morale - 12);
             clearMarch(defender);
+            syncArmyTileFromNode(state, ctx, defender);
           } else {
             state.armies = state.armies.filter((a) => a.armyId !== defender.armyId);
           }
@@ -575,6 +904,7 @@ function handleStrategicNodeBattle(
       if (retreat) {
         attacker.nodeId = retreat;
         attacker.mapNodeId = capitalMapNodeId(ctx, retreat);
+        syncArmyTileFromNode(state, ctx, attacker);
       } else {
         state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
       }
@@ -590,6 +920,7 @@ function handleStrategicNodeBattle(
 function processMovement(state: GameState, ctx: DerivedContext, events: GameEvent[]): void {
   // 夏季暑热：行军疲劳 +20%，匈奴骑兵不耐暑再 +15%（系数在 balance.seasons）
   const season = seasonOf(state.date.month);
+  processTileMovement(state, ctx, events, season);
   processMapMovement(state, ctx, events, season);
   const movementArmies = seededArmyOrder(state, state.armies.filter((a) => a.path.length > 0));
   for (const army of movementArmies) {
@@ -818,6 +1149,7 @@ function handleBattle(
     state.statistics.occupiedRegions += 1;
     attacker.nodeId = regionId;
     attacker.mapNodeId = mapNodeId ?? capitalMapNodeId(ctx, regionId);
+    syncArmyTileFromNode(state, ctx, attacker);
     clearMarch(attacker);
     attacker.supply = clamp(attacker.supply - 6);
     attacker.fatigue = clamp(attacker.fatigue + 8);
@@ -835,6 +1167,7 @@ function handleBattle(
           defender.supply = clamp(defender.supply - 18);
           defender.morale = clamp(defender.morale - 12);
           clearMarch(defender);
+          syncArmyTileFromNode(state, ctx, defender);
         } else {
           state.armies = state.armies.filter((a) => a.armyId !== defender.armyId);
         }
@@ -865,6 +1198,7 @@ function handleBattle(
     if (retreat) {
       attacker.nodeId = retreat;
       attacker.mapNodeId = capitalMapNodeId(ctx, retreat);
+      syncArmyTileFromNode(state, ctx, attacker);
     } else {
       state.armies = state.armies.filter((a) => a.armyId !== attacker.armyId);
     }

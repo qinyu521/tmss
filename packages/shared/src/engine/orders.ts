@@ -24,6 +24,7 @@ import { clamp, isCharacterAlive } from './state.js';
 import {
   assignMarch,
   assignMapMarch,
+  assignTileMarch,
   capitalMapNodeId,
   dayCostsFor,
   findMapPath,
@@ -31,8 +32,23 @@ import {
   mapNodeNameById,
   mapNodeRegionId,
   regionNameById,
+  tileMpBudget,
   type PathResult,
 } from './movement.js';
+import {
+  TILE_TERRAIN_INFO,
+  describeTile,
+  findTilePathForArmy,
+  findTilePathForRegions,
+  getTileMap,
+  tileAt,
+  tileOfArmy,
+  tileOfNode,
+  tileOfRegion,
+  tilePathDays,
+  type ArmyTile,
+  type TilePathResult,
+} from './tilemap.js';
 import { seasonOf } from './season.js';
 import { applyArmyLosses } from './battle.js';
 import { UNIT_PROFILES } from '../unitProfiles.js';
@@ -450,6 +466,78 @@ function applyCourtDebate(
   );
 }
 
+interface TileMovePlan {
+  path: TilePathResult;
+  targetTile: ArmyTile;
+  targetMapNodeId: string | null;
+  targetRegionId: string;
+  destination: string;
+  mpBudget: number;
+  days: number;
+  turns: number;
+}
+
+/** 统一计算格子行军路线；校验与执行共用，避免预览与实际路线不一致。 */
+function planTileMove(
+  state: GameState,
+  ctx: DerivedContext,
+  army: Army,
+  order: Extract<Order, { kind: 'move_army' }>,
+): TileMovePlan | { error: string } {
+  const map = getTileMap(ctx);
+  let targetTile: ArmyTile;
+  let targetMapNodeId: string | null;
+  let targetRegionId: string;
+  let destination: string;
+
+  if (order.targetTile) {
+    const { x, y } = order.targetTile;
+    if (!Number.isInteger(x) || !Number.isInteger(y)) return { error: '目标格坐标必须是整数。' };
+    const tile = tileAt(map, x, y);
+    if (!tile) return { error: '目标格超出地图范围。' };
+    if (!tile.passable) {
+      return { error: `${TILE_TERRAIN_INFO[tile.terrain].label}不能作为行军终点。` };
+    }
+    if (order.targetRegionId && order.targetRegionId !== tile.regionId) {
+      return { error: '目标格所属州府与命令中的目标州府不一致。' };
+    }
+    targetTile = { x: tile.x, y: tile.y };
+    targetRegionId = tile.regionId;
+    targetMapNodeId = tile.nodeId ?? null;
+    destination = describeTile(map, targetTile);
+  } else {
+    const targetMapNodeIdCandidate =
+      order.targetMapNodeId ?? capitalMapNodeId(ctx, order.targetRegionId);
+    if (!targetMapNodeIdCandidate) return { error: '目标州府没有对应的地图据点。' };
+    if (mapNodeRegionId(ctx, targetMapNodeIdCandidate) !== order.targetRegionId) {
+      return { error: '目标地图节点必须属于所选州府。' };
+    }
+    const nodeTile = tileOfNode(map, targetMapNodeIdCandidate);
+    if (!nodeTile) return { error: '目标据点没有对应格子。' };
+    targetTile = nodeTile;
+    targetMapNodeId = targetMapNodeIdCandidate;
+    targetRegionId = order.targetRegionId;
+    destination = mapNodeNameById(ctx, targetMapNodeIdCandidate);
+  }
+
+  const start = tileOfArmy(state, ctx, army);
+  if (start.x === targetTile.x && start.y === targetTile.y) return { error: '部队已在该地。' };
+  const path = findTilePathForArmy(state, ctx, army, targetTile);
+  if (!path.ok) return { error: path.error ?? '无法抵达目标。' };
+  const mpBudget = tileMpBudget(army);
+  const days = tilePathDays(path.totalCost);
+  return {
+    path,
+    targetTile,
+    targetMapNodeId,
+    targetRegionId,
+    destination,
+    mpBudget,
+    days,
+    turns: Math.max(1, Math.ceil(path.totalCost / Math.max(1, mpBudget))),
+  };
+}
+
 export function validateOrder(state: GameState, ctx: DerivedContext, order: Order): OrderValidation {
   const role = state.playerRole;
   if (!ROLE_ALLOWED[role].includes(order.kind)) {
@@ -485,25 +573,8 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
           );
         }
       }
-      const useMapRoute = Boolean(state.mapNodes && (army.mapNodeId || order.targetMapNodeId));
-      const targetMapNodeId = state.mapNodes
-        ? order.targetMapNodeId ?? capitalMapNodeId(ctx, order.targetRegionId)
-        : undefined;
-      let path: PathResult;
-      let pathNames: string;
-      if (useMapRoute) {
-        if (!targetMapNodeId || mapNodeRegionId(ctx, targetMapNodeId) !== order.targetRegionId) {
-          return issues('BAD_MAP_TARGET', '目标地图节点必须属于所选州府。');
-        }
-        const fromMapNodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
-        if (!fromMapNodeId) return issues('MAP_NODE_MISSING', '部队当前所在州府没有对应的战略地图节点。');
-        path = findMapPath(state, ctx, army.faction, fromMapNodeId, targetMapNodeId);
-        pathNames = path.path.map((id) => mapNodeNameById(ctx, id)).join(' → ');
-      } else {
-        path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
-        pathNames = path.path.map((id) => regionNameById(ctx, id)).join(' → ');
-      }
-      if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
+      const plan = planTileMove(state, ctx, army, order);
+      if ('error' in plan) return issues('NO_PATH', plan.error);
 
       const amount = order.amount ?? army.troops;
       if (!Number.isFinite(amount) || amount < 1_000) return issues('BAD_AMOUNT', '调动兵力至少 1000 人。');
@@ -541,7 +612,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       return {
         ok: true,
         issues: [],
-        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${pathNames || (useMapRoute && targetMapNodeId ? mapNodeNameById(ctx, targetMapNodeId) : '目标州府')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
+        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}走 ${plan.path.steps.length} 格（${Math.round(plan.path.totalCost)} 点移动力）抵达 ${plan.destination}，预计 ${plan.days} 日（约 ${plan.turns} 回合）。`,
       };
     }
     case 'recruit': {
@@ -721,8 +792,8 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         return issues('BAD_AMOUNT', `${region.name}州兵仅 ${region.garrison.toLocaleString()} 人，无法调出 ${order.amount.toLocaleString()} 人。`);
       }
       if (order.regionId === order.targetRegionId) return issues('BAD_TARGET', '州兵已在目标州府，无须调遣。');
-      const path = findPath(state, ctx, state.factionKey, order.regionId, order.targetRegionId);
-      if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
+      const route = findTilePathForRegions(state, ctx, state.factionKey, order.regionId, order.targetRegionId);
+      if (!route.ok) return issues('NO_PATH', route.error ?? '无法抵达目标州府。');
       let commanderId = order.commanderId;
       if (commanderId) {
         const cmd = commanderOf(ctx, commanderId);
@@ -739,7 +810,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       return {
         ok: true,
         issues: [],
-        preview: `从${region.name}调出州兵 ${order.amount.toLocaleString()} 人${cmd ? `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）` : ''}，经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，约 ${path.totalDays} 日。`,
+        preview: `从${region.name}调出州兵 ${order.amount.toLocaleString()} 人${cmd ? `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）` : ''}，走 ${route.steps.length} 格，约 ${tilePathDays(route.totalCost)} 日。`,
       };
     }
     case 'scheme': {
@@ -820,19 +891,8 @@ export function applyOrder(
     case 'move_army': {
       const army = state.armies.find((a) => a.armyId === order.armyId);
       if (!army) return;
-      const useMapRoute = Boolean(state.mapNodes && (army.mapNodeId || order.targetMapNodeId));
-      const targetMapNodeId = state.mapNodes
-        ? order.targetMapNodeId ?? capitalMapNodeId(ctx, order.targetRegionId)
-        : undefined;
-      let path: PathResult;
-      if (useMapRoute && targetMapNodeId) {
-        const fromMapNodeId = army.mapNodeId ?? capitalMapNodeId(ctx, army.nodeId);
-        if (!fromMapNodeId || mapNodeRegionId(ctx, targetMapNodeId) !== order.targetRegionId) return;
-        path = findMapPath(state, ctx, army.faction, fromMapNodeId, targetMapNodeId);
-      } else {
-        path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
-      }
-      if (!path.ok) return;
+      const plan = planTileMove(state, ctx, army, order);
+      if ('error' in plan) return;
       const amount = order.amount ?? army.troops;
       const unitRequests = (order.units ?? []).filter((u) => u.count > 0);
       const isSplit = amount < army.troops || unitRequests.length > 0;
@@ -858,6 +918,13 @@ export function applyOrder(
           stance: 'defend',
           path: [],
           hopCosts: [],
+          mapPath: [],
+          mapHopCosts: [],
+          mapCurrentHopDaysTotal: 0,
+          tilePath: [],
+          targetTile: null,
+          tileMpLeft: 0,
+          targetMapNodeId: null,
           targetRegionId: null,
           marchDaysTotal: 0,
           marchDaysLeft: 0,
@@ -892,30 +959,37 @@ export function applyOrder(
           }),
         );
       }
-      const days = dayCostsFor(mover, path.costs, { routeTypes: path.routeTypes, season: seasonOf(state.date.month) });
-      if (useMapRoute && targetMapNodeId) {
-        assignMapMarch(mover, path.path, days, targetMapNodeId, order.targetRegionId);
-      } else {
-        assignMarch(mover, path.path, days, order.targetRegionId);
-      }
+      const startTile = tileOfArmy(state, ctx, mover);
+      mover.tileX = startTile.x;
+      mover.tileY = startTile.y;
+      assignTileMarch(
+        mover,
+        plan.path.steps,
+        plan.targetTile,
+        plan.targetRegionId,
+        plan.targetMapNodeId,
+        plan.mpBudget,
+      );
       events.push(
         emitEvent(state, {
           type: 'army_move',
           title: `${mover.name}奉命开拔`,
-          summary: `兵力 ${mover.troops.toLocaleString()}，目标${useMapRoute && targetMapNodeId ? mapNodeNameById(ctx, targetMapNodeId) : regionNameById(ctx, order.targetRegionId)}，行程 ${days.reduce((s, d) => s + d, 0)} 日。`,
+          summary: `兵力 ${mover.troops.toLocaleString()}，目标 ${plan.destination}，沿 ${plan.path.steps.length} 格路线行军，预计 ${plan.days} 日（约 ${plan.turns} 回合）。`,
           actorId,
           actorName,
           factionKey: mover.faction,
           targetId: mover.armyId,
           targetLabel: mover.name,
           after: {
-            path: path.path,
-            target: order.targetRegionId,
-            targetMapNodeId: useMapRoute ? targetMapNodeId : null,
-            days,
+            path: plan.path.steps.map((step) => ({ x: step.x, y: step.y })),
+            target: plan.targetRegionId,
+            targetTile: plan.targetTile,
+            targetMapNodeId: plan.targetMapNodeId,
+            days: plan.days,
+            turns: plan.turns,
             troops: mover.troops,
           },
-          evidence: useMapRoute ? '路径由72节点战略地图、州府道路和据点支路确定' : '路径由地图边权与行军速度计算',
+          evidence: 'A* 在真·格子地图上按地形与道路权值寻路；跨回合沿格推进，逐格消耗移动力',
           source,
           visibleToPlayer: mover.faction === fk || source === 'player_order',
         }),
@@ -1287,8 +1361,14 @@ export function applyOrder(
       if (!region) return;
       const amount = Math.min(Math.round(order.amount), region.garrison);
       if (amount < 60) return;
-      const path = findPath(state, ctx, fk, region.regionId, order.targetRegionId);
-      if (!path.ok) return;
+      const map = getTileMap(ctx);
+      const startTile = tileOfRegion(map, region.regionId);
+      if (!startTile) return;
+      const targetCapital = capitalMapNodeId(ctx, order.targetRegionId) ?? null;
+      const targetTile = targetCapital ? tileOfNode(map, targetCapital) : undefined;
+      if (!targetTile) return;
+      const route = findTilePathForRegions(state, ctx, fk, region.regionId, order.targetRegionId);
+      if (!route.ok) return;
       const commander =
         commanderOf(ctx, order.commanderId) ??
         (region.garrisonCommanderId && !commanderInUse(state, fk, region.garrisonCommanderId)
@@ -1302,6 +1382,9 @@ export function applyOrder(
         commanderName: commander?.name ?? region.garrisonCommanderName,
         districtId: '',
         nodeId: region.regionId,
+        mapNodeId: capitalMapNodeId(ctx, region.regionId),
+        tileX: startTile.x,
+        tileY: startTile.y,
         originRegionId: region.regionId,
         units: [],
         levies: amount,
@@ -1314,6 +1397,10 @@ export function applyOrder(
         status: 'idle',
         path: [],
         hopCosts: [],
+        mapPath: [],
+        mapHopCosts: [],
+        tilePath: [],
+        targetTile: null,
         targetRegionId: null,
         marchDaysTotal: 0,
         marchDaysLeft: 0,
@@ -1324,8 +1411,14 @@ export function applyOrder(
       region.garrison -= amount;
       region.garrisoned = region.garrison > 0;
       state.armies.push(army);
-      const days = dayCostsFor(army, path.costs, { routeTypes: path.routeTypes, season: seasonOf(state.date.month) });
-      assignMarch(army, path.path, days, order.targetRegionId);
+      assignTileMarch(
+        army,
+        route.steps,
+        { x: route.steps[route.steps.length - 1].x, y: route.steps[route.steps.length - 1].y },
+        order.targetRegionId,
+        targetCapital,
+        tileMpBudget(army),
+      );
       events.push(
         emitEvent(state, {
           type: 'order_accepted',

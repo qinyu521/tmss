@@ -16,6 +16,8 @@ import { BALANCE, INITIAL_RESOURCES } from '../balance.js';
 import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
 import { buildContext, buildInitialArmies, buildInitialMapNodes, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
+import { assignTileMarch, capitalMapNodeId, clearMarch, tileMpBudget } from './movement.js';
+import { findTilePathForNodes, syncArmyTileFromNode } from './tilemap.js';
 
 export const SCHEMA_VERSION = 6;
 
@@ -260,6 +262,7 @@ export function createGame(
     statistics: { battles: 0, casualties: 0, turnsPlayed: 0, occupiedRegions: 0 },
     flags: { successionCrisis: false, tribalRefusal: false, houseBoycott: false },
   };
+  ensureArmyTiles(state, ctx);
   return state;
 }
 
@@ -356,6 +359,42 @@ const MIGRATIONS: Migration[] = [
   { from: 5, to: 6, apply: migrateV5toV6 },
 ];
 
+/** 为每支部队补齐格子位置；旧档仍在节点路线上的行军转为等价的格子路线。 */
+function ensureArmyTiles(state: GameState, ctx: DerivedContext): void {
+  for (const army of state.armies ?? []) {
+    army.tilePath ??= [];
+    if (army.targetTile === undefined) army.targetTile = null;
+    if (army.tileX === undefined || army.tileY === undefined) {
+      syncArmyTileFromNode(state, ctx, army);
+    }
+    const legacyMarching =
+      army.status === 'marching' &&
+      army.tilePath.length === 0 &&
+      ((army.mapPath?.length ?? 0) > 0 || (army.path?.length ?? 0) > 0);
+    if (!legacyMarching) continue;
+    const targetNodeId =
+      army.targetMapNodeId ?? (army.targetRegionId ? capitalMapNodeId(ctx, army.targetRegionId) : null);
+    if (!targetNodeId) {
+      clearMarch(army);
+      continue;
+    }
+    const route = findTilePathForNodes(state, ctx, army, targetNodeId);
+    if (!route.ok || route.steps.length === 0) {
+      clearMarch(army);
+      continue;
+    }
+    const last = route.steps[route.steps.length - 1];
+    assignTileMarch(
+      army,
+      route.steps,
+      { x: last.x, y: last.y },
+      army.targetRegionId ?? state.regions[army.nodeId]?.regionId ?? '',
+      targetNodeId,
+      tileMpBudget(army),
+    );
+  }
+}
+
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
 export function migrateState(state: GameState, roster?: CharacterSeed[], mapSeed?: SeedRoster): GameState {
   if (!state.schemaVersion) state.schemaVersion = 1;
@@ -382,6 +421,7 @@ export function migrateState(state: GameState, roster?: CharacterSeed[], mapSeed
       army.mapHopCosts ??= [];
       if (army.targetMapNodeId === undefined) army.targetMapNodeId = null;
     }
+    ensureArmyTiles(state, ctx);
   }
   return state;
 }

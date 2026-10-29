@@ -114,6 +114,12 @@ export interface ArmyView {
   mapNodeId?: string;
   mapPath?: string[];
   targetMapNodeId?: string | null;
+  /** 仅向本方公开格子位置、剩余格子路线与本旬移动力。 */
+  tileX?: number;
+  tileY?: number;
+  tilePath?: { x: number; y: number }[];
+  targetTile?: { x: number; y: number } | null;
+  tileMpLeft?: number;
 }
 
 export interface MapNodeView {
@@ -271,16 +277,23 @@ export function buildPlayerView(state: GameState, ctx: DerivedContext): PlayerVi
       mapNodeId: own ? army.mapNodeId : undefined,
       mapPath: own ? (army.mapPath ?? []) : [],
       targetMapNodeId: own ? army.targetMapNodeId : null,
+      tileX: own ? army.tileX : undefined,
+      tileY: own ? army.tileY : undefined,
+      tilePath: own ? (army.tilePath ?? []) : undefined,
+      targetTile: own ? army.targetTile ?? null : null,
+      tileMpLeft: own ? army.tileMpLeft ?? 0 : undefined,
       own,
       status: army.status,
       stance: army.stance,
       path: own ? army.path : [],
       targetRegionId: own ? army.targetRegionId : null,
-      progress: own && (army.mapPath?.length ?? 0) > 0 && (army.mapCurrentHopDaysTotal ?? 0) > 0
-        ? Math.max(0, Math.min(1, 1 - (army.mapHopCosts?.[0] ?? 0) / (army.mapCurrentHopDaysTotal ?? 1)))
-        : own && army.path.length > 0 && (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 0) > 0
-          ? Math.max(0, Math.min(1, 1 - (army.hopCosts[0] ?? 0) / (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 1)))
-          : 0,
+      progress: own && (army.tilePath?.length ?? 0) > 0 && army.marchDaysTotal > 0
+        ? Math.max(0, Math.min(1, 1 - army.marchDaysLeft / army.marchDaysTotal))
+        : own && (army.mapPath?.length ?? 0) > 0 && (army.mapCurrentHopDaysTotal ?? 0) > 0
+          ? Math.max(0, Math.min(1, 1 - (army.mapHopCosts?.[0] ?? 0) / (army.mapCurrentHopDaysTotal ?? 1)))
+          : own && army.path.length > 0 && (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 0) > 0
+            ? Math.max(0, Math.min(1, 1 - (army.hopCosts[0] ?? 0) / (army.currentHopDaysTotal ?? army.hopCosts[0] ?? 1)))
+            : 0,
       troops: own ? army.troops : undefined,
       troopsLabel: own
         ? `${fmt(army.troops)}人`

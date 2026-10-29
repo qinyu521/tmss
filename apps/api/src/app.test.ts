@@ -376,10 +376,15 @@ describe('API 集成', () => {
     });
     expect(order.statusCode).toBe(200);
     expect(order.json().accepted).toHaveLength(1);
-    await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
 
-    const events = (await app.inject({ method: 'GET', url: `/api/games/${gid}/events` })).json().items;
-    const battle = events.find((e: any) => e.type === 'battle');
+    // 格子行军跨回合推进：连续结算直至前线遭遇，战报回放接口再针对真实 battle 事件断言。
+    let events: any[] = [];
+    let battle: any;
+    for (let turn = 0; turn < 8 && !battle; turn++) {
+      await app.inject({ method: 'POST', url: `/api/games/${gid}/turn`, payload: {} });
+      events = (await app.inject({ method: 'GET', url: `/api/games/${gid}/events` })).json().items;
+      battle = events.find((e: any) => e.type === 'battle');
+    }
     expect(battle).toBeTruthy();
 
     const ok = await app.inject({ method: 'GET', url: `/api/games/${gid}/battles/${battle.eventId}/replay` });

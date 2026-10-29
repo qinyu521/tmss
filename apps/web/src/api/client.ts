@@ -33,6 +33,7 @@ export interface MapNode {
   region: string;
   node_name: string;
   node_type: string;
+  parent_node_id: string;
   map_x: number;
   map_y: number;
   controller_name: string;

@@ -1,6 +1,14 @@
 import * as THREE from 'three';
-import type { FactionKey, PlayerView } from '@tianming/shared';
-import { FACTION_VISUALS } from '@tianming/shared';
+import type { FactionKey, MapTile, PlayerView, TileMap } from '@tianming/shared';
+import {
+  FACTION_VISUALS,
+  TILE_SIZE,
+  TILE_TERRAIN_INFO,
+  buildTileMapFromMapData,
+  mapCoordToTile,
+  tileAt,
+  tileCenter,
+} from '@tianming/shared';
 import type { MapData, MapEdge, MapNode, TerritorySeed } from '../api/client';
 import art from '../../../../data/derived/map_art.json';
 
@@ -20,6 +28,7 @@ export interface SceneCallbacks {
   onSelectRegion: (regionId: string) => void;
   onSelectArmy: (armyId: string) => void;
   onSelectNode: (nodeId: string) => void;
+  onSelectTile: (tile: { x: number; y: number }, regionId: string) => void;
   onHover: (info: { title: string; subtitle: string; x: number; y: number } | null) => void;
 }
 
@@ -176,6 +185,12 @@ export class MapScene {
   private terrainSize = 1700;
   private roadGroup?: THREE.Group;
   private decorGroup?: THREE.Group;
+  private tileMap: TileMap | null = null;
+  private tileOverlay?: THREE.Group;
+  private tileGrid?: THREE.LineSegments;
+  private tileCursor?: THREE.LineLoop;
+  private tileCursorFill?: THREE.Mesh;
+  private hoveredTile: { x: number; y: number } | null = null;
   private heightAt: (x: number, z: number) => number = () => 0;
   private animations: { ring: number; time: number } = { ring: 0, time: 0 };
   private frame = 0;
@@ -243,6 +258,7 @@ export class MapScene {
 
   setMap(map: MapData): void {
     this.map = map;
+    this.tileMap = buildTileMapFromMapData(map);
     this.buildWorld();
   }
 
@@ -357,6 +373,11 @@ export class MapScene {
     this.nodeLabels = [];
     this.labelLayer.innerHTML = '';
     this.displayOffsets.clear();
+    this.tileOverlay = undefined;
+    this.tileGrid = undefined;
+    this.tileCursor = undefined;
+    this.tileCursorFill = undefined;
+    this.hoveredTile = null;
     const usedCoords = new Set<string>();
     for (const t of this.map.territories) {
       const key = `${t.map_x.toFixed(2)},${t.map_y.toFixed(2)}`;
@@ -378,6 +399,7 @@ export class MapScene {
     this.buildRoads();
     this.buildRivers();
     this.buildDecorations();
+    this.buildTileLayer();
     this.buildNodes();
     this.buildRegionLabels();
     this.inspectGeometry();
@@ -691,6 +713,135 @@ export class MapScene {
     this.scene.add(decor);
   }
 
+  /** 真·格子地图：地形色块 + 方格网 + 悬停光标。 */
+  private buildTileLayer(): void {
+    if (!this.tileMap) return;
+    const group = new THREE.Group();
+    const positions: number[] = [];
+    const colors: number[] = [];
+    const indices: number[] = [];
+    const tint = new THREE.Color();
+    let quads = 0;
+    for (const tile of this.tileMap.tiles) {
+      if (tile.terrain === 'plain') continue;
+      const center = tileCenter(tile.x, tile.y);
+      tint.set(TILE_TERRAIN_INFO[tile.terrain].color);
+      const base = quads * 4;
+      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
+        const w = mapToWorld(center.x + sx * TILE_SIZE * 0.5, center.y + sy * TILE_SIZE * 0.5);
+        positions.push(w.x, this.heightAt(w.x, w.z) + 2.4, w.z);
+        colors.push(tint.r, tint.g, tint.b);
+      }
+      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      quads++;
+    }
+    if (quads > 0) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      geometry.setIndex(indices);
+      const mesh = new THREE.Mesh(
+        geometry,
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.42,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      mesh.renderOrder = 1;
+      group.add(mesh);
+    }
+
+    const grid: number[] = [];
+    const x0 = tileCenter(0, 0).x - TILE_SIZE / 2;
+    const y0 = tileCenter(0, 0).y - TILE_SIZE / 2;
+    const stride = this.quality === 'low' ? 2 : 1;
+    for (let x = 0; x <= this.tileMap.width; x += stride) {
+      let previous: THREE.Vector3 | null = null;
+      for (let y = 0; y <= this.tileMap.height; y++) {
+        const w = mapToWorld(x0 + x * TILE_SIZE, y0 + y * TILE_SIZE);
+        const point = new THREE.Vector3(w.x, this.heightAt(w.x, w.z) + 2.6, w.z);
+        if (previous) grid.push(previous.x, previous.y, previous.z, point.x, point.y, point.z);
+        previous = point;
+      }
+    }
+    for (let y = 0; y <= this.tileMap.height; y += stride) {
+      let previous: THREE.Vector3 | null = null;
+      for (let x = 0; x <= this.tileMap.width; x++) {
+        const w = mapToWorld(x0 + x * TILE_SIZE, y0 + y * TILE_SIZE);
+        const point = new THREE.Vector3(w.x, this.heightAt(w.x, w.z) + 2.6, w.z);
+        if (previous) grid.push(previous.x, previous.y, previous.z, point.x, point.y, point.z);
+        previous = point;
+      }
+    }
+    const gridGeometry = new THREE.BufferGeometry();
+    gridGeometry.setAttribute('position', new THREE.Float32BufferAttribute(grid, 3));
+    this.tileGrid = new THREE.LineSegments(
+      gridGeometry,
+      new THREE.LineBasicMaterial({
+        color: '#d8c08a',
+        transparent: true,
+        opacity: this.quality === 'low' ? 0.06 : 0.11,
+        depthWrite: false,
+      }),
+    );
+    this.tileGrid.renderOrder = 2;
+    group.add(this.tileGrid);
+
+    const cursorGeometry = new THREE.BufferGeometry();
+    cursorGeometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12), 3));
+    this.tileCursor = new THREE.LineLoop(
+      cursorGeometry,
+      new THREE.LineBasicMaterial({ color: '#f4d47a', transparent: true, opacity: 0.95, depthWrite: false }),
+    );
+    this.tileCursor.visible = false;
+    this.tileCursor.renderOrder = 4;
+    const fillGeometry = new THREE.PlaneGeometry(TILE_SIZE * SCALE * 0.9, TILE_SIZE * SCALE * 0.9);
+    fillGeometry.rotateX(-Math.PI / 2);
+    this.tileCursorFill = new THREE.Mesh(
+      fillGeometry,
+      new THREE.MeshBasicMaterial({
+        color: '#f0d27c',
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    this.tileCursorFill.visible = false;
+    this.tileCursorFill.renderOrder = 3;
+    group.add(this.tileCursor, this.tileCursorFill);
+    this.tileOverlay = group;
+    this.scene.add(group);
+  }
+
+  private updateTileCursor(tile: { x: number; y: number } | null): void {
+    if (!this.tileCursor || !this.tileCursorFill) return;
+    if (!tile) {
+      this.tileCursor.visible = false;
+      this.tileCursorFill.visible = false;
+      this.hoveredTile = null;
+      return;
+    }
+    const same = this.hoveredTile && this.hoveredTile.x === tile.x && this.hoveredTile.y === tile.y;
+    this.hoveredTile = { x: tile.x, y: tile.y };
+    if (same && this.tileCursor.visible) return;
+    const center = tileCenter(tile.x, tile.y);
+    const attribute = this.tileCursor.geometry.getAttribute('position') as THREE.BufferAttribute;
+    ([[-1, -1], [1, -1], [1, 1], [-1, 1]] as const).forEach(([sx, sy], index) => {
+      const w = mapToWorld(center.x + sx * TILE_SIZE * 0.5, center.y + sy * TILE_SIZE * 0.5);
+      attribute.setXYZ(index, w.x, this.heightAt(w.x, w.z) + 3, w.z);
+    });
+    attribute.needsUpdate = true;
+    this.tileCursor.geometry.computeBoundingSphere();
+    this.tileCursor.visible = true;
+    const w = mapToWorld(center.x, center.y);
+    this.tileCursorFill.position.set(w.x, this.heightAt(w.x, w.z) + 2.9, w.z);
+    this.tileCursorFill.visible = true;
+  }
+
   private buildNodes(): void {
     if (!this.map) return;
     const typeGroups = new Map<string, THREE.BufferGeometry[]>();
@@ -959,7 +1110,11 @@ export class MapScene {
       const coord = currentMapNode
         ? this.displayCoord(currentMapNode.region, currentMapNode.map_x, currentMapNode.map_y)
         : this.displayCoord(territory!.region, territory!.map_x, territory!.map_y);
-      const w = mapToWorld(coord.x, coord.y);
+      const tilePosition =
+        army.own && army.tileX !== undefined && army.tileY !== undefined
+          ? tileCenter(army.tileX, army.tileY)
+          : null;
+      const w = tilePosition ? mapToWorld(tilePosition.x, tilePosition.y) : mapToWorld(coord.x, coord.y);
       const group = new THREE.Group();
       const base = new THREE.Mesh(
         new THREE.CylinderGeometry(9, 10, 2, 16),
@@ -1011,8 +1166,21 @@ export class MapScene {
       const position = new THREE.Vector3(w.x, this.heightAt(w.x, w.z) + 4, w.z);
       let routeLine: THREE.Line | null = null;
       const mapPath = army.mapPath ?? [];
+      const tilePath = army.own ? army.tilePath ?? [] : [];
       let routePoints: THREE.Vector3[] = [];
-      if (army.own && army.mapNodeId && mapPath.length > 0) {
+      let tileRoute = false;
+      if (army.own && tilePath.length > 0) {
+        tileRoute = true;
+        const startTile =
+          army.tileX !== undefined && army.tileY !== undefined
+            ? { x: army.tileX, y: army.tileY }
+            : mapCoordToTile(coord.x, coord.y);
+        routePoints = [startTile, ...tilePath].map((step) => {
+          const center = tileCenter(step.x, step.y);
+          const p = mapToWorld(center.x, center.y);
+          return new THREE.Vector3(p.x, this.heightAt(p.x, p.z) + 8, p.z);
+        });
+      } else if (army.own && army.mapNodeId && mapPath.length > 0) {
         routePoints = [army.mapNodeId, ...mapPath]
           .map((id) => {
             const node = mapNodes.get(id);
@@ -1041,8 +1209,10 @@ export class MapScene {
         );
         routeLine.computeLineDistances();
         this.scene.add(routeLine);
-        const routePoint = pointAlong(routePoints, army.progress);
-        position.set(routePoint.x, routePoint.y + 4, routePoint.z);
+        if (!tileRoute) {
+          const routePoint = pointAlong(routePoints, army.progress);
+          position.set(routePoint.x, routePoint.y + 4, routePoint.z);
+        }
       }
       group.position.copy(position);
       group.scale.setScalar(1.3);
@@ -1120,6 +1290,7 @@ export class MapScene {
     };
     const leave = () => {
       this.hoverRing.visible = false;
+      this.updateTileCursor(null);
       this.callbacks.onHover(null);
     };
     const context = (ev: Event) => ev.preventDefault();
@@ -1160,6 +1331,20 @@ export class MapScene {
     return this.cells.find((c) => c.regionId === id) ?? null;
   }
 
+  private pickTerrain(ev: MouseEvent): { tile: { x: number; y: number }; data: MapTile } | null {
+    if (!this.terrain || !this.tileMap) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObject(this.terrain, false);
+    if (hits.length === 0) return null;
+    const point = hits[0].point;
+    const tile = mapCoordToTile(point.x / SCALE + ORIGIN_X, point.z / SCALE + ORIGIN_Y);
+    const data = tileAt(this.tileMap, tile.x, tile.y);
+    return data ? { tile, data } : null;
+  }
+
   private pick(ev: MouseEvent): void {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
@@ -1185,22 +1370,41 @@ export class MapScene {
         return;
       }
     }
+    const terrainHit = this.pickTerrain(ev);
+    if (terrainHit) {
+      this.callbacks.onSelectTile(terrainHit.tile, terrainHit.data.regionId);
+      return;
+    }
     const region = this.pickRegion(ev);
     if (region) this.callbacks.onSelectRegion(region.regionId);
   }
 
   private hover(ev: MouseEvent): void {
     const rect = this.renderer.domElement.getBoundingClientRect();
-    const region = this.pickRegion(ev);
+    const terrainHit = this.pickTerrain(ev);
+    this.updateTileCursor(terrainHit?.tile ?? null);
+    const region = terrainHit
+      ? this.cells.find((cell) => cell.regionId === terrainHit.data.regionId) ?? null
+      : this.pickRegion(ev);
     this.hovered = region?.regionId ?? null;
     if (region) {
       this.hoverRing.position.copy(region.center).setY(region.center.y + 8);
       this.hoverRing.visible = true;
       const rv = this.view?.regions.find((r) => r.regionId === region.regionId);
+      const tileHint = terrainHit
+        ? ` · ${TILE_TERRAIN_INFO[terrainHit.data.terrain].label} (${terrainHit.tile.x},${terrainHit.tile.y})`
+        : '';
       if (rv) {
         this.callbacks.onHover({
           title: rv.name,
-          subtitle: `${rv.ownerShort}${rv.owned ? ` · 治安 ${rv.order} / 忠诚 ${rv.loyalty}` : rv.intel ? ' · 有斥候情报' : ' · 情报未详'}${rv.threat > 20 ? ` · 威胁 ${rv.threat}` : ''}`,
+          subtitle: `${rv.ownerShort}${tileHint}${rv.owned ? ` · 治安 ${rv.order} / 忠诚 ${rv.loyalty}` : rv.intel ? ' · 有斥候情报' : ' · 情报未详'}${rv.threat > 20 ? ` · 威胁 ${rv.threat}` : ''}`,
+          x: ev.clientX - rect.left,
+          y: ev.clientY - rect.top,
+        });
+      } else if (terrainHit) {
+        this.callbacks.onHover({
+          title: this.tileMap?.regionNames[terrainHit.data.regionId] ?? '未详之地',
+          subtitle: `${TILE_TERRAIN_INFO[terrainHit.data.terrain].label} (${terrainHit.tile.x},${terrainHit.tile.y})`,
           x: ev.clientX - rect.left,
           y: ev.clientY - rect.top,
         });
@@ -1254,6 +1458,8 @@ export class MapScene {
     this.selectionRing.scale.setScalar(1 + Math.sin(this.animations.time * 1.5) * 0.04);
 
     if (this.roadGroup) this.roadGroup.visible = this.distance < 700;
+    if (this.tileGrid) this.tileGrid.visible = this.distance < 1250;
+    if (this.tileOverlay) this.tileOverlay.visible = this.distance < 1500;
     if (this.decorGroup) this.decorGroup.visible = this.distance < 640 && this.quality === 'high';
 
     for (const marker of this.armyMarkers) {

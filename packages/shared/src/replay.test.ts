@@ -20,16 +20,21 @@ const seed = JSON.parse(fs.readFileSync(seedPath, 'utf8')) as SeedRoster;
 applyUnitNames(seed.military_units);
 const ctx = buildContext(seed);
 
-/** 用固定种子真实结算一场战斗，取回 battle 事件 */
+/** 用固定种子真实结算一场战斗，取回 battle 事件（格子行军跨回合，逐旬推进至遭遇）。 */
 function realBattleEvent(): GameEvent {
-  const state = createGame(seed, { gameId: 'replay-test', factionKey: 'HUN', playerRole: 'ruler', seed: 424242 });
-  state.pendingOrders = [
-    { orderId: 'b1', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' },
-  ];
-  const result = runTurn(state, ctx);
-  const ev = result.report.events.find((e) => e.type === 'battle');
-  if (!ev) throw new Error('固定种子下未产生战斗事件');
-  return ev;
+  let state = createGame(seed, { gameId: 'replay-test', factionKey: 'HUN', playerRole: 'ruler', seed: 424242 });
+  for (let turn = 0; turn < 8; turn++) {
+    const army = state.armies.find((item) => item.armyId === 'HUN-ARMY-02');
+    state.pendingOrders =
+      army && army.status !== 'marching'
+        ? [{ orderId: `b${turn}`, kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' }]
+        : [];
+    const result = runTurn(state, ctx);
+    const ev = result.report.events.find((e) => e.type === 'battle');
+    if (ev) return ev;
+    state = result.state;
+  }
+  throw new Error('固定种子下未产生战斗事件');
 }
 
 describe('战报回放', () => {

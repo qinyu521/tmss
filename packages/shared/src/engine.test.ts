@@ -681,19 +681,26 @@ describe('回合结算', () => {
   });
 
   it('战斗使用固定随机种子，重复结算得到同一结果', () => {
-    const base = newGame('HUN', 'ruler', 'battle-seed');
-    base.pendingOrders = [
-      { orderId: 'b1', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' },
-    ];
-    const a = runTurn(clone(base), ctx);
-    const b = runTurn(clone(base), ctx);
-    const battleA = a.report.events.find((e) => e.type === 'battle');
-    const battleB = b.report.events.find((e) => e.type === 'battle');
-    expect(battleA).toBeTruthy();
-    expect(battleB).toBeTruthy();
-    expect((battleA!.after as any).attackerWon).toBe((battleB!.after as any).attackerWon);
-    expect((battleA!.payload as any).seed).toBe((battleB!.payload as any).seed);
-    expect((battleA!.after as any).totalLosses).toBe((battleB!.after as any).totalLosses);
+    const runToBattle = () => {
+      let state = newGame('HUN', 'ruler', 'battle-seed');
+      for (let turn = 0; turn < 8; turn++) {
+        const army = state.armies.find((item) => item.armyId === 'HUN-ARMY-02');
+        state.pendingOrders =
+          army && army.status !== 'marching'
+            ? [{ orderId: `b${turn}`, kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' }]
+            : [];
+        const result = runTurn(state, ctx);
+        const battle = result.report.events.find((e) => e.type === 'battle');
+        if (battle) return battle;
+        state = result.state;
+      }
+      throw new Error('固定种子下未产生战斗事件');
+    };
+    const battleA = runToBattle();
+    const battleB = runToBattle();
+    expect((battleA.after as any).attackerWon).toBe((battleB.after as any).attackerWon);
+    expect((battleA.payload as any).seed).toBe((battleB.payload as any).seed);
+    expect((battleA.after as any).totalLosses).toBe((battleB.after as any).totalLosses);
   });
 
   it('匈奴部落忠诚过低时拒绝出兵', () => {

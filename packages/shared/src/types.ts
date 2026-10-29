@@ -486,6 +486,14 @@ export interface Army {
   /** 当前地图路段的完整日数，用于跨回合位置显示。 */
   mapCurrentHopDaysTotal?: number;
   targetMapNodeId?: string | null;
+  /** 真·格子地图上的当前格；缺省时由地图节点/州府推导。 */
+  tileX?: number;
+  tileY?: number;
+  /** 剩余格子路线（不含当前格）。 */
+  tilePath?: { x: number; y: number }[];
+  targetTile?: { x: number; y: number } | null;
+  /** 本旬剩余移动力，仅用于界面展示。 */
+  tileMpLeft?: number;
   units: ArmyUnitStack[];
   levies: number;
   troops: number;
@@ -639,6 +647,8 @@ export type Order =
       targetRegionId: string;
       /** 可选：直接指定 72 节点地图中的具体据点；缺省为目标州府。 */
       targetMapNodeId?: string;
+      /** 可选：直接指定格子地图上的目标格；优先生效。 */
+      targetTile?: { x: number; y: number };
       /** 本次调动的总兵力；缺省为全军 */
       amount?: number;
       /** 随军调走的特殊兵种与数量；其余按征集兵计算 */
