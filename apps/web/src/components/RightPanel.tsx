@@ -244,6 +244,16 @@ export default function RightPanel() {
             <div className="muted" style={{ marginTop: 6 }}>资源：{nodeView.resource_profile}</div>
             <div className="muted">风险：{nodeView.terrain_and_risk}</div>
           </div>
+          {nodeState?.siege && (
+            <div className="card small" style={{ lineHeight: 1.65, marginBottom: 10 }}>
+              <div className="subhead">{nodeState.siege.besiegerFaction === view!.factionKey ? '我军围城' : '我城被围'}</div>
+              <div className="muted">围城已持续 {nodeState.siege.turns} 个结算回合，当前进度 {Math.round(nodeState.siege.progress)}%。</div>
+              <div style={{ height: 6, margin: '8px 0', borderRadius: 3, overflow: 'hidden', background: 'rgba(100, 85, 62, .25)' }}>
+                <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, nodeState.siege.progress))}%`, background: '#b86a42', transition: 'width .2s ease' }} />
+              </div>
+              <div className="muted">围城军团 {nodeState.siege.besiegerCount} 支。城防、守军和储备逐回合消耗；守方野战援军进入主城时会触发解围战。</div>
+            </div>
+          )}
           <div className="subhead">控制与驻防</div>
           <div className="kv">
             <div className="item"><div className="k">当前势力</div><div className="v" style={{ fontSize: 13 }}>{nodeState?.ownerShort ?? nodeView.controller_name}</div></div>
