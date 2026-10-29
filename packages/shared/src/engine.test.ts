@@ -788,11 +788,35 @@ describe('战略节点后勤补给', () => {
     const { state, nodeId } = logisticsScenario(0, 'CHU');
     const result = runTurn(state, ctx);
     const army = result.state.armies.find((item) => item.faction === 'HUN');
-    expect(army?.supply).toBe(48);
+    expect(army?.supply).toBe(32);
     expect(result.state.mapNodes![nodeId].supplyLevel).toBe(0);
     expect(result.report.events.some((item) =>
       item.type === 'resource' && item.payload?.action === 'node_resupply' && item.targetId === nodeId,
     )).toBe(false);
+  });
+  it('敌方控制的节点会切断常规补给，低于阈值后触发孤军减员', () => {
+    const { state, nodeId } = logisticsScenario(0, 'HUN');
+    const node = state.mapNodes![nodeId];
+    node.faction = 'CHU';
+    const armyBefore = state.armies[0];
+    if (!armyBefore) throw new Error('测试缺少孤立军团。');
+    armyBefore.supply = 25;
+    const troopsBefore = armyBefore.troops;
+
+    const result = runTurn(state, ctx);
+    const army = result.state.armies.find((item) => item.faction === 'HUN');
+    expect(army).toBeDefined();
+    expect(army?.supply).toBe(17);
+    expect(army?.troops).toBeLessThan(troopsBefore);
+
+    const isolationEvent = result.report.events.find((item) =>
+      item.type === 'shortage' && item.payload?.action === 'isolated_army_supply' && item.targetId === army?.armyId,
+    );
+    expect(isolationEvent).toBeTruthy();
+    expect(isolationEvent?.before?.supply).toBe(25);
+    expect(isolationEvent?.after?.supply).toBe(17);
+    expect(isolationEvent?.after?.attritionLosses).toBe(troopsBefore - (army?.troops ?? 0));
+    expect(isolationEvent?.visibleToPlayer).toBe(true);
   });
 });
 
