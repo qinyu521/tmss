@@ -11,6 +11,7 @@ import {
   resolveBattle,
   runTurn,
   validateOrder,
+  generateNpcOrders,
   type GameState,
   type SeedRoster,
 } from './index.js';
@@ -207,6 +208,55 @@ describe('回合结算', () => {
     const result = runTurn(state, ctx);
     expect(result.state.flags.houseBoycott).toBe(true);
     expect(result.report.events.some((e) => e.type === 'politics')).toBe(true);
+  });
+
+  it('NPC 遭遇夺嫡危机时优先平衡皇子派系', () => {
+    const state = newGame('CHU', 'ruler', 'npc-yong-crisis');
+    state.factions.YONG.resources.cash = 100_000;
+    state.special.YONG.courtStability = 20;
+    state.flags.successionCrisis = true;
+
+    const orders = generateNpcOrders(state, ctx);
+    expect(orders.some((order) => order.kind === 'balance_princes')).toBe(true);
+  });
+
+  it('匈奴 NPC 优先安抚拒命部落，而非只按忠诚最低排序', () => {
+    const state = newGame('CHU', 'ruler', 'npc-hun-refusal');
+    state.special.HUN.cohesion = 45;
+    state.factions.HUN.resources.cash = 50_000;
+    const tribes = state.special.HUN.tribes!;
+    tribes[0].loyalty = 20;
+    tribes[0].stance = 'watchful';
+    tribes[1].loyalty = 48;
+    tribes[1].stance = 'refusing';
+
+    const orders = generateNpcOrders(state, ctx);
+    const appeasement = orders.find((order) => order.kind === 'appease_tribe');
+    expect(appeasement?.kind).toBe('appease_tribe');
+    if (appeasement?.kind === 'appease_tribe') {
+      expect(appeasement.tribeId).toBe(tribes[1].tribeId);
+    }
+  });
+
+  it('NPC 在敌方守备压倒性占优时不会发起无意义进攻', () => {
+    const state = newGame('CHU', 'ruler', 'npc-no-suicide');
+    state.diplomacy['HUN|YONG'] = -80;
+    state.diplomacy['HUN|CHU'] = -80;
+    state.diplomacy['YONG|CHU'] = -80;
+    for (const region of Object.values(state.regions)) {
+      region.garrison = 900_000;
+      region.fortification = 100;
+    }
+    for (const army of state.armies) {
+      army.status = 'idle';
+      army.supply = 100;
+      army.morale = 100;
+      army.training = 100;
+      army.fatigue = 0;
+    }
+
+    const orders = generateNpcOrders(state, ctx);
+    expect(orders.some((order) => order.kind === 'move_army')).toBe(false);
   });
 
   it('NPC 内部命令不泄露给玩家', () => {
