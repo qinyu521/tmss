@@ -193,7 +193,7 @@ export function dayCostsFor(
   return costs.map((c, i) => {
     const routeType = opts?.routeTypes?.[i] ?? '';
     const seasonal = frozenFord !== 1 && isRiverRoute(routeType) ? frozenFord : 1;
-    return Math.max(1, Math.round((c * seasonal) / speed));
+    return Math.max(1, Math.round((c * BALANCE.army.movementCostDayScale * seasonal) / speed));
   });
 }
 

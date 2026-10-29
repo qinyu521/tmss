@@ -6,6 +6,7 @@ import {
   applyUnitNames,
   buildContext,
   createGame,
+  dayCostsFor,
   estimatePathDays,
   findPath,
   routeCapacityMultiplier,
@@ -94,12 +95,28 @@ describe('行军路线与道路通行能力', () => {
       units: [],
       fatigue: 0,
     };
-    expect(estimatePathDays(smallLevyProfile, small, 'spring')).toBe(3);
+    expect(estimatePathDays(smallLevyProfile, small, 'spring')).toBe(7);
     expect(small.totalDays).toBe(3.3); // 路线成本与实际行军日分开计算
 
     expect(large.ok).toBe(true);
     expect(large.path).toEqual(['HUN-REG02', 'HUN-REG05']);
     expect(large.costs).toEqual([2, 2]);
-    expect(large.totalDays).toBe(4);
+    expect(large.totalDays).toBe(4); // Dijkstra 成本用于选路；实际天数由 estimatePathDays 换算。
+  });
+
+  it('道路成本换算为实际行军日，标准军团会自然跨旬', () => {
+    const standardArmy = {
+      faction: 'YONG' as const,
+      troops: 10_000,
+      levies: 10_000,
+      units: [],
+      fatigue: 0,
+    };
+    // 基础机动、春季非河路：道路成本 2/3/4/5 约为 4/7/9/11 天。
+    expect(dayCostsFor(standardArmy, [2, 3, 4, 5], {
+      routeTypes: ['官道', '官道', '官道', '官道'],
+      season: 'spring',
+    })).toEqual([4, 7, 9, 11]);
+    expect(estimatePathDays(standardArmy, { costs: [2, 3], routeTypes: ['官道', '官道'] }, 'spring')).toBe(11);
   });
 });
