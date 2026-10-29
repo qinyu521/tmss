@@ -130,14 +130,14 @@ export const BALANCE = {
   /** 人物生命周期：衰老/死亡/继承/成长（engine/lifecycle.ts） */
   lifecycle: {
     /**
-     * 每旬基础死亡概率，按种子 age_band 词表映射。
+     * 每回合基础死亡概率，按种子 age_band 词表映射。
      * 种子词表仅四段（青年/壮年/中年/老成），「老成」为最高龄档，采用老年档 1.5%；
      * 暮年 4% 保留给未来更高龄档扩展。
      */
     mortalityPerTurn: { 青年: 0.001, 壮年: 0.002, 中年: 0.005, 老成: 0.015 } as Record<string, number>,
     /** 词表外年龄段缺省概率 */
     defaultMortality: 0.002,
-    /** 本旬参战部队主将的额外战死概率 */
+    /** 本回合参战部队主将的额外战死概率 */
     battleDeathBonus: 0.015,
     /** 主将阵亡后部队士气惩罚 */
     armyMoraleLossOnCommanderDeath: 8,
@@ -147,7 +147,7 @@ export const BALANCE = {
     houseSupportLossOnPatriarchDeath: 6,
     /** 皇子身故对朝局稳定的冲击 */
     courtStabilityLossOnPrinceDeath: 10,
-    /** 成长：潜力门槛 / 间隔回合（约一年 52 旬） / 属性上限 */
+    /** 成长：潜力门槛 / 间隔回合（约一年 52 回合） / 属性上限 */
     growthMinPotential: 70,
     growthIntervalTurns: 52,
     growthCap: 95,
