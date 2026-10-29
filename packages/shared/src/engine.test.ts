@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveCommanderDefectionThreats } from './engine/turn.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,7 @@ import {
   perThousandDemand,
   shortageTags,
   UNIT_PROFILES,
+  applyOrder,
   applyUnitNames,
   buildContext,
   buildAdjacency,
@@ -25,6 +27,7 @@ import {
   runTurn,
   validateOrder,
   generateNpcOrders,
+  type GameEvent,
   type GameState,
   type Order,
   type SeedRoster,
@@ -335,6 +338,97 @@ describe('正式朝议', () => {
     expect(validateOrder(state, ctx, tooExpensive).issues[0].code).toBe('NO_GRAIN');
   });
 });
+
+
+describe('将领军令忠诚与倒戈', () => {
+  it('强关系、低忠诚且处于战争时先预警，下一回合才携军与州府倒戈', () => {
+    const localSeed = clone(seed);
+    const localCtx = buildContext(localSeed);
+    const state = newGame('YONG', 'ruler', 'defection-warning');
+    const army = state.armies.find((item) => item.faction === 'YONG')!;
+    const home = Object.values(state.regions).find((region) =>
+      region.faction === 'YONG' &&
+      !state.armies.some((other) => other.armyId !== army.armyId && other.faction === 'YONG' && other.nodeId === region.regionId),
+    );
+    if (!home) throw new Error('测试缺少无友军驻扎的本方州府。');
+    army.nodeId = home.regionId;
+    army.mapNodeId = capitalMapNodeId(ctx, home.regionId);
+    army.status = 'idle';
+    army.path = [];
+    army.hopCosts = [];
+    army.mapPath = [];
+    army.mapHopCosts = [];
+    army.targetRegionId = null;
+    army.targetMapNodeId = null;
+    army.marchDaysTotal = 0;
+    army.marchDaysLeft = 0;
+
+    const commander = localCtx.charactersById[army.commanderId];
+    const target = localSeed.characters.find((person) => person.faction_key === 'HUN' && person.person_id !== army.commanderId);
+    if (!commander || !target) throw new Error('测试缺少有效的跨阵营关系人物。');
+    state.characters[commander.person_id].militaryLoyalty = 10;
+    state.diplomacy['HUN|YONG'] = -60;
+    localCtx.seed.relationships = [...localCtx.seed.relationships, {
+      faction: '测试关系',
+      source_person_id: commander.person_id,
+      source_name: commander.name,
+      relation: '私交',
+      target_person_id: target.person_id,
+      target_name: target.name,
+      strength: '强',
+      notes: '确定性测试用跨阵营强关系',
+    }];
+
+    const warningEvents: GameEvent[] = [];
+    resolveCommanderDefectionThreats(state, localCtx, warningEvents);
+    expect(state.characters[commander.person_id].defectionWarningTurn).toBe(state.date.turn);
+    expect(state.characters[commander.person_id].defectionTargetFaction).toBe('HUN');
+    expect(army.faction).toBe('YONG');
+    expect(home.faction).toBe('YONG');
+    expect(warningEvents.some((event) => event.title.includes('倒戈预警'))).toBe(true);
+
+    state.date.turn += 1;
+    const defectionEvents: GameEvent[] = [];
+    resolveCommanderDefectionThreats(state, localCtx, defectionEvents);
+    expect(army.faction).toBe('HUN');
+    expect(army.name).toContain('降将军团');
+    expect(home.faction).toBe('HUN');
+    expect(Object.values(state.mapNodes ?? {}).filter((node) => node.regionId === home.regionId).every((node) => node.faction === 'HUN')).toBe(true);
+    expect(state.characters[commander.person_id].allegianceFaction).toBe('HUN');
+    expect(defectionEvents.some((event) => event.title.includes('携军倒戈'))).toBe(true);
+  });
+
+  it('君主可用固定成本赏赐将领并解除已预警的倒戈风险', () => {
+    const state = newGame('YONG', 'ruler', 'defection-reward');
+    const army = state.armies.find((item) => item.faction === 'YONG')!;
+    const runtime = state.characters[army.commanderId];
+    runtime.militaryLoyalty = 10;
+    runtime.defectionWarningTurn = state.date.turn;
+    runtime.defectionTargetFaction = 'HUN';
+    const beforeCash = state.factions.YONG.resources.cash;
+    const order: Order = { orderId: 'reward-commander', kind: 'reward_commander', personId: army.commanderId };
+    expect(validateOrder(state, ctx, order).ok).toBe(true);
+    const events: GameEvent[] = [];
+    applyOrder(state, ctx, order, events);
+    expect(state.factions.YONG.resources.cash).toBe(beforeCash - BALANCE.militaryLoyalty.rewardCost);
+    expect(runtime.militaryLoyalty).toBe(35);
+    expect(runtime.defectionWarningTurn).toBeUndefined();
+    expect(runtime.defectionTargetFaction).toBeUndefined();
+    expect(events[0]?.summary).toContain('军令忠诚由 10 升至 35');
+  });
+
+  it('旧存档升级至 schema v7 会补齐军令忠诚且不自动制造倒戈预警', () => {
+    const state = newGame('YONG', 'ruler', 'defection-migration');
+    state.schemaVersion = 6;
+    const person = ctx.seed.characters.find((candidate) => candidate.faction_key === 'YONG')!;
+    state.characters[person.person_id].militaryLoyalty = undefined;
+    const migrated = migrateState(state, ctx.seed.characters);
+    expect(migrated.schemaVersion).toBe(7);
+    expect(migrated.characters[person.person_id].militaryLoyalty).toBe(person.loyalty);
+    expect(migrated.characters[person.person_id].defectionWarningTurn).toBeUndefined();
+  });
+});
+
 
 describe('道路通行能力与大军寻路', () => {
   it('按容量标签和兵力阈值稳定计算通行倍率', () => {
@@ -1015,7 +1109,7 @@ describe('存档快照', () => {
     expect(restored.date.label).toBe(result.state.date.label);
     expect(restored.armies.length).toBe(result.state.armies.length);
     expect(restored.factions.YONG.resources).toEqual(result.state.factions.YONG.resources);
-    expect(restored.schemaVersion).toBe(6);
+    expect(restored.schemaVersion).toBe(7);
   });
 });
 

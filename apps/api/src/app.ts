@@ -130,6 +130,7 @@ const orderSchema = z.discriminatedUnion('kind', [
     topic: z.enum(['military', 'taxation', 'factions']),
     resolution: z.enum(['mobilize', 'consolidate', 'raise', 'relieve', 'balance', 'patronize']),
   }),
+  z.object({ orderId: z.string().min(1).max(80), kind: z.literal('reward_commander'), personId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('appoint'), personId: z.string().min(1), regionId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('rest_army'), armyId: z.string().min(1) }),
   z.object({ orderId: z.string().min(1).max(80), kind: z.literal('scout'), regionId: z.string().min(1) }),
@@ -378,6 +379,11 @@ export async function buildApp(options: BuildOptions = {}): Promise<BuiltApp> {
       delete runtime.goalSinceTurn;
       delete runtime.goalLastActionTurn;
       delete runtime.goalReason;
+      // 运行时忠诚、真实效忠与倒戈预警均属于战争迷雾信息，不向敌方人物查询者暴露。
+      delete runtime.militaryLoyalty;
+      delete runtime.allegianceFaction;
+      delete runtime.defectionWarningTurn;
+      delete runtime.defectionTargetFaction;
     }
     return {
       character,

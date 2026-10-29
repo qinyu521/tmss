@@ -675,6 +675,29 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         preview: `提交「${courtTopicLabel(order.topic)}·${courtResolutionLabel(order.resolution)}」；按当前列席官员预计赞成 ${vote.supportVotes}、反对 ${vote.opposeVotes}。议案可能被驳回，只有通过后政策才生效。`,
       };
     }
+
+    case 'reward_commander': {
+      if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '赏赐将领、挽回军心需君主权限。');
+      const person = ctx.charactersById[order.personId];
+      const runtime = state.characters[order.personId];
+      const currentFaction = runtime?.allegianceFaction ?? person?.faction_key;
+      if (!person || currentFaction !== state.factionKey) return issues('NOT_FOUND', '该将领当前不效忠本方。');
+      if (!isCharacterAlive(state, order.personId)) return issues('PERSON_DEAD', '该人物已故，无法赏赐。');
+      if (!state.armies.some((army) => army.faction === state.factionKey && army.commanderId === order.personId)) {
+        return issues('NOT_COMMANDING', '该人物当前没有统率本方军团。');
+      }
+      const loyalty = runtime?.militaryLoyalty ?? person.loyalty ?? 50;
+      if (loyalty >= 80) return issues('NO_NEED', '该将领军令忠诚已高，无须特别赏赐。');
+      if (faction.resources.cash < BALANCE.militaryLoyalty.rewardCost) {
+        return issues('NO_CASH', `特别赏赐需银 ${BALANCE.militaryLoyalty.rewardCost.toLocaleString()} 两。`);
+      }
+      return {
+        ok: true,
+        issues: [],
+        preview: `赏赐 ${person.name} ${BALANCE.militaryLoyalty.rewardCost.toLocaleString()} 两，军令忠诚 +${BALANCE.militaryLoyalty.rewardGain}；达到 30 后可解除倒戈预警。`,
+      };
+    }
+
     case 'appoint': {
       if (state.playerRole !== 'ruler') return issues('ROLE_FORBIDDEN', '任命官职需君主权限。');
       const person = ctx.charactersById[order.personId];
@@ -1148,6 +1171,39 @@ export function applyOrder(
       );
       return;
     }
+
+    case 'reward_commander': {
+      const person = ctx.charactersById[order.personId];
+      const runtime = state.characters[order.personId];
+      if (!person || !runtime || !state.armies.some((army) => army.faction === fk && army.commanderId === order.personId)) return;
+      const currentFaction = runtime.allegianceFaction ?? person.faction_key;
+      if (currentFaction !== fk || !isCharacterAlive(state, order.personId)) return;
+      const beforeLoyalty = runtime.militaryLoyalty ?? person.loyalty ?? 50;
+      if (beforeLoyalty >= 80 || faction.resources.cash < BALANCE.militaryLoyalty.rewardCost) return;
+      faction.resources.cash -= BALANCE.militaryLoyalty.rewardCost;
+      runtime.militaryLoyalty = clamp(beforeLoyalty + BALANCE.militaryLoyalty.rewardGain);
+      if (runtime.militaryLoyalty >= 30) {
+        runtime.defectionWarningTurn = undefined;
+        runtime.defectionTargetFaction = undefined;
+      }
+      events.push(emitEvent(state, {
+        type: 'politics',
+        title: `赏赐将领·${person.name}`,
+        summary: `耗银 ${BALANCE.militaryLoyalty.rewardCost.toLocaleString()} 两，${person.name}军令忠诚由 ${Math.round(beforeLoyalty)} 升至 ${Math.round(runtime.militaryLoyalty)}。军心达到 30 后倒戈预警解除。`,
+        actorId,
+        actorName,
+        factionKey: fk,
+        targetId: person.person_id,
+        targetLabel: person.name,
+        before: { loyalty: beforeLoyalty, cash: Math.round(faction.resources.cash + BALANCE.militaryLoyalty.rewardCost) },
+        after: { loyalty: runtime.militaryLoyalty, cash: Math.round(faction.resources.cash), warningCleared: runtime.defectionWarningTurn === undefined },
+        evidence: '君主以固定银钱成本提高本局军令忠诚；基础人物种子数据不被改写。',
+        source,
+        visibleToPlayer: true,
+      }));
+      return;
+    }
+
     case 'court_debate': {
       applyCourtDebate(state, order, ctx, events, source, fk, actorId, actorName);
       return;

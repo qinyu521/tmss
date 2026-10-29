@@ -17,7 +17,7 @@ import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
 import { buildContext, buildInitialArmies, buildInitialMapNodes, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -254,7 +254,7 @@ export function createGame(
     characters: Object.fromEntries(
       seed.characters.map((c) => [
         c.person_id,
-        { personId: c.person_id, alive: true, ageBand: c.age_band, goal: 'idle', goalSinceTurn: date.turn },
+        { personId: c.person_id, alive: true, ageBand: c.age_band, goal: 'idle', goalSinceTurn: date.turn, militaryLoyalty: c.loyalty },
       ]),
     ),
     statistics: { battles: 0, casualties: 0, turnsPlayed: 0, occupiedRegions: 0 },
@@ -348,12 +348,34 @@ function migrateV5toV6(state: GameState): void {
   state.treaties ??= [];
 }
 
+/** v6 → v7：补齐军令忠诚字段；不触发倒戈，也不改写既有军队与关系。 */
+function migrateV6toV7(state: GameState, roster?: CharacterSeed[]): void {
+  if (!state.characters) state.characters = {};
+  const loyaltyById = new Map((roster ?? []).map((person) => [person.person_id, person.loyalty]));
+  for (const runtime of Object.values(state.characters)) {
+    runtime.militaryLoyalty ??= loyaltyById.get(runtime.personId) ?? 50;
+  }
+  for (const person of roster ?? []) {
+    if (!state.characters[person.person_id]) {
+      state.characters[person.person_id] = {
+        personId: person.person_id,
+        alive: true,
+        ageBand: person.age_band,
+        goal: 'idle',
+        goalSinceTurn: state.date?.turn ?? 1,
+        militaryLoyalty: person.loyalty,
+      };
+    }
+  }
+}
+
 const MIGRATIONS: Migration[] = [
   { from: 1, to: 2, apply: migrateV1toV2 },
   { from: 2, to: 3, apply: migrateV2toV3 },
   { from: 3, to: 4, apply: migrateV3toV4 },
   { from: 4, to: 5, apply: migrateV4toV5 },
   { from: 5, to: 6, apply: migrateV5toV6 },
+  { from: 6, to: 7, apply: migrateV6toV7 },
 ];
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */

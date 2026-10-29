@@ -95,5 +95,5 @@
 - `RegionState`：`garrisonCommanderId/garrisonCommanderName`（州兵统带）、`ambushBonus`（伏兵加成，战后清零）、`diversionBonus/diversionFor`（声东击西加成）。
 - `Army`：`isDetachment`（分遣队）、`isMilitia`（州兵临时编成）；新军队拥有独立统兵官，同一统兵官不能同时统领两军。
 - `Order`：`move_army.amount/units/commanderId`、`recruit.regionId/commanderId/formNewArmy`、`dispatch_garrison`、`scheme`（五类计谋与目标/施计者）。
-- `CharacterRuntime`：除生死/成长/属性覆盖外，schema v5 增加 `goal`、`goalTargetId`、`goalSinceTurn`、`goalLastActionTurn` 与 `goalReason`。目标是存档内的规则状态，不写回种子；v4 → v5 只补默认 `idle`，不触发行动。
-- 原有存档缺这些字段时按 0/空兼容；人物目标采用 v4 → v5 幂等迁移，行动冷却与目标状态随存档保存。
+- `CharacterRuntime`：除生死/成长/属性覆盖外，schema v5 增加 `goal`、`goalTargetId`、`goalSinceTurn`、`goalLastActionTurn` 与 `goalReason`；schema v7 增加 `militaryLoyalty`、`allegianceFaction`、`defectionWarningTurn` 和 `defectionTargetFaction`。这些都是存档内运行时状态，不写回种子；v4 → v5 补默认 `idle`，v6 → v7 补种子忠诚的运行时副本，均不触发行动。
+- 原有存档缺这些字段时按 0/空兼容；人物目标采用 v4 → v5 幂等迁移，行动冷却与目标状态随存档保存。倒戈预警字段缺失时视为无预警；`allegianceFaction` 缺失时沿用种子阵营。

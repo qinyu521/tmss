@@ -19,7 +19,7 @@ import { Modal, Portrait, UnitIcon } from './ui';
 const GROUPS = {
   military: ['move_army', 'dispatch_garrison', 'rest_army', 'scout'],
   civil: ['recruit', 'levy_grain', 'levy_tax', 'trade'],
-  politics: ['appease_tribe', 'balance_princes', 'negotiate_house', 'appoint'],
+  politics: ['appease_tribe', 'balance_princes', 'negotiate_house', 'reward_commander', 'appoint'],
   diplomacy: ['diplomatic_action'],
   scheme: ['scheme'],
 } as const;
@@ -74,6 +74,7 @@ export default function OrdersSheet() {
   const [houseId, setHouseId] = useState('');
   const [appointRegion, setAppointRegion] = useState('');
   const [personId, setPersonId] = useState('');
+  const [rewardCommanderId, setRewardCommanderId] = useState('');
   const [personName, setPersonName] = useState('');
   const [query, setQuery] = useState('');
   const [characters, setCharacters] = useState<CharacterSummary[]>([]);
@@ -239,6 +240,8 @@ export default function OrdersSheet() {
         return { orderId, kind: 'balance_princes', amount: 1 };
       case 'negotiate_house':
         return houseId ? { orderId, kind: 'negotiate_house', houseId, amount: 1 } : null;
+      case 'reward_commander':
+        return rewardCommanderId ? { orderId, kind: 'reward_commander', personId: rewardCommanderId } : null;
       case 'appoint':
         return personId && appointRegion ? { orderId, kind: 'appoint', personId, regionId: appointRegion } : null;
       case 'diplomatic_action':
@@ -598,6 +601,28 @@ export default function OrdersSheet() {
               </>
             )}
 
+
+            {action === 'reward_commander' && (
+              <>
+                <div className="form-row">
+                  <label>统兵将领</label>
+                  <select value={rewardCommanderId} onChange={(e) => setRewardCommanderId(e.target.value)}>
+                    <option value="">选择一支本方军团</option>
+                    {ownArmies.map((army) => (
+                      <option key={army.armyId} value={army.commanderId}>
+                        {army.commanderName} · {army.name} · {army.regionName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-note">
+                  特别赏赐固定耗银 {fmt(BALANCE.militaryLoyalty.rewardCost)}，军令忠诚 +{BALANCE.militaryLoyalty.rewardGain}。
+                  当忠诚不高于 {BALANCE.militaryLoyalty.defectionThreshold} 且将领与交战敌方人物存在明确强关系时，会触发倒戈预警。
+                  预警会持续至少一整回合；忠诚恢复至 30 可解除预警。当前国库：{fmt(view.own.resources.cash, '两')}。
+                </div>
+              </>
+            )}
+
             {action === 'appoint' && (
               <>
                 <div className="form-row">
@@ -734,6 +759,7 @@ export default function OrdersSheet() {
 }
 
 function describeOrder(o: Order): string {
+  if (o.kind === 'reward_commander') return `赏赐将领：${o.personId}`;
   if (o.kind === 'move_army') return `${o.armyId} → ${o.targetMapNodeId ?? o.targetRegionId}${o.amount ? ` · ${o.amount} 人` : ' · 全军'}`;
   if (o.kind === 'dispatch_garrison') return `${o.regionId} 州兵 ${o.amount} → ${o.targetRegionId}`;
   if (o.kind === 'recruit') return `征募 ${o.amount} 人${o.formNewArmy ? ' · 新建军团' : ''}`;
