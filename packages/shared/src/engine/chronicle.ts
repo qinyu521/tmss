@@ -38,7 +38,7 @@ export function buildChronicle(
 
   const significant = visible
     .filter((e) =>
-      ['battle', 'occupation', 'succession', 'shortage', 'politics', 'intel', 'recruit', 'diplomacy', 'scheme'].includes(e.type),
+      ['battle', 'occupation', 'succession', 'shortage', 'politics', 'intel', 'recruit', 'diplomacy', 'scheme', 'npc_action'].includes(e.type),
     )
     .filter((e) => !obituaries.some((o) => o.eventId === e.eventId))
     .slice(0, Math.max(0, 6 - obituaries.length));
@@ -68,7 +68,7 @@ export function buildChronicle(
   const battles = visible.filter((e) => e.type === 'battle');
   const casualties = battles.reduce((s, e) => s + Number((e.after as { totalLosses?: number } | undefined)?.totalLosses ?? 0), 0);
   const overviewFacts =
-    `本旬共录事件 ${visible.length} 条；战斗 ${counts.battle ?? 0} 次，累计伤亡约 ${casualties.toLocaleString()} 人；` +
+    `本回合共录事件 ${visible.length} 条；战斗 ${counts.battle ?? 0} 次，累计伤亡约 ${casualties.toLocaleString()} 人；` +
     `政治事件 ${(counts.politics ?? 0) + (counts.succession ?? 0)} 条；短缺 ${counts.shortage ?? 0} 次。` +
     `以上数字为规则引擎结算结果，未经文学修饰。`;
   entries.unshift({
@@ -77,9 +77,9 @@ export function buildChronicle(
     turn,
     dateLabel: turnLabel,
     kind: 'annal',
-    title: `${turnLabel} · 旬录`,
+    title: `${turnLabel} · 回合录`,
     facts: overviewFacts,
-    inference: battles.length > 0 ? '史官按：兵事渐起，诸国边境皆须戒备。' : '史官按：此旬无大战，然粮秣、人事与朝局仍在推移。',
+    inference: battles.length > 0 ? '史官按：兵事渐起，诸国边境皆须戒备。' : '史官按：此回合无大战，然粮秣、人事与朝局仍在推移。',
     sourceEventIds: visible.slice(0, 20).map((e) => e.eventId),
     generatedBy: 'template',
   });
@@ -116,6 +116,8 @@ function literaryFor(e: GameEvent): string {
       return `密使夜出，火烛忽起；一纸书信、一句流言，胜似千军。`;
     case 'recruit':
       return `县邑张榜，丁壮集于校场；父老送子，哭声与号令相杂。`;
+    case 'npc_action':
+      return `人心各有所向，${e.actorName}因眼前局势作出取舍；其行动与代价已录入本回合簿册。`;
     default:
       return `有司承令，簿册俱在；一旬之事，录于简牍。`;
   }
