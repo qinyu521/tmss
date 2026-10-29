@@ -721,6 +721,78 @@ describe('正式外交行动', () => {
   });
 });
 
+describe('战略节点后勤补给', () => {
+  function logisticsScenario(supplyLevel: number) {
+    const state = newGame('HUN', 'ruler', `node-logistics-${supplyLevel}`);
+    for (const key of Object.keys(state.diplomacy)) state.diplomacy[key] = 100;
+    const seedNode = ctx.seed.map_nodes.find((node) => /粮仓|驻军营地|集镇|补给/.test(node.node_type));
+    if (!seedNode) throw new Error('种子地图缺少仓储或补给节点。');
+    const regionId = ctx.territories.find((region) => region.region === seedNode.region)?.region_id;
+    if (!regionId) throw new Error('仓储节点缺少对应州府。');
+    for (const region of Object.values(state.regions)) region.faction = 'HUN';
+    for (const node of Object.values(state.mapNodes ?? {})) node.faction = 'HUN';
+    const node = state.mapNodes![seedNode.node_id];
+    node.supplyLevel = supplyLevel;
+    const army = state.armies[0];
+    state.armies = [{
+      ...army,
+      nodeId: regionId,
+      mapNodeId: node.nodeId,
+      status: 'idle',
+      supply: 40,
+      fatigue: 40,
+      morale: 60,
+      path: [],
+      hopCosts: [],
+      mapPath: [],
+      mapHopCosts: [],
+      targetRegionId: null,
+      targetMapNodeId: null,
+      marchDaysTotal: 0,
+      marchDaysLeft: 0,
+      currentHopDaysTotal: 0,
+      mapCurrentHopDaysTotal: 0,
+    }];
+    state.factions.HUN.resources.cash = 1_000_000;
+    state.factions.HUN.resources.grain = 1_000_000;
+    state.factions.HUN.resources.salt = 1_000_000;
+    state.factions.HUN.resources.iron = 1_000_000;
+    state.factions.HUN.resources.horses = 1_000_000;
+    state.factions.HUN.resources.manpower = 1_000_000;
+    return { state, nodeId: node.nodeId };
+  }
+
+  it('驻扎在己方仓储节点时额外恢复补给并消耗节点库存', () => {
+    const { state, nodeId } = logisticsScenario(70);
+    const result = runTurn(state, ctx);
+    const army = result.state.armies.find((item) => item.faction === 'HUN');
+    const node = result.state.mapNodes![nodeId];
+    expect(army?.supply).toBe(55);
+    expect(node.supplyLevel).toBe(66);
+    const event = result.report.events.find((item) =>
+      item.type === 'resource' &&
+      item.payload?.action === 'node_resupply' &&
+      item.targetId === nodeId,
+    );
+    expect(event).toBeTruthy();
+    expect(event?.before?.nodeSupplyLevel).toBe(70);
+    expect(event?.after?.nodeSupplyLevel).toBe(66);
+    expect(event?.after?.logisticsBonus).toBe(7);
+    expect(event?.visibleToPlayer).toBe(true);
+  });
+
+  it('节点库存耗尽时不再提供额外补给或生成后勤事件', () => {
+    const { state, nodeId } = logisticsScenario(0);
+    const result = runTurn(state, ctx);
+    const army = result.state.armies.find((item) => item.faction === 'HUN');
+    expect(army?.supply).toBe(48);
+    expect(result.state.mapNodes![nodeId].supplyLevel).toBe(0);
+    expect(result.report.events.some((item) =>
+      item.type === 'resource' && item.payload?.action === 'node_resupply' && item.targetId === nodeId,
+    )).toBe(false);
+  });
+});
+
 describe('NPC 战略地图节点进攻', () => {
   it('防御盟约响应会优先向敌方独立据点下令，而非只选州府主城', () => {
     const state = newGame('HUN', 'ruler', 'npc-strategic-node-target');
