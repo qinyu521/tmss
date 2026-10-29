@@ -100,7 +100,7 @@ export default function OrdersSheet() {
     setGarrisonRegionId((prev) => prev || (preset?.regionId as string) || '');
     setRecruitRegionId((prev) => prev || (preset?.regionId as string) || ownRegions[0]?.regionId || '');
     setRegionId((prev) => prev || (preset?.regionId as string) || '');
-    setTarget((prev) => prev || (preset?.targetRegionId as string) || '');
+    setTarget((prev) => (preset?.targetMapNodeId as string) || (preset?.targetRegionId as string) || prev || '');
     setGarrisonTarget((prev) => prev || (preset?.targetRegionId as string) || '');
     setAppointRegion((prev) => prev || (preset?.regionId as string) || ownRegions[0]?.regionId || '');
     setTribeId((prev) => prev || view.special.tribes?.[0]?.tribeId || '');
@@ -163,17 +163,29 @@ export default function OrdersSheet() {
 
   const tradeCost = Math.round((BALANCE.prices[resource] ?? 0) * tradeAmount * BALANCE.tradePremium);
   const recruitCost = Math.round(recruitAmount * BALANCE.recruit.cashPerMan);
+  const selectedTargetNodeId =
+    mapData?.nodes.some((node) => node.node_id === target)
+      ? target
+      : mapData?.nodes.find((node) =>
+          node.node_type === '州府/主城' &&
+          (mapData?.territories.some((territory) => territory.region_id === target && territory.region === node.region) ?? false),
+        )?.node_id ?? '';
+  const selectedTargetNode = mapData?.nodes.find((node) => node.node_id === selectedTargetNodeId);
+  const selectedTargetTerritory = selectedTargetNode
+    ? mapData?.territories.find((territory) => territory.region === selectedTargetNode.region)
+    : undefined;
 
   const buildOrder = (): Order | null => {
     const orderId = `o-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     switch (action) {
       case 'move_army':
-        if (!selectedArmy || !target) return null;
+        if (!selectedArmy || !selectedTargetNode || !selectedTargetTerritory) return null;
         return {
           orderId,
           kind: 'move_army',
           armyId: selectedArmy.armyId,
-          targetRegionId: target,
+          targetRegionId: selectedTargetTerritory.region_id,
+          targetMapNodeId: selectedTargetNode.node_id,
           amount: moveAmount,
           units: Object.entries(unitPlan)
             .filter(([, count]) => count > 0)
@@ -351,14 +363,18 @@ export default function OrdersSheet() {
                   </select>
                 </div>
                 <div className="form-row">
-                  <label>目标州府</label>
-                  <select value={target} onChange={(e) => setTarget(e.target.value)}>
-                    <option value="">选择目标</option>
-                    {(mapData?.territories ?? []).map((t) => {
-                      const rv = view.regions.find((r) => r.regionId === t.region_id);
+                  <label>目标地图节点</label>
+                  <select value={selectedTargetNodeId} onChange={(e) => setTarget(e.target.value)}>
+                    <option value="">选择目标据点</option>
+                    {(mapData?.nodes ?? []).map((node) => {
+                      const territory = mapData?.territories.find((t) => t.region === node.region);
+                      const rv = territory ? view.regions.find((r) => r.regionId === territory.region_id) : undefined;
+                      const nodeView = view.mapNodes.find((n) => n.nodeId === node.node_id);
+                      const owner = nodeView?.ownerShort ?? rv?.ownerShort ?? '';
+                      const ours = nodeView ? nodeView.owned : Boolean(rv?.owned);
                       return (
-                        <option key={t.region_id} value={t.region_id}>
-                          {t.region} · {rv?.ownerShort ?? ''}{rv?.owned ? '（本国）' : '（敌/外）'}
+                        <option key={node.node_id} value={node.node_id}>
+                          {node.node_name} · {node.region} · {owner}{ours ? '（本方）' : '（外部控制）'}
                         </option>
                       );
                     })}
@@ -366,7 +382,7 @@ export default function OrdersSheet() {
                 </div>
                 <div className="form-note">
                   不调整滑条即全军移动；调低兵力或指定特殊兵种会自动分遣，由所选统兵官统带。统率与谋略直接影响战斗，分兵可同时经营多条战线。
-                  特殊兵种计入总兵力，不会被复制。路径由地图边权与机动计算，跨境进入交战国会触发战斗。
+                  特殊兵种计入总兵力，不会被复制。路线按 72 个地图节点、州府道路和据点支路计算；粮仓、关隘、港埠可独立争夺，州府仍按整州规则结算。
                 </div>
               </>
             )}
@@ -671,7 +687,7 @@ export default function OrdersSheet() {
 }
 
 function describeOrder(o: Order): string {
-  if (o.kind === 'move_army') return `${o.armyId} → ${o.targetRegionId}${o.amount ? ` · ${o.amount} 人` : ' · 全军'}`;
+  if (o.kind === 'move_army') return `${o.armyId} → ${o.targetMapNodeId ?? o.targetRegionId}${o.amount ? ` · ${o.amount} 人` : ' · 全军'}`;
   if (o.kind === 'dispatch_garrison') return `${o.regionId} 州兵 ${o.amount} → ${o.targetRegionId}`;
   if (o.kind === 'recruit') return `征募 ${o.amount} 人${o.formNewArmy ? ' · 新建军团' : ''}`;
   if (o.kind === 'levy_grain') return `征粮 ${o.amount} 州`;
