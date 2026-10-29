@@ -253,6 +253,12 @@ function disposeRuntime(runtime: BattlefieldRuntime): void {
   window.cancelAnimationFrame(runtime.animationFrame);
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
+  // Fallen soldiers switch to a shared material; their original materials are no longer attached to meshes.
+  // Keep explicit references here so repeated replay opens do not leak GPU materials.
+  materials.add(runtime.fallenMaterial);
+  for (const soldier of [...runtime.attackers, ...runtime.defenders]) {
+    soldier.originalMaterials.forEach((material) => materials.add(material));
+  }
   runtime.scene.traverse((object) => {
     if (object instanceof THREE.Mesh || object instanceof THREE.Line) {
       geometries.add(object.geometry as THREE.BufferGeometry);
@@ -339,7 +345,8 @@ export default function Battlefield3D({ replay, stageIndex, onError }: Battlefie
           ? Math.min(0.05, Math.max(0, (timestamp - runtime.lastFrameTime) / 1000))
           : 1 / 60;
         runtime.lastFrameTime = timestamp;
-        const alpha = 1 - Math.exp(-4.2 * delta);
+        const reducedMotion = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const alpha = reducedMotion ? 1 : 1 - Math.exp(-4.2 * delta);
         for (const soldier of [...runtime.attackers, ...runtime.defenders]) {
           soldier.group.position.lerp(soldier.target, alpha);
         }
@@ -367,7 +374,7 @@ export default function Battlefield3D({ replay, stageIndex, onError }: Battlefie
 
   return (
     <div className="battlefield-3d" ref={mountRef}>
-      <div className="battlefield-3d-caption">三维战阵演出 · 依据已结算战果，不重新计算胜负</div>
+      <div className="battlefield-3d-caption">三维战阵演出 · 小队按剩余兵力比例示意 · 不重新计算胜负</div>
     </div>
   );
 }
