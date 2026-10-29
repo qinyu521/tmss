@@ -29,6 +29,7 @@ import { runEconomy, politicalTags, shortageTags } from './economy.js';
 import { runPolitics } from './politics.js';
 import { runLifecycle } from './lifecycle.js';
 import { refreshCharacterGoals, advanceCharacterGoals } from './goals.js';
+import { expireDiplomaticTreaties } from './diplomacy.js';
 import { buildChronicle } from './chronicle.js';
 import { clamp, factionNameOf } from './state.js';
 
@@ -80,6 +81,9 @@ export function runTurn(stateInput: GameState, ctx: DerivedContext): TurnResult 
       source: 'engine',
     }),
   );
+
+  // 0.5) 盟约到期在本回合命令提交前结算；历史条约保留为 expired。
+  expireDiplomaticTreaties(state, events);
 
   // 1) 玩家命令：先校验，再按提交顺序结算
   for (const order of state.pendingOrders) {
