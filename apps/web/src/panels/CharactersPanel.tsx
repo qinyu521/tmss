@@ -98,9 +98,9 @@ export default function CharactersPanel() {
                 <div style={{ minWidth: 0 }}>
                   <div className="cc-name">
                     {it.name}
-                    {it.defectionWarningTurn !== undefined && !it.allegianceFaction && (
+                    {it.defectionWarningTurn !== undefined && it.defectionTargetFaction && (
                       <span style={{ marginLeft: 6, fontSize: 11, padding: '1px 6px', border: '1px solid var(--danger)', borderRadius: 3, color: 'var(--danger)' }}>
-                        倒戈预警
+                        {it.allegianceFaction ? '归附动摇' : '倒戈预警'}
                       </span>
                     )}
                     {it.originalFactionKey && it.allegianceFaction && (
