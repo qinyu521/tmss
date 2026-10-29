@@ -553,7 +553,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
           );
         }
       }
-      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId, { troops: order.amount ?? army.troops });
       if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
       const warnedRefusal = warnedCommanderRefusal(state, ctx, army, order.targetRegionId);
       const warnedRefusalNote = warnedRefusal
@@ -593,6 +593,19 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         if (commanderTaken(state, cmd.person_id, order.orderId)) return issues('COMMANDER_IN_USE', '该将领已在统率其他部队或已被本旬命令占用。');
         commanderNote = `，由 ${cmd.name} 统带（统率 ${cmd.command} / 谋略 ${cmd.strategy}）`;
       }
+      const previewArmy = isSplit
+        ? {
+            faction: army.faction,
+            troops: amount,
+            levies: amount - unitSum,
+            units: unitRequests.map((req) => {
+              const stack = army.units.find((unit) => unit.unitId === req.unitId);
+              return { ...stack!, count: req.count };
+            }),
+            fatigue: army.fatigue,
+          }
+        : army;
+      const estimatedDays = estimatePathDays(previewArmy, path, seasonOf(state.date.month));
       const executionCommanderId = isSplit ? (order.commanderId ?? army.commanderId) : army.commanderId;
       const executionDrag = commanderPoliticalExecutionDrag(state, ctx, executionCommanderId, army.faction);
       const executionNote = executionDrag
@@ -601,7 +614,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
       return {
         ok: true,
         issues: [],
-        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}${executionNote}${warnedRefusalNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${path.totalDays} 日（约 ${Math.ceil(path.totalDays / BALANCE.turnDays)} 回合）。`,
+        preview: `${isSplit ? `分兵 ${amount.toLocaleString()} 人` : '全军'}${commanderNote}${executionNote}${warnedRefusalNote}，${unitSum > 0 ? `随军特殊兵种 ${unitSum.toLocaleString()} 人，` : ''}经 ${path.path.map((id) => regionNameById(ctx, id)).join(' → ')}，预计 ${estimatedDays} 日（约 ${Math.ceil(estimatedDays / BALANCE.turnDays)} 回合）。`,
       };
     }
     case 'recruit': {
@@ -960,7 +973,7 @@ export function validateOrder(state: GameState, ctx: DerivedContext, order: Orde
         return issues('BAD_AMOUNT', `${region.name}州兵仅 ${region.garrison.toLocaleString()} 人，无法调出 ${order.amount.toLocaleString()} 人。`);
       }
       if (order.regionId === order.targetRegionId) return issues('BAD_TARGET', '州兵已在目标州府，无须调遣。');
-      const path = findPath(state, ctx, state.factionKey, order.regionId, order.targetRegionId);
+      const path = findPath(state, ctx, state.factionKey, order.regionId, order.targetRegionId, { troops: order.amount });
       if (!path.ok) return issues('NO_PATH', path.error ?? '无法抵达目标州府。');
       let commanderId = order.commanderId;
       if (commanderId) {
@@ -1088,7 +1101,7 @@ export function applyOrder(
         }));
         return;
       }
-      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId);
+      const path = findPath(state, ctx, army.faction, army.nodeId, order.targetRegionId, { troops: order.amount ?? army.troops });
       if (!path.ok) return;
       const amount = order.amount ?? army.troops;
       const unitRequests = (order.units ?? []).filter((u) => u.count > 0);
@@ -2062,7 +2075,7 @@ export function applyOrder(
       if (!region) return;
       const amount = Math.min(Math.round(order.amount), region.garrison);
       if (amount < 60) return;
-      const path = findPath(state, ctx, fk, region.regionId, order.targetRegionId);
+      const path = findPath(state, ctx, fk, region.regionId, order.targetRegionId, { troops: amount });
       if (!path.ok) return;
       const commander =
         commanderOf(ctx, order.commanderId) ??

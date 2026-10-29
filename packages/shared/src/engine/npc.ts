@@ -5,10 +5,11 @@ import { isAtWar } from '../dataset.js';
 import { hashString, mulberry32 } from '../dataset.js';
 import { BALANCE } from '../balance.js';
 import { courtCost, courtRecommendedDecision, courtRelationshipAffinity, courtSkill } from './court.js';
-import { buildAdjacency, findPath } from './movement.js';
+import { buildAdjacency, estimatePathDays, findPath } from './movement.js';
 import { factionTroops } from './economy.js';
 import { clamp, isCharacterAlive } from './state.js';
 import { findDefectionAllegiance } from './relationships.js';
+import { seasonOf } from './season.js';
 
 function currentFactionOfCharacter(state: GameState, ctx: DerivedContext, personId: string): FactionKey | undefined {
   return state.characters[personId]?.allegianceFaction ?? ctx.charactersById[personId]?.faction_key;
@@ -68,8 +69,8 @@ export function generateNpcOrders(state: GameState, ctx: DerivedContext): Order[
       .sort((a, b) => b.troops - a.troops);
     if (hostileRegion && idleArmies.length > 0 && rng() > 0.2) {
       const army = idleArmies[0];
-      const path = findPath(state, ctx, key, army.nodeId, hostileRegion);
-      if (path.ok && path.totalDays <= BALANCE.turnDays * 2) {
+      const path = findPath(state, ctx, key, army.nodeId, hostileRegion, { troops: army.troops });
+      if (path.ok && estimatePathDays(army, path, seasonOf(state.date.month)) <= BALANCE.turnDays * 2) {
         orders.push({ orderId: oid(), kind: 'move_army', armyId: army.armyId, targetRegionId: hostileRegion });
       }
     } else {
