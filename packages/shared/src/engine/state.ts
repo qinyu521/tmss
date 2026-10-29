@@ -14,10 +14,10 @@ import type {
 import { FACTION_KEYS } from '../types.js';
 import { BALANCE, INITIAL_RESOURCES } from '../balance.js';
 import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
-import { buildContext, buildInitialArmies, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
+import { buildContext, buildInitialArmies, buildInitialMapNodes, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -280,7 +280,7 @@ export function playerRoleLabel(role: PlayerRole): string {
 interface Migration {
   from: number;
   to: number;
-  apply: (state: GameState, roster?: CharacterSeed[]) => void;
+  apply: (state: GameState, roster?: CharacterSeed[], mapSeed?: SeedRoster) => void;
 }
 
 /** v1 → v2：补充人物生命周期运行时状态，旧档全员在世。 */
@@ -314,19 +314,39 @@ function migrateV2toV3(state: GameState): void {
   }
 }
 
+/** v3 → v4：为 72 个战略节点初始化每局独立的控制状态，并补齐军团节点路线字段。 */
+function migrateV3toV4(state: GameState, _roster?: CharacterSeed[], mapSeed?: SeedRoster): void {
+  if (!mapSeed) return;
+  const ctx = buildContext(mapSeed);
+  state.mapNodes ??= buildInitialMapNodes(ctx, state.regions);
+  for (const army of state.armies ?? []) {
+    if (!army.mapNodeId) {
+      const regionName = state.regions[army.nodeId]?.name;
+      army.mapNodeId = ctx.seed.map_nodes.find(
+        (node) => node.region === regionName && node.node_type === '州府/主城',
+      )?.node_id;
+    }
+    army.mapPath ??= [];
+    army.mapHopCosts ??= [];
+    if (army.mapPath.length > 0) army.mapCurrentHopDaysTotal ??= army.mapHopCosts[0] ?? 0;
+    if (army.targetMapNodeId === undefined) army.targetMapNodeId = null;
+  }
+}
+
 const MIGRATIONS: Migration[] = [
   { from: 1, to: 2, apply: migrateV1toV2 },
   { from: 2, to: 3, apply: migrateV2toV3 },
+  { from: 3, to: 4, apply: migrateV3toV4 },
 ];
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
-export function migrateState(state: GameState, roster?: CharacterSeed[]): GameState {
+export function migrateState(state: GameState, roster?: CharacterSeed[], mapSeed?: SeedRoster): GameState {
   if (!state.schemaVersion) state.schemaVersion = 1;
   if (!state.intel) state.intel = [];
   if (!state.flags) state.flags = { successionCrisis: false, tribalRefusal: false, houseBoycott: false };
   for (const m of MIGRATIONS) {
     if (state.schemaVersion === m.from) {
-      m.apply(state, roster);
+      m.apply(state, roster, mapSeed);
       state.schemaVersion = m.to;
     }
   }
