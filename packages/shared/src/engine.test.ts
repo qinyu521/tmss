@@ -854,6 +854,15 @@ describe('多回合围城与解围', () => {
     state.regions[targetRegionId].fortification = 60;
     state.regions[targetRegionId].garrison = 60_000;
     state.regions[targetRegionId].garrisoned = true;
+    // 禁用无关 NPC 征兵，让这组集成测试只验证围城主线，不让 AI 用新招募军团改变城防条件。
+    for (const key of ['YONG', 'CHU'] as const) {
+      state.factions[key].resources.cash = 0;
+      state.factions[key].resources.manpower = 0;
+      state.factions[key].resources.grain = 0;
+      state.factions[key].resources.salt = 0;
+      state.factions[key].resources.iron = 0;
+      state.factions[key].resources.horses = 0;
+    }
 
     const army = clone(state.armies.find((item) => item.faction === 'HUN')!);
     army.nodeId = sourceRegionId;
