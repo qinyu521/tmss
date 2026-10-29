@@ -328,11 +328,27 @@ export function dayCostsFor(
     opts?.season === 'winter' && army.faction === 'HUN' && cavalryDominant(army)
       ? BALANCE.seasons.winter.hunCavalryRiverCost
       : 1;
-  return costs.map((c, i) => {
+  const exactDays = costs.map((c, i) => {
     const routeType = opts?.routeTypes?.[i] ?? '';
     const seasonal = frozenFord !== 1 && isRiverRoute(routeType) ? frozenFord : 1;
-    return Math.max(1, Math.round((c * seasonal) / speed));
+    return (c * seasonal) / speed;
   });
+
+  // 只有容量倍率产生了小数成本时，才按累计行程向上分配整日，避免 1.1/1.4 天被逐段 round 回 1 天而完全抹掉拥堵代价。
+  // 整数成本路线继续沿用旧的逐段 round 行为，避免无容量修正的存档路线平衡发生改变。
+  if (costs.some((cost) => Math.abs(cost - Math.round(cost)) > 1e-9)) {
+    let cumulativeExact = 0;
+    let cumulativeScheduled = 0;
+    return exactDays.map((days, i) => {
+      cumulativeExact += days;
+      const nextScheduled = Math.max(i + 1, Math.ceil(cumulativeExact - 1e-9));
+      const scheduled = Math.max(1, nextScheduled - cumulativeScheduled);
+      cumulativeScheduled += scheduled;
+      return scheduled;
+    });
+  }
+
+  return exactDays.map((days) => Math.max(1, Math.round(days)));
 }
 
 /** 将有效道路成本换算为行军天数，供 NPC 判断是否能及时抵达战线。 */
