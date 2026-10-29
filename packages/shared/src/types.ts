@@ -445,6 +445,15 @@ export interface RegionState {
   diversionFor?: FactionKey | null;
 }
 
+/** 多回合围城账本；只引用已经存在的军团，不生成额外兵力。 */
+export interface MapNodeSiegeState {
+  besiegerFaction: FactionKey;
+  besiegerArmyIds: string[];
+  startedTurn: number;
+  progress: number;
+  turns: number;
+}
+
 /** 72 个战略地图节点的运行时控制状态；与州府行政归属分离。 */
 export interface MapNodeState {
   nodeId: string;
@@ -457,6 +466,8 @@ export interface MapNodeState {
   supplyLevel: number;
   terrain: RegionState['terrain'];
   resourceProfile: string;
+  /** 只用于高城防州府主城，旧存档迁移时默认为 null。 */
+  siege?: MapNodeSiegeState | null;
 }
 
 export interface ArmyUnitStack {
