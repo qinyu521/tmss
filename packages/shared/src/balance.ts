@@ -91,6 +91,22 @@ export const BALANCE = {
     homeSupplyLevelRecovery: 2,
   },
 
+  /** 州府主城的多回合围城；只消耗现有守军、城防与节点库存。 */
+  siege: {
+    minimumCapitalFortification: 20,
+    minimumCapitalGarrison: 5_000,
+    baseProgressPerTurn: 8,
+    troopBonusPer20k: 1,
+    maxTroopBonus: 6,
+    minProgressPerTurn: 3,
+    maxProgressPerTurn: 16,
+    fortificationProgressPenaltyPerPoint: 0.05,
+    fortificationDamagePerTurn: 6,
+    supplyDrainPerTurn: 8,
+    garrisonLossRateSupplied: 0.04,
+    garrisonLossRateStarved: 0.10,
+  },
+
   /** 战斗系数 */
   battle: {
     unitBaseWeight: 1,
