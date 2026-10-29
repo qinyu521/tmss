@@ -469,6 +469,33 @@ function processMapMovement(state: GameState, ctx: DerivedContext, events: GameE
   }
 }
 
+interface MapNodeResupplyResult {
+  bonus: number;
+  stockCost: number;
+  facility: string;
+}
+
+/** 仓储与港埠的驻军补给取决于节点类型和剩余库存；无库存时只执行常规休整。 */
+function mapNodeRestSupply(node: NonNullable<GameState['mapNodes']>[string]): MapNodeResupplyResult {
+  if (node.supplyLevel <= 0) return { bonus: 0, stockCost: 0, facility: '' };
+
+  if (/粮仓|驻军营地|集镇|补给/.test(node.nodeType)) {
+    return {
+      bonus: Math.min(BALANCE.mapNodeLogistics.depotRestSupplyBonus, Math.ceil(node.supplyLevel / 10)),
+      stockCost: Math.min(node.supplyLevel, BALANCE.mapNodeLogistics.depotSupplyLevelDrain),
+      facility: '仓储',
+    };
+  }
+  if (/水军|渡口|港埠/.test(node.nodeType)) {
+    return {
+      bonus: Math.min(BALANCE.mapNodeLogistics.portRestSupplyBonus, Math.ceil(node.supplyLevel / 20)),
+      stockCost: Math.min(node.supplyLevel, BALANCE.mapNodeLogistics.portSupplyLevelDrain),
+      facility: '港埠',
+    };
+  }
+  return { bonus: 0, stockCost: 0, facility: '' };
+}
+
 /** 次级据点战斗：结算只改变该节点的控制权，不吞并所属整州。 */
 function handleStrategicNodeBattle(
   state: GameState,
@@ -749,17 +776,51 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
     }
   }
 
-  // 休整中的部队恢复
+  // 休整中的部队恢复；仓储据点与港埠可用有限库存提供额外补给。
   for (const army of state.armies) {
     if (army.status === 'idle' && army.nodeId) {
       const region = state.regions[army.nodeId];
-      const locationFaction = army.mapNodeId && state.mapNodes
-        ? state.mapNodes[army.mapNodeId]?.faction
-        : region?.faction;
+      const mapNode = army.mapNodeId && state.mapNodes ? state.mapNodes[army.mapNodeId] : undefined;
+      const locationFaction = mapNode ? mapNode.faction : region?.faction;
       if (region && locationFaction === army.faction) {
-        army.supply = clamp(army.supply + 8);
+        const logistics = mapNode && mapNode.faction === army.faction
+          ? mapNodeRestSupply(mapNode)
+          : { bonus: 0, stockCost: 0, facility: '' };
+        const beforeArmySupply = Math.round(army.supply);
+        const beforeNodeSupply = mapNode?.supplyLevel;
+        army.supply = clamp(army.supply + 8 + logistics.bonus);
         army.fatigue = clamp(army.fatigue - 8);
         army.morale = clamp(army.morale + 1);
+
+        if (mapNode && logistics.bonus > 0) {
+          mapNode.supplyLevel = clamp(mapNode.supplyLevel - logistics.stockCost);
+          events.push(emitEvent(state, {
+            type: 'resource',
+            title: `${mapNode.name}为${army.name}补充军需`,
+            summary: `${army.name}驻扎于${mapNode.name}，利用${logistics.facility}库存额外恢复补给 ${logistics.bonus}；据点储备由 ${Math.round(beforeNodeSupply ?? 0)} 降至 ${Math.round(mapNode.supplyLevel)}。`,
+            actorId: army.commanderId,
+            actorName: army.commanderName,
+            factionKey: army.faction,
+            targetId: mapNode.nodeId,
+            targetLabel: mapNode.name,
+            before: { armySupply: beforeArmySupply, nodeSupplyLevel: beforeNodeSupply },
+            after: {
+              armySupply: Math.round(army.supply),
+              nodeSupplyLevel: Math.round(mapNode.supplyLevel),
+              logisticsBonus: logistics.bonus,
+              stockCost: logistics.stockCost,
+            },
+            payload: {
+              action: 'node_resupply',
+              facility: logistics.facility,
+              bonus: logistics.bonus,
+              stockCost: logistics.stockCost,
+            },
+            evidence: '确定性节点后勤规则：据点库存提供额外补给，储备按实际恢复量消耗；不增加兵员。',
+            source: 'engine',
+            visibleToPlayer: army.faction === state.factionKey,
+          }));
+        }
       }
     }
   }

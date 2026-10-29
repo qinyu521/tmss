@@ -77,6 +77,14 @@ export const BALANCE = {
     attritionRatePerDay: 0.0015,
   },
 
+  /** 战略节点仓储与港埠的有限后勤库存；不会额外增加兵员或凭空产生军粮。 */
+  mapNodeLogistics: {
+    depotRestSupplyBonus: 8,
+    depotSupplyLevelDrain: 4,
+    portRestSupplyBonus: 4,
+    portSupplyLevelDrain: 2,
+  },
+
   /** 战斗系数 */
   battle: {
     unitBaseWeight: 1,
