@@ -621,6 +621,7 @@ export type OrderKind =
   | 'negotiate_house'
   | 'court_debate'
   | 'diplomatic_action'
+  | 'reward_commander'
   | 'appoint'
   | 'rest_army'
   | 'scout'
@@ -670,6 +671,7 @@ export type Order =
   | { orderId: string; kind: 'negotiate_house'; houseId: string; amount: number }
   | { orderId: string; kind: 'court_debate'; topic: CourtTopic; resolution: CourtResolution }
   | { orderId: string; kind: 'diplomatic_action'; action: DiplomaticAction; targetFaction: FactionKey }
+  | { orderId: string; kind: 'reward_commander'; personId: string }
   | { orderId: string; kind: 'appoint'; personId: string; regionId: string }
   | { orderId: string; kind: 'rest_army'; armyId: string }
   | { orderId: string; kind: 'scout'; regionId: string }
@@ -708,6 +710,14 @@ export interface CharacterRuntime {
   growthNote?: string;
   /** 成长带来的属性增量覆盖值（绝对值，非增量）；键为 governance/command/strategy/intrigue/commerce */
   attrs?: Partial<Record<'governance' | 'command' | 'strategy' | 'intrigue' | 'commerce', number>>;
+  /** 本局军令忠诚度（0-100）；赏赐提升后持久化，种子忠诚度保持只读。 */
+  militaryLoyalty?: number;
+  /** 倒戈后本局实际效忠势力；未设置时沿用种子势力。 */
+  allegianceFaction?: FactionKey;
+  /** 倒戈预警的回合；至少留出一整回合供君主挽回。 */
+  defectionWarningTurn?: number;
+  /** 预警时指向的交好人物所属敌对势力。 */
+  defectionTargetFaction?: FactionKey;
   /** 当前自主目标；idle 表示暂时没有高优先级事务。 */
   goal?: CharacterGoalType;
   /** 当前目标关联的军团/州府/集团/人物 ID。 */
