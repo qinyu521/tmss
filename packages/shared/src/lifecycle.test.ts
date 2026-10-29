@@ -76,19 +76,19 @@ describe('生命周期', () => {
     expect(isCharacterAlive(state, state.playerPersonId)).toBe(true);
   });
 
-  it('迁移框架：v1 存档补 characters（全在世）并迁移到当前 schema v3，且迁移幂等', () => {
+  it('迁移框架：v1 存档补 characters（全在世）并迁移到当前 schema v4，且迁移幂等', () => {
     const state = newGame('HUN');
     const legacy = JSON.parse(JSON.stringify(state)) as GameState;
     delete (legacy as Partial<GameState>).characters;
     legacy.schemaVersion = 1;
-    const migrated = migrateState(legacy, seed.characters);
-    expect(migrated.schemaVersion).toBe(3);
+    const migrated = migrateState(legacy, seed.characters, seed);
+    expect(migrated.schemaVersion).toBe(4);
     expect(Object.keys(migrated.characters)).toHaveLength(seed.characters.length);
     expect(Object.values(migrated.characters).every((c) => c.alive)).toBe(true);
     expect(migrated.characters[seed.characters[0].person_id].ageBand).toBe(seed.characters[0].age_band);
     // 幂等：再次迁移不产生变化
-    const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters);
-    expect(again.schemaVersion).toBe(3);
+    const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters, seed);
+    expect(again.schemaVersion).toBe(4);
     expect(again.characters).toEqual(migrated.characters);
   });
 
@@ -152,15 +152,15 @@ describe('行军存档迁移', () => {
     army.stance = 'march';
     delete army.currentHopDaysTotal;
 
-    const migrated = migrateState(legacy, seed.characters);
+    const migrated = migrateState(legacy, seed.characters, seed);
     const migratedArmy = migrated.armies.find((a) => a.armyId === army.armyId)!;
-    expect(migrated.schemaVersion).toBe(3);
+    expect(migrated.schemaVersion).toBe(4);
     expect(migratedArmy.currentHopDaysTotal).toBe(10);
     expect(migratedArmy.hopCosts).toEqual([3, 4]);
     expect(migratedArmy.marchDaysLeft).toBe(7);
 
-    const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters);
-    expect(again.schemaVersion).toBe(3);
+    const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters, seed);
+    expect(again.schemaVersion).toBe(4);
     expect(again.armies.find((a) => a.armyId === army.armyId)).toEqual(migratedArmy);
   });
 });
