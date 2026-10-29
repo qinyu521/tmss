@@ -769,6 +769,15 @@ function processMovement(state: GameState, ctx: DerivedContext, events: GameEven
 }
 
 
+/** 纯规则函数：伤亡率达到重伤亡阈值才追加忠诚惩罚，便于边界测试。 */
+export function battleDefeatLoyaltyPenalty(casualtyRate: number): number {
+  const rate = Number.isFinite(casualtyRate) ? Math.max(0, casualtyRate) : 0;
+  const heavyPenalty = rate >= BALANCE.militaryLoyalty.heavyCasualtyRate
+    ? BALANCE.militaryLoyalty.heavyCasualtyPenalty
+    : 0;
+  return BALANCE.militaryLoyalty.battleLossPenalty + heavyPenalty;
+}
+
 /** 战败削弱统兵官威信；伤亡率以战前兵力为分母，不改变已确定的战果。 */
 function applyBattleDefeatLoyaltyLoss(
   state: GameState,
@@ -785,9 +794,7 @@ function applyBattleDefeatLoyaltyLoss(
   const before = runtime.militaryLoyalty ?? commander.loyalty ?? 50;
   const preBattleTroops = Math.max(1, defeatedArmy.troops + casualties);
   const casualtyRate = casualties / preBattleTroops;
-  const heavy = casualtyRate >= BALANCE.militaryLoyalty.heavyCasualtyRate;
-  const penalty = BALANCE.militaryLoyalty.battleLossPenalty +
-    (heavy ? BALANCE.militaryLoyalty.heavyCasualtyPenalty : 0);
+  const penalty = battleDefeatLoyaltyPenalty(casualtyRate);
   const after = clamp(before - penalty);
   if (after === before) return;
 

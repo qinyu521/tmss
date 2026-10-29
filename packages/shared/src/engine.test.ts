@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveCommanderDefectionThreats } from './engine/turn.js';
+import { battleDefeatLoyaltyPenalty, resolveCommanderDefectionThreats } from './engine/turn.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1033,33 +1033,52 @@ describe('回合结算', () => {
     expect(afterTroops).toBeLessThanOrEqual(beforeTroops);
   });
 
-  it('战斗使用固定随机种子，重复结算得到同一结果', () => {
+  it('战斗可重放且战败忠诚惩罚严格按伤亡阈值结算', () => {
     const base = newGame('HUN', 'ruler', 'battle-seed');
     base.pendingOrders = [
       { orderId: 'b1', kind: 'move_army', armyId: 'HUN-ARMY-02', targetRegionId: 'YONG-REG03' },
     ];
     const a = runTurn(clone(base), ctx);
     const b = runTurn(clone(base), ctx);
-    const battleA = a.report.events.find((e) => e.type === 'battle');
-    const battleB = b.report.events.find((e) => e.type === 'battle');
+    const battleA = a.report.events.find((event) => event.type === 'battle');
+    const battleB = b.report.events.find((event) => event.type === 'battle');
     expect(battleA).toBeTruthy();
     expect(battleB).toBeTruthy();
     expect((battleA!.after as any).attackerWon).toBe((battleB!.after as any).attackerWon);
     expect((battleA!.payload as any).seed).toBe((battleB!.payload as any).seed);
     expect((battleA!.after as any).totalLosses).toBe((battleB!.after as any).totalLosses);
-    
+
     const outcome = (battleA!.after as any).attackerWon as boolean;
     const payload = battleA!.payload as any;
     const defeatedCommanderId = outcome ? payload.defenderCommander?.id : payload.attackerCommander?.id;
     expect(defeatedCommanderId).toBeTruthy();
     const defeatedSeed = ctx.charactersById[defeatedCommanderId];
     const loyaltyBefore = base.characters[defeatedCommanderId].militaryLoyalty ?? defeatedSeed?.loyalty ?? 50;
-    expect(a.state.characters[defeatedCommanderId].militaryLoyalty).toBeLessThan(loyaltyBefore);
-    expect(a.report.events.some((event) =>
+    const loyaltyEvent = a.report.events.find((event) =>
       event.type === 'politics' &&
       event.title.includes('战败失威') &&
       event.actorId === defeatedCommanderId,
-    )).toBe(true);
+    );
+    expect(loyaltyEvent).toBeTruthy();
+    const casualtyRate = Number(loyaltyEvent!.before?.casualtyRate);
+    const expectedNormalPenalty = BALANCE.militaryLoyalty.battleLossPenalty +
+      (casualtyRate >= BALANCE.militaryLoyalty.heavyCasualtyRate
+        ? BALANCE.militaryLoyalty.heavyCasualtyPenalty
+        : 0);
+    expect(loyaltyEvent!.after?.penalty).toBe(expectedNormalPenalty);
+    expect(loyaltyEvent!.before?.loyalty).toBe(loyaltyBefore);
+    expect(a.state.characters[defeatedCommanderId].militaryLoyalty).toBe(
+      Math.max(0, loyaltyBefore - expectedNormalPenalty),
+    );
+
+    // 明确覆盖普通阈值、精确边界与重伤亡区间，不修改全局平衡常量。
+    expect(battleDefeatLoyaltyPenalty(0)).toBe(BALANCE.militaryLoyalty.battleLossPenalty);
+    expect(battleDefeatLoyaltyPenalty(BALANCE.militaryLoyalty.heavyCasualtyRate - 0.000001))
+      .toBe(BALANCE.militaryLoyalty.battleLossPenalty);
+    expect(battleDefeatLoyaltyPenalty(BALANCE.militaryLoyalty.heavyCasualtyRate))
+      .toBe(BALANCE.militaryLoyalty.battleLossPenalty + BALANCE.militaryLoyalty.heavyCasualtyPenalty);
+    expect(battleDefeatLoyaltyPenalty(0.75))
+      .toBe(BALANCE.militaryLoyalty.battleLossPenalty + BALANCE.militaryLoyalty.heavyCasualtyPenalty);
   });
 
   it('匈奴部落忠诚过低时拒绝出兵', () => {
