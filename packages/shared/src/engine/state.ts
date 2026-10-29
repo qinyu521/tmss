@@ -17,7 +17,7 @@ import { FACTION_VISUALS, makeDate, ROLE_LABEL } from '../constants.js';
 import { buildContext, buildInitialArmies, buildRegions, DerivedContext, diplomacyKey } from '../dataset.js';
 import type { SeedRoster } from '../types.js';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n));
 
@@ -291,7 +291,31 @@ function migrateV1toV2(state: GameState, roster?: CharacterSeed[]): void {
   }
 }
 
-const MIGRATIONS: Migration[] = [{ from: 1, to: 2, apply: migrateV1toV2 }];
+/** v2 → v3：为旧档行军军团补齐当前路段进度，尽量恢复旧版已记录的部分行军时间。 */
+function migrateV2toV3(state: GameState): void {
+  for (const army of state.armies ?? []) {
+    if (!army.path?.length || !army.hopCosts?.length) {
+      army.currentHopDaysTotal = 0;
+      continue;
+    }
+    if (army.currentHopDaysTotal !== undefined) continue;
+    const originalHopDays = Math.max(1, Math.round(army.hopCosts[0] ?? 1));
+    const recordedRemaining = army.hopCosts.reduce((sum, days) => sum + Math.max(0, days), 0);
+    // 旧版本会减少 marchDaysLeft、却保留 hopCosts[0] 原值；两者之差就是当前路段已走天数。
+    const elapsedOnCurrentHop = Math.min(
+      Math.max(0, originalHopDays - 1),
+      Math.max(0, Math.round(recordedRemaining - (army.marchDaysLeft ?? recordedRemaining))),
+    );
+    army.currentHopDaysTotal = originalHopDays;
+    army.hopCosts[0] = Math.max(1, originalHopDays - elapsedOnCurrentHop);
+    army.marchDaysLeft = army.hopCosts.reduce((sum, days) => sum + Math.max(0, days), 0);
+  }
+}
+
+const MIGRATIONS: Migration[] = [
+  { from: 1, to: 2, apply: migrateV1toV2 },
+  { from: 2, to: 3, apply: migrateV2toV3 },
+];
 
 /** 旧存档迁移入口：先做跨版本幂等修补，再按版本链顺序迁移到当前版本。 */
 export function migrateState(state: GameState, roster?: CharacterSeed[]): GameState {
