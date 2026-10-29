@@ -183,7 +183,7 @@ export default function OrdersSheet() {
     }
     let cancelled = false;
     const loadAmnestyCandidates = async () => {
-      const params = view.gameId ? { gameId: view.gameId } : {};
+      const params: Record<string, string> = view.gameId ? { gameId: view.gameId } : {};
       const first = await api.characters({ ...params, page: '1', pageSize: '100' });
       const pageCount = Math.ceil(first.total / Math.max(1, first.pageSize));
       const remaining = await Promise.all(
