@@ -19,6 +19,7 @@ export function findDefectionAllegiance(
   currentFaction: FactionKey,
   targetFactionOf: (personId: string) => FactionKey | undefined,
   isEligibleTarget: (personId: string, factionKey: FactionKey) => boolean,
+  preferredTargetFaction?: FactionKey,
 ): DefectionAllegiance | null {
   const hostile = /竞争|制衡|敌对|不和|争夺|仇敌|追杀/;
   const candidates = new Map<string, DefectionAllegiance>();
@@ -32,6 +33,7 @@ export function findDefectionAllegiance(
     const target = charactersById[targetId];
     const targetFaction = targetFactionOf(targetId);
     if (!target || !targetFaction || targetFaction === currentFaction) continue;
+    if (preferredTargetFaction && targetFaction !== preferredTargetFaction) continue;
     if (hostile.test(`${edge.relation} ${edge.notes}`)) continue;
     if (!isEligibleTarget(targetId, targetFaction)) continue;
     const existing = candidates.get(targetId);
