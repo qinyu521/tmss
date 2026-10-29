@@ -76,13 +76,13 @@ describe('生命周期', () => {
     expect(isCharacterAlive(state, state.playerPersonId)).toBe(true);
   });
 
-  it('迁移框架：v1 存档补人物运行时、廷议声望与军令忠诚，schemaVersion 升为 4 且迁移幂等', () => {
+  it('迁移框架：v1 存档迁移到 schema v5 且迁移幂等', () => {
     const state = newGame('HUN');
     const legacy = JSON.parse(JSON.stringify(state)) as GameState;
     delete (legacy as Partial<GameState>).characters;
     legacy.schemaVersion = 1;
     const migrated = migrateState(legacy, seed.characters);
-    expect(migrated.schemaVersion).toBe(4);
+    expect(migrated.schemaVersion).toBe(5);
     expect(Object.keys(migrated.characters)).toHaveLength(seed.characters.length);
     expect(Object.values(migrated.characters).every((c) => c.alive)).toBe(true);
     expect(migrated.characters[seed.characters[0].person_id].ageBand).toBe(seed.characters[0].age_band);
@@ -90,7 +90,7 @@ describe('生命周期', () => {
     expect(migrated.characters[seed.characters[0].person_id].militaryLoyalty).toBe(seed.characters[0].loyalty);
     // 幂等：再次迁移不产生变化
     const again = migrateState(JSON.parse(JSON.stringify(migrated)) as GameState, seed.characters);
-    expect(again.schemaVersion).toBe(4);
+    expect(again.schemaVersion).toBe(5);
     expect(again.characters).toEqual(migrated.characters);
   });
 
